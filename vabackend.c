@@ -472,7 +472,22 @@ VAStatus nvCreateSurfaces2(
     LOG("In %s\n", __FUNCTION__);
     LOG("creating %d surface(s) %dx%d, format %X\n", num_surfaces, width, height, format);
 
-    cudaVideoSurfaceFormat nvFormat = format == 1 ? cudaVideoSurfaceFormat_NV12 : cudaVideoSurfaceFormat_P016;
+    cudaVideoSurfaceFormat nvFormat;
+    int bitdepth;
+
+    if (format == VA_RT_FORMAT_YUV420) {
+        nvFormat = cudaVideoSurfaceFormat_NV12;
+        bitdepth = 8;
+    } else if (format == VA_RT_FORMAT_YUV420_10) {
+        nvFormat = cudaVideoSurfaceFormat_P016;
+        bitdepth = 10;
+    } else if (format == VA_RT_FORMAT_YUV420_12) {
+        nvFormat = cudaVideoSurfaceFormat_P016;
+        bitdepth = 12;
+    } else {
+        LOG("Unknown format: %X\n", format);
+        return VA_STATUS_ERROR_UNSUPPORTED_RT_FORMAT;
+    }
 
     for (int i = 0; i < num_surfaces; i++)
     {
@@ -484,6 +499,7 @@ VAStatus nvCreateSurfaces2(
         suf->height = height;
         suf->format = nvFormat;
         suf->pictureIdx = -1;
+        suf->bitdepth = bitdepth;
     }
 
     return VA_STATUS_SUCCESS;
@@ -1420,9 +1436,7 @@ VAStatus nvQueryProcessingRate(
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
-void exportCudaPtr(EGLDisplay dpy, EGLStreamKHR stream, CUeglStreamConnection *conn, CUdeviceptr ptr, uint32_t width, uint32_t height, uint32_t pitch, int *fds, int *offsets, int *strides, EGLuint64KHR *mods) {
-    CUstream cuStream = CU_STREAM_LEGACY;
-
+void exportCudaPtr(EGLDisplay dpy, EGLStreamKHR stream, CUeglStreamConnection *conn, CUdeviceptr ptr, NVSurface *surface, uint32_t pitch, int *fourcc, int *fds, int *offsets, int *strides, EGLuint64KHR *mods, int *bppOut) {
     static int numFramesPresented = 0;
     // If there is a frame presented before we check if consumer
     // is done with it using cuEGLStreamProducerReturnFrame.
@@ -1434,7 +1448,7 @@ void exportCudaPtr(EGLDisplay dpy, EGLStreamKHR stream, CUeglStreamConnection *c
     };
     while (numFramesPresented) {
       //LOG("waiting for returned frame\n");
-      CUresult cuStatus = cuEGLStreamProducerReturnFrame(conn, &eglframe, &cuStream);
+      CUresult cuStatus = cuEGLStreamProducerReturnFrame(conn, &eglframe, NULL);
       if (cuStatus == CUDA_ERROR_LAUNCH_TIMEOUT) {
         //LOG("timeout with %d outstanding\n", numFramesPresented);
         break;
@@ -1445,6 +1459,9 @@ void exportCudaPtr(EGLDisplay dpy, EGLStreamKHR stream, CUeglStreamConnection *c
         numFramesPresented--;
       }
     }
+
+    int width = surface->width;
+    int height = surface->height;
 
     //check if the frame size if different and release the arrays
     //TODO figure out how to get the EGLimage freed aswell
@@ -1461,12 +1478,37 @@ void exportCudaPtr(EGLDisplay dpy, EGLStreamKHR stream, CUeglStreamConnection *c
     eglframe.width = width;
     eglframe.height = height;
     eglframe.depth = 1;
-    eglframe.pitch = 0;
+    eglframe.pitch = pitch;
     eglframe.planeCount = 2;
     eglframe.numChannels = 1;
     eglframe.frameType = CU_EGL_FRAME_TYPE_ARRAY;
-    eglframe.eglColorFormat = CU_EGL_COLOR_FORMAT_YVU420_SEMIPLANAR;
-    eglframe.cuFormat = CU_AD_FORMAT_UNSIGNED_INT8;
+
+    int bpp = 1;
+    if (surface->format == cudaVideoSurfaceFormat_NV12) {
+        eglframe.eglColorFormat = CU_EGL_COLOR_FORMAT_YVU420_SEMIPLANAR;
+        eglframe.cuFormat = CU_AD_FORMAT_UNSIGNED_INT8;
+    } else if (surface->format == cudaVideoSurfaceFormat_P016) {
+        //TODO not working, produces this error in mpv:
+        //EGL_BAD_MATCH error: In eglCreateImageKHR: requested LINUX_DRM_FORMAT is not supported
+        //this error seems to be coming from the NVIDIA EGL driver
+        //this might be caused by the DRM_FORMAT_*'s below
+        if (surface->bitdepth == 10) {
+            eglframe.eglColorFormat = CU_EGL_COLOR_FORMAT_Y10V10U10_420_SEMIPLANAR;
+        } else if (surface->bitdepth == 12) {
+            eglframe.eglColorFormat = CU_EGL_COLOR_FORMAT_Y12V12U12_420_SEMIPLANAR;
+        } else {
+            LOG("Unknown bitdepth\n");
+        }
+        eglframe.cuFormat = CU_AD_FORMAT_UNSIGNED_INT16;
+        bpp = 2;
+    }
+    *bppOut = bpp;
+
+    //TODO in theory this should work, but the application attempting to bind that texture gets the following error:
+    //GL_INVALID_OPERATION error generated. <image> and <target> are incompatible
+    //eglframe.frameType = CU_EGL_FRAME_TYPE_PITCH;
+    //eglframe.frame.pPitch[0] = (void*) ptr;
+    //eglframe.frame.pPitch[1] = (void*) ptr + (height*pitch);
 
     //reuse the arrays if we can
     //creating new arrays will cause a new EGLimage to be created and you'll eventually run out of resources
@@ -1477,7 +1519,7 @@ void exportCudaPtr(EGLDisplay dpy, EGLStreamKHR stream, CUeglStreamConnection *c
             .Depth = 0,
             .NumChannels = 1,
             .Flags = 0,
-            .Format = CU_AD_FORMAT_UNSIGNED_INT8
+            .Format = eglframe.cuFormat
         };
         checkCudaErrors(cuArray3DCreate(&eglframe.frame.pArray[0], &arrDesc));
     }
@@ -1488,7 +1530,7 @@ void exportCudaPtr(EGLDisplay dpy, EGLStreamKHR stream, CUeglStreamConnection *c
             .Depth = 0,
             .NumChannels = 2,
             .Flags = 0,
-            .Format = CU_AD_FORMAT_UNSIGNED_INT8
+            .Format = eglframe.cuFormat
         };
         checkCudaErrors(cuArray3DCreate(&eglframe.frame.pArray[1], &arr2Desc));
     }
@@ -1499,10 +1541,10 @@ void exportCudaPtr(EGLDisplay dpy, EGLStreamKHR stream, CUeglStreamConnection *c
         .dstMemoryType = CU_MEMORYTYPE_ARRAY,
         .dstArray = eglframe.frame.pArray[0],
         .Height = height,
-        .WidthInBytes = width,
+        .WidthInBytes = width * bpp,
         .Depth = 1
     };
-    checkCudaErrors(cuMemcpy3DAsync(&cpy, cuStream));
+    checkCudaErrors(cuMemcpy3D(&cpy));
     CUDA_MEMCPY3D cpy2 = {
         .srcMemoryType = CU_MEMORYTYPE_DEVICE,
         .srcDevice = ptr,
@@ -1511,13 +1553,13 @@ void exportCudaPtr(EGLDisplay dpy, EGLStreamKHR stream, CUeglStreamConnection *c
         .dstMemoryType = CU_MEMORYTYPE_ARRAY,
         .dstArray = eglframe.frame.pArray[1],
         .Height = height >> 1,
-        .WidthInBytes = (width >> 1) * 2,
+        .WidthInBytes = (width >> 1) * 2 * bpp,
         .Depth = 1
     };
-    checkCudaErrors(cuMemcpy3DAsync(&cpy2, cuStream));
+    checkCudaErrors(cuMemcpy3D(&cpy2));
 
     //LOG("Presenting frame %dx%d %p %p\n", eglframe.width, eglframe.height, eglframe.frame.pArray[0], eglframe.frame.pArray[1]);
-    checkCudaErrors(cuEGLStreamProducerPresentFrame( conn, eglframe, &cuStream ));
+    checkCudaErrors(cuEGLStreamProducerPresentFrame( conn, eglframe, NULL ));
     numFramesPresented++;
 
     while (1) {
@@ -1539,13 +1581,13 @@ void exportCudaPtr(EGLDisplay dpy, EGLStreamKHR stream, CUeglStreamConnection *c
                 exit(EXIT_FAILURE);
             }
 
-            int fourcc = 0, planes = 0;
-            if (!eglExportDMABUFImageQueryMESA(dpy, img, &fourcc, &planes, mods)) {
+            int planes = 0;
+            if (!eglExportDMABUFImageQueryMESA(dpy, img, fourcc, &planes, mods)) {
                 LOG("eglExportDMABUFImageQueryMESA failed\n");
                 exit(EXIT_FAILURE);
             }
 
-            LOG("eglExportDMABUFImageQueryMESA: %p %.4s (%x) planes:%d mods:%lx %lx\n", img, (char*)&fourcc, fourcc, planes, mods[0], mods[1]);
+            LOG("eglExportDMABUFImageQueryMESA: %p %.4s (%x) planes:%d mods:%lx %lx\n", img, (char*)fourcc, *fourcc, planes, mods[0], mods[1]);
 
             EGLBoolean r = eglExportDMABUFImageMESA(dpy, img, fds, strides, offsets);
 
@@ -1583,12 +1625,6 @@ VAStatus nvExportSurfaceHandle(
     //LOG("got %d %X %X\n", surface_id, mem_type, flags);
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
 
-    EGLDisplay oldEglDisplay = eglGetCurrentDisplay();
-    EGLContext oldEglCtx = eglGetCurrentContext();
-    EGLSurface oldEglReadSurface = eglGetCurrentSurface(EGL_READ);
-    EGLSurface oldEglDrawSurface = eglGetCurrentSurface(EGL_DRAW);
-    eglMakeCurrent(drv->eglDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, drv->eglContext);
-
     cuCtxSetCurrent(drv->g_oContext);
 
     NVSurface *surfaceObj = (NVSurface*) getObject(drv, surface_id)->obj;
@@ -1610,22 +1646,21 @@ VAStatus nvExportSurfaceHandle(
         pitch = 1024;
     }
 
-    CUeglColorFormat colourFormat = surfaceObj->format == cudaVideoSurfaceFormat_NV12 ? CU_EGL_COLOR_FORMAT_YVU420_SEMIPLANAR : CU_EGL_COLOR_FORMAT_Y10V10U10_420_SEMIPLANAR;
-    uint32_t fourcc = surfaceObj->format == cudaVideoSurfaceFormat_NV12 ? VA_FOURCC_NV12 : VA_FOURCC_P010;
+    uint32_t fourcc, bpp;
 
     int fds[4] = {0, 0, 0, 0};
     EGLint strides[4] = {0, 0, 0, 0}, offsets[4] = {0, 0, 0, 0};
     EGLuint64KHR mods[4] = {0, 0, 0, 0};
-    exportCudaPtr(drv->eglDisplay, drv->eglStream, &drv->cuStreamConnection, deviceMemory, surfaceObj->width, surfaceObj->height, pitch, fds, offsets, strides, mods);
+    exportCudaPtr(drv->eglDisplay, drv->eglStream, &drv->cuStreamConnection, deviceMemory, surfaceObj, pitch, &fourcc, fds, offsets, strides, mods, &bpp);
 
-    //TODO now that we've exported it we can unmap it...i think
-    //doesn't seem like we can do this as NVDEC doesn't seem to know that the memory is in use...
+    //since we have to make a copy of the data anyway, we can unmap here
     if (surfaceObj->pictureIdx != -1) {
         cuvidUnmapVideoFrame(surfaceObj->decoder, deviceMemory);
     } else {
         cuMemFree(deviceMemory);
     }
 
+    //TODO only support 420 images (either NV12, P010 or P012)
     VADRMPRIMESurfaceDescriptor *ptr = (VADRMPRIMESurfaceDescriptor*) descriptor;
     ptr->fourcc = fourcc;
     ptr->width = surfaceObj->width;
@@ -1634,26 +1669,24 @@ VAStatus nvExportSurfaceHandle(
     ptr->num_objects = 2;
 
     ptr->objects[0].fd = fds[0];
-    ptr->objects[0].size = surfaceObj->width * surfaceObj->height;
+    ptr->objects[0].size = surfaceObj->width * surfaceObj->height * bpp;
     ptr->objects[0].drm_format_modifier = mods[0];
 
     ptr->objects[1].fd = fds[1];
-    ptr->objects[1].size = surfaceObj->width * (surfaceObj->height >> 1);
+    ptr->objects[1].size = surfaceObj->width * (surfaceObj->height >> 1) * bpp;
     ptr->objects[1].drm_format_modifier = mods[1];
 
-    ptr->layers[0].drm_format = DRM_FORMAT_R8;
+    ptr->layers[0].drm_format = fourcc == DRM_FORMAT_NV12 ? DRM_FORMAT_R8 : DRM_FORMAT_R16;
     ptr->layers[0].num_planes = 1;
     ptr->layers[0].object_index[0] = 0;
     ptr->layers[0].offset[0] = offsets[0];
     ptr->layers[0].pitch[0] = strides[0];
 
-    ptr->layers[1].drm_format = DRM_FORMAT_RG88;
+    ptr->layers[1].drm_format = fourcc == DRM_FORMAT_NV12 ? DRM_FORMAT_RG88 : DRM_FORMAT_RG1616;
     ptr->layers[1].num_planes = 1;
     ptr->layers[1].object_index[0] = 1;
     ptr->layers[1].offset[0] = offsets[1];
     ptr->layers[1].pitch[0] = strides[1];
-
-    eglMakeCurrent(oldEglDisplay, oldEglDrawSurface, oldEglReadSurface, oldEglCtx);
 
     return VA_STATUS_SUCCESS;
 }
@@ -1688,11 +1721,6 @@ VAStatus __vaDriverInit_1_0(VADriverContextP ctx)
 
     drv->eglDisplay = eglGetDisplay(NULL);
     eglInitialize(drv->eglDisplay, NULL, NULL);
-
-    EGLint contextAttribs[] = { EGL_NONE };
-    // Create the context with the context attributes supplied
-    drv->eglContext = eglCreateContext(drv->eglDisplay, EGL_NO_CONFIG_KHR, EGL_NO_CONTEXT, contextAttribs);
-
     EGLint stream_attrib_list[] = { EGL_STREAM_FIFO_LENGTH_KHR, 10, EGL_NONE };
     drv->eglStream = eglCreateStreamKHR(drv->eglDisplay, stream_attrib_list);
     EGLAttrib consumer_attrib_list[] = { EGL_NONE };

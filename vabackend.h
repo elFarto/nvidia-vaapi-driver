@@ -49,6 +49,7 @@ typedef struct
     int width;
     int height;
     cudaVideoSurfaceFormat format;
+    int bitdepth;
     int pictureIdx;
     CUvideodecoder decoder;
     int progressive_frame;
@@ -74,10 +75,7 @@ typedef struct
     VAGenericID        nextObjId;
     CUdeviceptr        tmpBuffer;
     EGLDisplay         eglDisplay;
-    EGLContext         eglContext;
     EGLStreamKHR       eglStream;
-    EGLSync            eglSync;
-    CUevent            cuEvent;
     CUeglStreamConnection cuStreamConnection;
 } NVDriver;
 
