@@ -3,9 +3,7 @@
 
 #include <cuviddec.h>
 #include <va/va_backend.h>
-#include <va/va_dricommon.h>
 #include <EGL/egl.h>
-#include <EGL/eglext.h>
 #include <cudaEGL.h>
 
 typedef struct {
@@ -73,7 +71,6 @@ typedef struct
     CUdevice           g_oDevice;
     Object             objRoot;
     VAGenericID        nextObjId;
-    CUdeviceptr        tmpBuffer;
     EGLDisplay         eglDisplay;
     EGLStreamKHR       eglStream;
     CUeglStreamConnection cuStreamConnection;
@@ -131,8 +128,12 @@ typedef struct _NVCodecHolder
 void appendBuffer(AppendableBuffer *ab, void *buf, uint64_t size);
 int pictureIdxFromSurfaceId(NVDriver *ctx, VASurfaceID surf);
 void registerCodec(NVCodec *codec);
+void __checkCudaErrors(CUresult err, const char *file, const int line);
+#define checkCudaErrors(err)  __checkCudaErrors(err, __FILE__, __LINE__)
 #define cudaVideoCodec_NONE ((cudaVideoCodec) -1)
-
+#define LOG(msg, ...) printf(__FILE__ ":%4d %24s " msg, __LINE__, __FUNCTION__ __VA_OPT__(,) __VA_ARGS__);
 #define DEFINE_CODEC(c) __attribute__((constructor)) void reg_ ## c() { registerCodec(&c); }
+
+
 
 #endif // VABACKEND_H
