@@ -1,7 +1,7 @@
 #!/bin/sh
 
-#export MPV=/usr/bin/mpv
-export MPV=/home/stephen/Downloads/mpv/build/mpv
+export MPV=/usr/bin/mpv
+#export MPV=/home/stephen/Downloads/mpv/build/mpv
 
 
 export LD_LIBRARY_PATH=/opt/ffmpeg/lib/
