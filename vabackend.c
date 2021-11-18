@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <malloc.h>
 
 #include <va/va_backend.h>
 #include <va/va_drmcommon.h>
@@ -14,7 +15,20 @@
 #include <nvcuvid.h>
 #include <drm/drm_fourcc.h>
 
-//#include <unistd.h>
+#include <stdarg.h>
+#include <unistd.h>
+
+NVCodecHolder *codecs = NULL;
+
+void logger(const char *msg, ...) {
+    va_list argList;
+
+    printf("[%d] ", getpid());
+
+    va_start(argList, msg);
+    vprintf(msg, argList);
+    va_end(argList);
+}
 
 void __checkCudaErrors(CUresult err, const char *file, const int line)
 {
@@ -27,8 +41,6 @@ void __checkCudaErrors(CUresult err, const char *file, const int line)
     }
 }
 
-NVCodecHolder *codecs = NULL;
-
 void registerCodec(NVCodec *codec) {
     NVCodecHolder *newCodecHolder = (NVCodecHolder*) calloc(1, sizeof(NVCodecHolder));
     newCodecHolder->codec = codec;
@@ -40,13 +52,13 @@ void appendBuffer(AppendableBuffer *ab, void *buf, uint64_t size)
 {
   if (ab->buf == NULL) {
       ab->allocated = size*2;
-      ab->buf = aligned_alloc(16, ab->allocated);
+      ab->buf = memalign(16, ab->allocated);
       ab->size = 0;
   } else if (ab->size + size > ab->allocated) {
       while (ab->size + size > ab->allocated) {
         ab->allocated += ab->allocated >> 1;
       }
-      void *nb = aligned_alloc(16, ab->allocated);
+      void *nb = memalign(16, ab->allocated);
       memcpy(nb, ab->buf, ab->size);
       free(ab->buf);
       ab->buf = nb;
@@ -153,12 +165,6 @@ cudaVideoCodec vaToCuCodec(VAProfile profile)
 
     LOG("vaToCuCodec: Unknown codec: %d\n", profile);
     return cudaVideoCodec_NONE;
-}
-
-VAStatus nvTerminate( VADriverContextP ctx )
-{
-    LOG("In %s\n", __FUNCTION__);
-    return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
 int doesGPUSupportCodec(cudaVideoCodec codec, int bitDepth, cudaVideoChromaFormat chromaFormat, int *width, int *height)
@@ -282,7 +288,7 @@ VAStatus nvQueryConfigEntrypoints(
         int *num_entrypoints			/* out */
     )
 {
-    //LOG("In %s\n", __FUNCTION__);
+    LOG("In %s\n", __FUNCTION__);
 
     entrypoint_list[0] = VAEntrypointVLD;
     *num_entrypoints = 1;
@@ -627,7 +633,12 @@ VAStatus nvCreateBuffer(
     buf->bufferType = type;
     buf->elements = num_elements;
     buf->size = num_elements * size;
-    buf->ptr = aligned_alloc(16, buf->size);
+    buf->ptr = memalign(16, buf->size);
+
+    if (buf->ptr == NULL) {
+        LOG("Unable to allocate buffer of %d bytes\n", buf->size);
+        exit(EXIT_FAILURE);
+    }
 
     if (data != NULL)
     {
@@ -679,7 +690,7 @@ VAStatus nvDestroyBuffer(
     )
 {
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
-    //LOG("In %s\n", __FUNCTION__);
+    LOG("In %s\n", __FUNCTION__);
 
     Object obj = getObject(drv, buffer_id);
 
@@ -695,7 +706,7 @@ VAStatus nvBeginPicture(
     )
 {
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
-    //LOG("In %s\n", __FUNCTION__);
+    LOG("In %s\n", __FUNCTION__);
 
     NVContext *nvCtx = (NVContext*) getObject(drv, context)->obj;
     memset(&nvCtx->pPicParams, 0, sizeof(CUVIDPICPARAMS));
@@ -712,7 +723,7 @@ VAStatus nvRenderPicture(
     )
 {
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
-    //LOG("In %s\n", __FUNCTION__);
+    LOG("In %s\n", __FUNCTION__);
 
     NVContext *nvCtx = (NVContext*) getObject(drv, context)->obj;
     CUVIDPICPARAMS *picParams = &nvCtx->pPicParams;
@@ -877,7 +888,7 @@ VAStatus nvCreateImage(
     imageBuffer->bufferType = VAImageBufferType;
     imageBuffer->size = (width * height + (width * height / 2)) * bytesPerPixel;
     imageBuffer->elements = 1;
-    imageBuffer->ptr = aligned_alloc(16, imageBuffer->size);
+    imageBuffer->ptr = memalign(16, imageBuffer->size);
 
     img->imageBuffer = imageBuffer;
 
@@ -1022,7 +1033,7 @@ VAStatus nvGetImage(
 //    char filename[64];
 //    int size = (pitch * surfaceObj->height) + (pitch * surfaceObj->height>>1);
 //    char *buf = malloc(size);
-//    snLOG(filename, 64, "/tmp/frame-%03d.data\0", counter++);
+//    snprintf(filename, 64, "/tmp/frame-%03d.data\0", counter++);
 //    LOG("writing %d to %s\n", surfaceObj->pictureIdx, filename);
 //    int fd = open(filename, O_RDWR | O_TRUNC | O_CREAT, 0644);
 //    cuMemcpyDtoH(buf, deviceMemory, size);
@@ -1188,7 +1199,7 @@ VAStatus nvQuerySurfaceAttributes(
 	)
 {
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
-    LOG("In %s with %d\n", __FUNCTION__, *num_attribs);
+    LOG("In %s with %p %d\n", __FUNCTION__, attrib_list, *num_attribs);
 
     NVConfig *cfg = (NVConfig*) getObject(drv, config)->obj;
 
@@ -1257,11 +1268,11 @@ VAStatus nvBufferInfo(
            unsigned int *num_elements /* out */
 )
 {
-LOG("In %s\n", __FUNCTION__);
-*size=0;
-*num_elements=0;
+    LOG("In %s\n", __FUNCTION__);
+    *size=0;
+    *num_elements=0;
 
-return VA_STATUS_SUCCESS;
+    return VA_STATUS_SUCCESS;
 }
 
 VAStatus nvAcquireBufferHandle(
@@ -1403,10 +1414,10 @@ VAStatus nvExportSurfaceHandle(
     //TODO check mem_type
     //TODO deal with flags
 
-    //LOG("got %d %X %X\n", surface_id, mem_type, flags);
+    LOG("got %d %X %X\n", surface_id, mem_type, flags);
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
 
-    cuCtxSetCurrent(drv->g_oContext);
+    cuCtxPushCurrent(drv->g_oContext);
 
     NVSurface *surfaceObj = (NVSurface*) getObject(drv, surface_id)->obj;
 
@@ -1466,11 +1477,27 @@ VAStatus nvExportSurfaceHandle(
     ptr->layers[1].offset[0] = offsets[1];
     ptr->layers[1].pitch[0] = strides[1];
 
+    cuCtxPopCurrent(NULL);
+
+    return VA_STATUS_SUCCESS;
+}
+
+
+VAStatus nvTerminate( VADriverContextP ctx )
+{
+    NVDriver *drv = (NVDriver*) ctx->pDriverData;
+    LOG("In %s\n", __FUNCTION__);
+
+    releaseExporter(drv);
+
+    cuCtxDestroy(drv->g_oContext);
+
     return VA_STATUS_SUCCESS;
 }
 
 VAStatus __vaDriverInit_1_0(VADriverContextP ctx)
 {
+    LOG("Initing NVIDIA VA-API Driver\n");
     NVDriver *drv = (NVDriver*) calloc(1, sizeof(NVDriver));
     ctx->pDriverData = drv;
 
@@ -1485,9 +1512,12 @@ VAStatus __vaDriverInit_1_0(VADriverContextP ctx)
     ctx->max_image_formats = 3;
     ctx->max_subpic_formats = 1;
 
-    ctx->str_vendor = "VA-API -> NVDEC driver";
+    ctx->str_vendor = "VA-API NVDEC driver";
 
     initExporter(drv);
+
+    //LOG("Sleeping\n");
+    //sleep(30);
 
 #define VTABLE(ctx, func) ctx->vtable->va ## func = nv ## func
 

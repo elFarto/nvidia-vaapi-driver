@@ -1,8 +1,11 @@
 #include "export-buf.h"
 #include <stdio.h>
+#include <cuda.h>
 #include <cudaEGL.h>
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
+
+#include <fcntl.h>
 
 #ifndef EGL_NV_stream_consumer_eglimage
 #define EGL_NV_stream_consumer_eglimage 1
@@ -27,9 +30,25 @@ PFNEGLSTREAMRELEASEIMAGENVPROC eglStreamReleaseImageNV;
 PFNEGLSTREAMACQUIREIMAGENVPROC eglStreamAcquireImageNV;
 PFNEGLEXPORTDMABUFIMAGEMESAPROC eglExportDMABUFImageMESA;
 PFNEGLEXPORTDMABUFIMAGEQUERYMESAPROC eglExportDMABUFImageQueryMESA;
+PFNEGLCREATESTREAMKHRPROC eglCreateStreamKHR;
+PFNEGLDESTROYSTREAMKHRPROC eglDestroyStreamKHR;
+PFNEGLSTREAMIMAGECONSUMERCONNECTNVPROC eglStreamImageConsumerConnectNV;
 
 void debug(EGLenum error,const char *command,EGLint messageType,EGLLabelKHR threadLabel,EGLLabelKHR objectLabel,const char* message) {
     LOG("[EGL] %s\n", message);
+}
+
+void releaseExporter(NVDriver *drv) {
+    if (drv->eglDisplay != EGL_NO_DISPLAY) {
+        if (drv->eglStream != EGL_NO_STREAM_KHR) {
+            eglDestroyStreamKHR(drv->eglDisplay, drv->eglStream);
+            drv->eglStream = EGL_NO_STREAM_KHR;
+        }
+        //TODO terminate the EGLDisplay here, sounds like that could break stuff
+        drv->eglDisplay = EGL_NO_DISPLAY;
+    }
+
+    cuEGLStreamProducerDisconnect(&drv->cuStreamConnection);
 }
 
 void initExporter(NVDriver *drv) {
@@ -38,9 +57,9 @@ void initExporter(NVDriver *drv) {
     eglStreamAcquireImageNV = (PFNEGLSTREAMACQUIREIMAGENVPROC) eglGetProcAddress("eglStreamAcquireImageNV");
     eglExportDMABUFImageMESA = (PFNEGLEXPORTDMABUFIMAGEMESAPROC) eglGetProcAddress("eglExportDMABUFImageMESA");
     eglExportDMABUFImageQueryMESA = (PFNEGLEXPORTDMABUFIMAGEQUERYMESAPROC) eglGetProcAddress("eglExportDMABUFImageQueryMESA");
-
-    PFNEGLCREATESTREAMKHRPROC eglCreateStreamKHR = (PFNEGLCREATESTREAMKHRPROC) eglGetProcAddress("eglCreateStreamKHR");
-    PFNEGLSTREAMIMAGECONSUMERCONNECTNVPROC eglStreamImageConsumerConnectNV = (PFNEGLSTREAMIMAGECONSUMERCONNECTNVPROC) eglGetProcAddress("eglStreamImageConsumerConnectNV");
+    eglCreateStreamKHR = (PFNEGLCREATESTREAMKHRPROC) eglGetProcAddress("eglCreateStreamKHR");
+    eglDestroyStreamKHR = (PFNEGLDESTROYSTREAMKHRPROC) eglGetProcAddress("eglDestroyStreamKHR");
+    eglStreamImageConsumerConnectNV = (PFNEGLSTREAMIMAGECONSUMERCONNECTNVPROC) eglGetProcAddress("eglStreamImageConsumerConnectNV");
 
     drv->eglDisplay = eglGetDisplay(NULL);
     eglInitialize(drv->eglDisplay, NULL, NULL);
@@ -57,7 +76,6 @@ void initExporter(NVDriver *drv) {
 }
 
 void exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t pitch, int *fourcc, int *fds, int *offsets, int *strides, uint64_t *mods, int *bppOut) {
-    static int numFramesPresented = 0;
     // If there is a frame presented before we check if consumer
     // is done with it using cuEGLStreamProducerReturnFrame.
     //LOG("outstanding frames: %d\n", numFramesPresented);
@@ -66,8 +84,9 @@ void exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t 
             .pArray = {0, 0, 0}
         }
     };
-    while (numFramesPresented) {
-      //LOG("waiting for returned frame\n");
+    //TODO if we ever have more than 1 frame returned a frame, we'll leak that memory
+    while (drv->numFramesPresented > 0) {
+      LOG("waiting for returned frame: %lx %d\n", drv->cuStreamConnection, drv->numFramesPresented);
       CUresult cuStatus = cuEGLStreamProducerReturnFrame(&drv->cuStreamConnection, &eglframe, NULL);
       if (cuStatus == CUDA_ERROR_LAUNCH_TIMEOUT) {
         //LOG("timeout with %d outstanding\n", numFramesPresented);
@@ -75,8 +94,8 @@ void exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t 
       } else if (cuStatus != CUDA_SUCCESS) {
         checkCudaErrors(cuStatus);
       } else {
-        //LOG("returned frame %dx%d %p %p\n", eglframe.width, eglframe.height, eglframe.frame.pArray[0], eglframe.frame.pArray[1]);
-        numFramesPresented--;
+        LOG("returned frame %dx%d %p %p\n", eglframe.width, eglframe.height, eglframe.frame.pArray[0], eglframe.frame.pArray[1]);
+        drv->numFramesPresented--;
       }
     }
 
@@ -111,7 +130,7 @@ void exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t 
         //TODO not working, produces this error in mpv:
         //EGL_BAD_MATCH error: In eglCreateImageKHR: requested LINUX_DRM_FORMAT is not supported
         //this error seems to be coming from the NVIDIA EGL driver
-        //this might be caused by the DRM_FORMAT_*'s below
+        //this might be caused by the DRM_FORMAT_*'s in nvExportSurfaceHandle
         if (surface->bitdepth == 10) {
             eglframe.eglColorFormat = CU_EGL_COLOR_FORMAT_Y10V10U10_420_SEMIPLANAR;
         } else if (surface->bitdepth == 12) {
@@ -132,7 +151,7 @@ void exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t 
     //eglframe.frame.pPitch[1] = (void*) ptr + (height*pitch);
 
     //reuse the arrays if we can
-    //creating new arrays will cause a new EGLimage to be created and you'll eventually run out of resources
+    //creating new arrays will cause a new EGLimage to be created and we'll eventually run out of resources
     if (eglframe.frame.pArray[0] == NULL) {
         CUDA_ARRAY3D_DESCRIPTOR arrDesc = {
             .Width = width,
@@ -179,9 +198,32 @@ void exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t 
     };
     checkCudaErrors(cuMemcpy3D(&cpy2));
 
+//    static int counter = 0;
+//    char filename[64];
+//    int size = surface->height * surface->width;//(pitch * surface->height) + (pitch * surface->height>>1);
+//    char *buf = malloc(size);
+//    snprintf(filename, 64, "/tmp/frame-%03d.data\0", counter++);
+//    LOG("writing %d to %s\n", surface->pictureIdx, filename);
+//    int fd = open(filename, O_RDWR | O_TRUNC | O_CREAT, 0644);
+//    //cuMemcpyAtoH(buf, eglframe.frame.pArray[0], 0, size);
+//    CUDA_MEMCPY3D cpy3 = {
+//        .srcMemoryType = CU_MEMORYTYPE_ARRAY,
+//        .srcArray = eglframe.frame.pArray[0],
+//        .dstMemoryType = CU_MEMORYTYPE_HOST,
+//        .dstHost = buf,
+//        .Height = height,
+//        .WidthInBytes = width,
+//        .Depth = 1
+//    };
+//    checkCudaErrors(cuMemcpy3D(&cpy3));
+
+//    write(fd, buf, size);
+//    free(buf);
+//    close(fd);
+
     //LOG("Presenting frame %dx%d %p %p\n", eglframe.width, eglframe.height, eglframe.frame.pArray[0], eglframe.frame.pArray[1]);
     checkCudaErrors(cuEGLStreamProducerPresentFrame( &drv->cuStreamConnection, eglframe, NULL ));
-    numFramesPresented++;
+    drv->numFramesPresented++;
 
     while (1) {
         EGLenum event = 0;
@@ -215,17 +257,17 @@ void exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t 
             if (!r) {
                 LOG("Unable to export image\n");
             }
-            //LOG("eglExportDMABUFImageMESA: %d %d %d %d %d\n", r, fds[0], fds[1], fds[2], fds[3]);
-            //LOG("strides: %d %d %d %d\n", strides[0], strides[1], strides[2], strides[3]);
-            //LOG("offsets: %d %d %d %d\n", offsets[0], offsets[1], offsets[2], offsets[3]);
+            LOG("eglExportDMABUFImageMESA: %d %d %d %d %d\n", r, fds[0], fds[1], fds[2], fds[3]);
+            LOG("strides: %d %d %d %d\n", strides[0], strides[1], strides[2], strides[3]);
+            LOG("offsets: %d %d %d %d\n", offsets[0], offsets[1], offsets[2], offsets[3]);
 
             r = eglStreamReleaseImageNV(drv->eglDisplay, drv->eglStream, img, EGL_NO_SYNC_NV);
             if (!r) {
                 LOG("Unable to release image\n");
             }
         } else if (event == EGL_STREAM_IMAGE_REMOVE_NV) {
-            eglDestroyImage(drv->eglDisplay, (EGLImage) aux);
             LOG("Removing image from EGLStream, eglDestroyImage: %p\n", (EGLImage) aux);
+            eglDestroyImage(drv->eglDisplay, (EGLImage) aux);
         } else {
             LOG("Unhandled event: %X\n", event);
         }

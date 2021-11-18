@@ -68,12 +68,12 @@ struct _NVContext;
 typedef struct
 {
     CUcontext          g_oContext;
-    CUdevice           g_oDevice;
     Object             objRoot;
     VAGenericID        nextObjId;
     EGLDisplay         eglDisplay;
     EGLStreamKHR       eglStream;
     CUeglStreamConnection cuStreamConnection;
+    int                numFramesPresented;
 } NVDriver;
 
 struct _NVCodec;
@@ -129,9 +129,10 @@ void appendBuffer(AppendableBuffer *ab, void *buf, uint64_t size);
 int pictureIdxFromSurfaceId(NVDriver *ctx, VASurfaceID surf);
 void registerCodec(NVCodec *codec);
 void __checkCudaErrors(CUresult err, const char *file, const int line);
+void logger(const char *msg, ...);
 #define checkCudaErrors(err)  __checkCudaErrors(err, __FILE__, __LINE__)
 #define cudaVideoCodec_NONE ((cudaVideoCodec) -1)
-#define LOG(msg, ...) printf(__FILE__ ":%4d %24s " msg, __LINE__, __FUNCTION__ __VA_OPT__(,) __VA_ARGS__);
+#define LOG(msg, ...) logger(__FILE__ ":%4d %24s " msg, __LINE__, __FUNCTION__ __VA_OPT__(,) __VA_ARGS__);
 #define DEFINE_CODEC(c) __attribute__((constructor)) void reg_ ## c() { registerCodec(&c); }
 
 
