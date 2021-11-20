@@ -1,7 +1,7 @@
 #ifndef VABACKEND_H
 #define VABACKEND_H
 
-#include <cuviddec.h>
+#include "cuviddec.h"
 #include <va/va_backend.h>
 #include <EGL/egl.h>
 #include <cudaEGL.h>

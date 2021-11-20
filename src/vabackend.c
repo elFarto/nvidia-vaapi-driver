@@ -11,8 +11,7 @@
 #include <va/va_drmcommon.h>
 
 #include <cuda.h>
-#include <cuviddec.h>
-#include <nvcuvid.h>
+#include "cuviddec.h"
 #include <drm/drm_fourcc.h>
 
 #include <stdarg.h>

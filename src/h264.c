@@ -111,15 +111,12 @@ void copyH264IQMatrix(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
 
 cudaVideoCodec computeH264CudaCodec(VAProfile profile) {
     //cudaVideoCodec_H264_SVC missing in VA-API?
-    switch (profile) {
-        case VAProfileH264Baseline:
-        case VAProfileH264ConstrainedBaseline:
-        case VAProfileH264Main:
-        case VAProfileH264High:
-            return cudaVideoCodec_H264;
-        case VAProfileH264StereoHigh:
-        case VAProfileH264MultiviewHigh:
-            return cudaVideoCodec_H264_MVC;
+    if (profile == VAProfileH264Baseline || profile == VAProfileH264ConstrainedBaseline || profile == VAProfileH264Main || profile == VAProfileH264High) {
+        return cudaVideoCodec_H264;
+    }
+
+    if (profile == VAProfileH264StereoHigh || profile == VAProfileH264MultiviewHigh) {
+        return cudaVideoCodec_H264_MVC;
     }
 
     return cudaVideoCodec_NONE;

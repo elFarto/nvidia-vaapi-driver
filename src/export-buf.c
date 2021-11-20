@@ -110,8 +110,8 @@ void initExporter(NVDriver *drv) {
 
     drv->eglDisplay = eglGetDisplay(NULL);
     eglInitialize(drv->eglDisplay, NULL, NULL);
-    drv->eglContext = eglCreateContext(drv->eglDisplay, EGL_NO_CONFIG_KHR, EGL_NO_CONTEXT, NULL);
-    eglMakeCurrent(drv->eglDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, drv->eglContext);
+//    drv->eglContext = eglCreateContext(drv->eglDisplay, EGL_NO_CONFIG_KHR, EGL_NO_CONTEXT, NULL);
+//    eglMakeCurrent(drv->eglDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, drv->eglContext);
     reconnect(drv);
 
     PFNEGLDEBUGMESSAGECONTROLKHRPROC eglDebugMessageControlKHR = (PFNEGLDEBUGMESSAGECONTROLKHRPROC) eglGetProcAddress("eglDebugMessageControlKHR");
@@ -121,11 +121,11 @@ void initExporter(NVDriver *drv) {
 }
 
 void exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t pitch, int *fourcc, int *fds, int *offsets, int *strides, uint64_t *mods, int *bppOut) {
-    EGLDisplay oldDisplay = eglGetCurrentDisplay();
-    EGLContext oldContext = eglGetCurrentContext();
-    EGLSurface oldReadSurface = eglGetCurrentSurface(EGL_READ);
-    EGLSurface oldDrawSurface = eglGetCurrentSurface(EGL_DRAW);
-    eglMakeCurrent(drv->eglDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, drv->eglContext);
+//    EGLDisplay oldDisplay = eglGetCurrentDisplay();
+//    EGLContext oldContext = eglGetCurrentContext();
+//    EGLSurface oldReadSurface = eglGetCurrentSurface(EGL_READ);
+//    EGLSurface oldDrawSurface = eglGetCurrentSurface(EGL_DRAW);
+//    eglMakeCurrent(drv->eglDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, drv->eglContext);
 
     // If there is a frame presented before we check if consumer
     // is done with it using cuEGLStreamProducerReturnFrame.
@@ -332,7 +332,7 @@ void exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t 
         }
     }
 
-    if (oldDisplay != EGL_NO_DISPLAY) {
-        eglMakeCurrent(oldDisplay, oldReadSurface, oldDrawSurface, oldContext);
-    }
+//    if (oldDisplay != EGL_NO_DISPLAY) {
+//        eglMakeCurrent(oldDisplay, oldReadSurface, oldDrawSurface, oldContext);
+//    }
 }

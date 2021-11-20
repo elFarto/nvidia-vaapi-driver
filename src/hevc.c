@@ -1,6 +1,7 @@
+#define _GNU_SOURCE
+
 #include "vabackend.h"
 
-#define _GNU_SOURCE
 #include <stdlib.h>
 
 const uint8_t ff_hevc_diag_scan4x4_x[16] = {
@@ -236,8 +237,8 @@ void copyHEVCPicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParam
     //This is required to make sure that the RefPicSetStCurrBefore and RefPicSetStCurrAfter arrays are in the correct order
     //VA-API doesn't pass this is, only marking each picture if it's in the arrays.
     //I'm not sure this is correct
-    qsort_r(ppc->RefPicSetStCurrBefore, ppc->NumPocStCurrBefore, sizeof(unsigned char), sortFuncRev, ppc->PicOrderCntVal);
-    qsort_r(ppc->RefPicSetStCurrAfter, ppc->NumPocStCurrAfter, sizeof(unsigned char), sortFunc, ppc->PicOrderCntVal);
+    qsort_r(ppc->RefPicSetStCurrBefore, ppc->NumPocStCurrBefore, sizeof(unsigned char), (__compar_d_fn_t) sortFuncRev, ppc->PicOrderCntVal);
+    qsort_r(ppc->RefPicSetStCurrAfter, ppc->NumPocStCurrAfter, sizeof(unsigned char), (__compar_d_fn_t) sortFunc, ppc->PicOrderCntVal);
 //    for (int i = 0; i < ppc->NumPocStCurrBefore; i++) {
 //        printf("RefPicSetStCurrBefore[%d] = %d (%d)\n", i, ppc->RefPicSetStCurrBefore[i], ppc->PicOrderCntVal[ppc->RefPicSetStCurrBefore[i]]);
 //    }
