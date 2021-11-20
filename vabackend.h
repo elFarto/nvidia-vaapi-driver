@@ -71,6 +71,7 @@ typedef struct
     Object             objRoot;
     VAGenericID        nextObjId;
     EGLDisplay         eglDisplay;
+    EGLContext         eglContext;
     EGLStreamKHR       eglStream;
     CUeglStreamConnection cuStreamConnection;
     int                numFramesPresented;

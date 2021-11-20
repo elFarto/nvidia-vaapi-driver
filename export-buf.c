@@ -25,6 +25,9 @@ EGLAPI EGLBoolean EGLAPIENTRY eglStreamReleaseImageNV (EGLDisplay dpy, EGLStream
 #endif
 #endif /* EGL_NV_stream_consumer_eglimage */
 
+#include <execinfo.h>
+#include <unistd.h>
+
 PFNEGLQUERYSTREAMCONSUMEREVENTNVPROC eglQueryStreamConsumerEventNV;
 PFNEGLSTREAMRELEASEIMAGENVPROC eglStreamReleaseImageNV;
 PFNEGLSTREAMACQUIREIMAGENVPROC eglStreamAcquireImageNV;
@@ -34,11 +37,40 @@ PFNEGLCREATESTREAMKHRPROC eglCreateStreamKHR;
 PFNEGLDESTROYSTREAMKHRPROC eglDestroyStreamKHR;
 PFNEGLSTREAMIMAGECONSUMERCONNECTNVPROC eglStreamImageConsumerConnectNV;
 
+
+/*
+[17929] export-buf.c:  40                    debug [EGL] eglQueryStreamConsumerEventNV: EGL_BAD_STREAM_KHR error: In EGL Access Table::stream.consumer.getCaps: Invalid EGLStream handle (0xdff9531)
+
+[17929] export-buf.c:  46                    debug ptr 0: 0x7f0b0f60c9cf /usr/lib64/dri/nvidia_drv_video.so(debug+0x7e) [0x7f0b0f60c9cf]
+[17929] export-buf.c:  46                    debug ptr 1: 0x7f0b0216c0c3 /lib64/libEGL_nvidia.so.0(+0xb30c3) [0x7f0b0216c0c3]
+[17929] export-buf.c:  46                    debug ptr 2: 0x7f0b0210678e /lib64/libEGL_nvidia.so.0(+0x4d78e) [0x7f0b0210678e]
+[17929] export-buf.c:  46                    debug ptr 3: 0x7f0b021068d4 /lib64/libEGL_nvidia.so.0(+0x4d8d4) [0x7f0b021068d4]
+[17929] export-buf.c:  46                    debug ptr 4: 0x7f0b020f26e8 /lib64/libEGL_nvidia.so.0(+0x396e8) [0x7f0b020f26e8]
+[17929] export-buf.c:  46                    debug ptr 5: 0x7f0b0bb29816 /lib64/libcuda.so.1(+0x11e816) [0x7f0b0bb29816]
+[17929] export-buf.c:  46                    debug ptr 6: 0x7f0b0bb67c99 /lib64/libcuda.so.1(+0x15cc99) [0x7f0b0bb67c99]
+[17929] export-buf.c:  46                    debug ptr 7: 0x7f0b0bc04224 /lib64/libcuda.so.1(+0x1f9224) [0x7f0b0bc04224]
+[17929] export-buf.c:  46                    debug ptr 8: 0x7f0b0f60d1d4 /usr/lib64/dri/nvidia_drv_video.so(exportCudaPtr+0x50e) [0x7f0b0f60d1d4]
+[17929] export-buf.c:  46                    debug ptr 9: 0x7f0b0f612e49 /usr/lib64/dri/nvidia_drv_video.so(nvExportSurfaceHandle+0x249) [0x7f0b0f612e49]
+
+
+*/
+
 void debug(EGLenum error,const char *command,EGLint messageType,EGLLabelKHR threadLabel,EGLLabelKHR objectLabel,const char* message) {
-    LOG("[EGL] %s\n", message);
+    LOG("[EGL] %s: %s\n", command, message);
+
+//    void* ptrs[50];
+//    int x = backtrace(&ptrs, 50);
+//    char **names = backtrace_symbols(ptrs, 50);
+//    for (int i = 0; i < x; i++) {
+//        LOG("ptr %d: %p %s\n", i, ptrs[i], names[i]);
+//    }
+
 }
 
 void releaseExporter(NVDriver *drv) {
+    if (drv->cuStreamConnection != NULL) {
+        cuEGLStreamConsumerDisconnect(&drv->cuStreamConnection);
+    }
     if (drv->eglDisplay != EGL_NO_DISPLAY) {
         if (drv->eglStream != EGL_NO_STREAM_KHR) {
             eglDestroyStreamKHR(drv->eglDisplay, drv->eglStream);
@@ -49,6 +81,21 @@ void releaseExporter(NVDriver *drv) {
     }
 
     cuEGLStreamProducerDisconnect(&drv->cuStreamConnection);
+}
+
+void reconnect(NVDriver *drv) {
+    LOG("Reconnecting to stream\n");
+    eglInitialize(drv->eglDisplay, NULL, NULL);
+    if (drv->cuStreamConnection != NULL) {
+        cuEGLStreamConsumerDisconnect(&drv->cuStreamConnection);
+    }
+    if (drv->eglStream != EGL_NO_STREAM_KHR) {
+        eglDestroyStreamKHR(drv->eglDisplay, drv->eglStream);
+    }
+    drv->eglStream = eglCreateStreamKHR(drv->eglDisplay, NULL);
+    eglStreamImageConsumerConnectNV(drv->eglDisplay, drv->eglStream, 0, 0, NULL);
+    checkCudaErrors(cuEGLStreamProducerConnect(&drv->cuStreamConnection, drv->eglStream, 1024, 1024));
+    drv->numFramesPresented = 0;
 }
 
 void initExporter(NVDriver *drv) {
@@ -63,11 +110,9 @@ void initExporter(NVDriver *drv) {
 
     drv->eglDisplay = eglGetDisplay(NULL);
     eglInitialize(drv->eglDisplay, NULL, NULL);
-    EGLint stream_attrib_list[] = { EGL_STREAM_FIFO_LENGTH_KHR, 10, EGL_NONE };
-    drv->eglStream = eglCreateStreamKHR(drv->eglDisplay, stream_attrib_list);
-    EGLAttrib consumer_attrib_list[] = { EGL_NONE };
-    eglStreamImageConsumerConnectNV(drv->eglDisplay, drv->eglStream, 0, 0, consumer_attrib_list);
-    checkCudaErrors(cuEGLStreamProducerConnect(&drv->cuStreamConnection, drv->eglStream, 1024, 1024));
+    drv->eglContext = eglCreateContext(drv->eglDisplay, EGL_NO_CONFIG_KHR, EGL_NO_CONTEXT, NULL);
+    eglMakeCurrent(drv->eglDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, drv->eglContext);
+    reconnect(drv);
 
     PFNEGLDEBUGMESSAGECONTROLKHRPROC eglDebugMessageControlKHR = (PFNEGLDEBUGMESSAGECONTROLKHRPROC) eglGetProcAddress("eglDebugMessageControlKHR");
     //setup debug logging
@@ -76,6 +121,12 @@ void initExporter(NVDriver *drv) {
 }
 
 void exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t pitch, int *fourcc, int *fds, int *offsets, int *strides, uint64_t *mods, int *bppOut) {
+    EGLDisplay oldDisplay = eglGetCurrentDisplay();
+    EGLContext oldContext = eglGetCurrentContext();
+    EGLSurface oldReadSurface = eglGetCurrentSurface(EGL_READ);
+    EGLSurface oldDrawSurface = eglGetCurrentSurface(EGL_DRAW);
+    eglMakeCurrent(drv->eglDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, drv->eglContext);
+
     // If there is a frame presented before we check if consumer
     // is done with it using cuEGLStreamProducerReturnFrame.
     //LOG("outstanding frames: %d\n", numFramesPresented);
@@ -221,13 +272,21 @@ void exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t 
 //    free(buf);
 //    close(fd);
 
+
+    LOG("PrePresent drv %p, dsp: %p, str: %p, sc: %p\n", drv, drv->eglDisplay, drv->eglStream, drv->cuStreamConnection);
     //LOG("Presenting frame %dx%d %p %p\n", eglframe.width, eglframe.height, eglframe.frame.pArray[0], eglframe.frame.pArray[1]);
-    checkCudaErrors(cuEGLStreamProducerPresentFrame( &drv->cuStreamConnection, eglframe, NULL ));
+    CUresult ret = cuEGLStreamProducerPresentFrame( &drv->cuStreamConnection, eglframe, NULL );
+    if (ret == CUDA_ERROR_UNKNOWN) {
+        reconnect(drv);
+        checkCudaErrors(cuEGLStreamProducerPresentFrame( &drv->cuStreamConnection, eglframe, NULL ));
+    }
+
     drv->numFramesPresented++;
 
     while (1) {
         EGLenum event = 0;
         EGLAttrib aux = 0;
+        LOG("eglQueryStreamConsumerEventNV: %p\n", drv->eglStream);
         EGLint eventRet = eglQueryStreamConsumerEventNV(drv->eglDisplay, drv->eglStream, 0, &event, &aux);
         if (eventRet == EGL_TIMEOUT_EXPIRED_KHR) {
             break;
@@ -271,5 +330,9 @@ void exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t 
         } else {
             LOG("Unhandled event: %X\n", event);
         }
+    }
+
+    if (oldDisplay != EGL_NO_DISPLAY) {
+        eglMakeCurrent(oldDisplay, oldReadSurface, oldDrawSurface, oldContext);
     }
 }

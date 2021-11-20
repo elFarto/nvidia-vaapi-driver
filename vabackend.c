@@ -199,7 +199,7 @@ VAStatus nvQueryConfigProfiles(
     LOG("In %s\n", __FUNCTION__);
 
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
-    cuCtxSetCurrent(drv->g_oContext);
+    cuCtxPushCurrent(drv->g_oContext);
 
     int profiles = 0;
     if (doesGPUSupportCodec(cudaVideoCodec_MPEG2, 8, cudaVideoChromaFormat_420, NULL, NULL)) {
@@ -277,6 +277,8 @@ VAStatus nvQueryConfigProfiles(
         profile_list[profiles++] = VAProfileAV1Profile1;
     }
     *num_profiles = profiles;
+
+    cuCtxPopCurrent(NULL);
 
     return VA_STATUS_SUCCESS;
 }
@@ -1199,9 +1201,9 @@ VAStatus nvQuerySurfaceAttributes(
 	)
 {
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
-    LOG("In %s with %p %d\n", __FUNCTION__, attrib_list, *num_attribs);
-
     NVConfig *cfg = (NVConfig*) getObject(drv, config)->obj;
+
+    LOG("with %d %p %d\n", cfg->cudaCodec, attrib_list, *num_attribs);
 
     if (attrib_list == NULL) {
             *num_attribs = 5;
@@ -1212,8 +1214,11 @@ VAStatus nvQuerySurfaceAttributes(
             .nBitDepthMinus8 = cfg->bitDepth - 8
         };
 
+        checkCudaErrors(cuCtxPushCurrent(drv->g_oContext));
         CUresult result = cuvidGetDecoderCaps(&videoDecodeCaps);
+        cuCtxPopCurrent(NULL);
         if (result != CUDA_SUCCESS) {
+            checkCudaErrors(result);
             return VA_STATUS_ERROR_OPERATION_FAILED;
         }
 
@@ -1501,7 +1506,6 @@ VAStatus __vaDriverInit_1_0(VADriverContextP ctx)
     NVDriver *drv = (NVDriver*) calloc(1, sizeof(NVDriver));
     ctx->pDriverData = drv;
 
-    //a 999 error here means install nvidia-modprobe
     checkCudaErrors(cuInit(0));
     checkCudaErrors(cuCtxCreate(&drv->g_oContext, CU_CTX_SCHED_BLOCKING_SYNC, 0));
 
