@@ -7,9 +7,12 @@ It's currently in early development, so don't expect it to work well.
 Building
 ========
 
-You'll need the [NVIDIA Video Codec SDK](https://developer.nvidia.com/nvidia-video-codec-sdk/download) to build it.
-You'll also need the gstreamer-plugins-bad library, as the bitstream parser is needed from it.
+You'll need the gstreamer-plugins-bad library installs.
 
-Update the Makefile with the location to the SDK, and use `make` to build the library.
+Then run the following commands:
+```
+meson setup build
+meson install -C build
+```
 
 The `test.sh` script will run mpv with the file provided and various environment variables set to use the newly built driver.

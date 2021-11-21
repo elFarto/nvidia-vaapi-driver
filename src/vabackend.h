@@ -40,8 +40,6 @@ typedef struct
     VABufferType bufferType;
     void *ptr;
 } NVBuffer;
-
-
 typedef struct
 {
     int width;
@@ -49,7 +47,7 @@ typedef struct
     cudaVideoSurfaceFormat format;
     int bitdepth;
     int pictureIdx;
-    CUvideodecoder decoder;
+    VAContextID contextId;
     int progressive_frame;
     int top_field_first;
     int second_field;

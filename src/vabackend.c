@@ -1,3 +1,5 @@
+#define _GNU_SOURCE
+
 #include "vabackend.h"
 #include "export-buf.h"
 
@@ -14,15 +16,16 @@
 #include "cuviddec.h"
 #include <drm/drm_fourcc.h>
 
-#include <stdarg.h>
 #include <unistd.h>
+#include <sys/types.h>
+#include <stdarg.h>
 
 NVCodecHolder *codecs = NULL;
 
 void logger(const char *msg, ...) {
     va_list argList;
 
-    printf("[%d] ", getpid());
+    printf("[%d-%d] ", getpid(), gettid());
 
     va_start(argList, msg);
     vprintf(msg, argList);
@@ -100,6 +103,17 @@ Object allocateObject(NVDriver *drv, ObjectType type, int allocatePtrSize)
     return newObj;
 }
 
+void* getObjectPtr(NVDriver *drv, VAGenericID id) {
+    if (id != VA_INVALID_ID) {
+        for (Object o = drv->objRoot; o != NULL; o = o->next) {
+            if (o->id == id && o != NULL) {
+                return o->obj;
+            }
+        }
+    }
+    return NULL;
+}
+
 Object getObject(NVDriver *drv, VAGenericID id) {
     if (id != VA_INVALID_ID) {
         for (Object o = drv->objRoot; o != NULL; o = o->next) {
@@ -174,11 +188,7 @@ int doesGPUSupportCodec(cudaVideoCodec codec, int bitDepth, cudaVideoChromaForma
     videoDecodeCaps.eChromaFormat   = chromaFormat;
     videoDecodeCaps.nBitDepthMinus8 = bitDepth - 8;
 
-    CUresult result = cuvidGetDecoderCaps(&videoDecodeCaps);
-    if (result != CUDA_SUCCESS)
-    {
-        return 0;
-    }
+    checkCudaErrors(cuvidGetDecoderCaps(&videoDecodeCaps));
     if (width != NULL) {
         *width = videoDecodeCaps.nMaxWidth;
     }
@@ -195,8 +205,6 @@ VAStatus nvQueryConfigProfiles(
         int *num_profiles			/* out */
     )
 {
-    LOG("In %s\n", __FUNCTION__);
-
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
     cuCtxPushCurrent(drv->g_oContext);
 
@@ -289,8 +297,6 @@ VAStatus nvQueryConfigEntrypoints(
         int *num_entrypoints			/* out */
     )
 {
-    LOG("In %s\n", __FUNCTION__);
-
     entrypoint_list[0] = VAEntrypointVLD;
     *num_entrypoints = 1;
 
@@ -305,8 +311,6 @@ VAStatus nvGetConfigAttributes(
         int num_attribs
     )
 {
-    LOG("In %s\n", __FUNCTION__);
-
     if (vaToCuCodec(profile) == cudaVideoCodec_NONE) {
         return VA_STATUS_ERROR_UNSUPPORTED_PROFILE;
     }
@@ -385,8 +389,6 @@ VAStatus nvDestroyConfig(
     )
 {
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
-    LOG("In %s\n", __FUNCTION__);
-
 
     deleteObject(drv, config_id);
 
@@ -403,7 +405,6 @@ VAStatus nvQueryConfigAttributes(
     )
 {
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
-    LOG("In %s\n", __FUNCTION__);
 
     Object obj = getObject(drv, config_id);
 
@@ -432,7 +433,6 @@ VAStatus nvCreateSurfaces2(
         )
 {
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
-    LOG("In %s\n", __FUNCTION__);
     LOG("creating %d surface(s) %dx%d, format %X\n", num_surfaces, width, height, format);
 
     cudaVideoSurfaceFormat nvFormat;
@@ -455,7 +455,6 @@ VAStatus nvCreateSurfaces2(
     for (int i = 0; i < num_surfaces; i++)
     {
         Object surfaceObject = allocateObject(drv, OBJECT_TYPE_SURFACE, sizeof(NVSurface));
-        LOG("created surface %d\n", surfaceObject->id);
         surfaces[i] = surfaceObject->id;
         NVSurface *suf = (NVSurface*) surfaceObject->obj;
         suf->width = width;
@@ -477,7 +476,6 @@ VAStatus nvCreateSurfaces(
         VASurfaceID *surfaces		/* out */
     )
 {
-    LOG("In %s\n", __FUNCTION__);
     return nvCreateSurfaces2(ctx, format, width, height, surfaces, num_surfaces, NULL, 0);
 }
 
@@ -489,7 +487,6 @@ VAStatus nvDestroySurfaces(
     )
 {
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
-    LOG("In %s\n", __FUNCTION__);
 
     for (int i = 0; i < num_surfaces; i++)
     {
@@ -510,7 +507,7 @@ VAStatus nvCreateContext(
         VAContextID *context		/* out */
     )
 {
-    LOG("In %s with %d render targets\n", __FUNCTION__, num_render_targets);
+    LOG("with %d render targets\n", num_render_targets);
 
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
     NVConfig *cfg = (NVConfig*) getObject(drv, config_id)->obj;
@@ -520,7 +517,7 @@ VAStatus nvCreateContext(
     memset(&vdci, 0, sizeof(CUVIDDECODECREATEINFO));
     vdci.ulWidth = picture_width;
     vdci.ulHeight = picture_height;
-    vdci.ulNumDecodeSurfaces = num_render_targets; //TODO is this correct? probably not, but the about of decode surfaces needed is determined by codec, i think
+    vdci.ulNumDecodeSurfaces = num_render_targets; //TODO is this correct? probably not, but the amount of decode surfaces needed is determined by codec, i think
     vdci.CodecType = cfg->cudaCodec;
     vdci.ulCreationFlags = cudaVideoCreate_PreferCUVID;
     vdci.ulIntraDecodeOnly = 0; //TODO (flag & VA_PROGRESSIVE) != 0
@@ -565,14 +562,18 @@ VAStatus nvCreateContext(
             }
         }
     }
-    LOG("got codec: %p\n", nvCtx->codec);
+
+    if (nvCtx->codec == NULL) {
+        LOG("Unable to find codec for profile: %d\n", cfg->profile);
+        return VA_STATUS_ERROR_UNSUPPORTED_PROFILE; //TODO not sure this is the correct error
+    }
 
     //assign all the render targets unique ids up-front
     //this seems to be a simplier way to manage them
     for (int i = 0; i < num_render_targets; i++) {
         Object obj = getObject(drv, render_targets[i]);
         NVSurface *suf = obj->obj;
-        LOG("assigning surface id %d to picture index %d\n", obj->id, i);
+        //LOG("assigning surface id %d to picture index %d\n", obj->id, i);
         suf->pictureIdx = i;
     }
 
@@ -624,7 +625,6 @@ VAStatus nvCreateBuffer(
     )
 {
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
-    //LOG("In %s\n", __FUNCTION__);
 
     //TODO should pool these as most of the time these should be the same size
     Object bufferObject = allocateObject(drv, OBJECT_TYPE_BUFFER, sizeof(NVBuffer));
@@ -655,7 +655,6 @@ VAStatus nvBufferSetNumElements(
         unsigned int num_elements	/* in */
     )
 {
-    LOG("In %s\n", __FUNCTION__);
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
@@ -666,7 +665,6 @@ VAStatus nvMapBuffer(
     )
 {
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
-    LOG("In %s with %d\n", __FUNCTION__, buf_id);
 
     Object obj = getObject(drv, buf_id);
     NVBuffer *buf = (NVBuffer*) obj->obj;
@@ -680,8 +678,6 @@ VAStatus nvUnmapBuffer(
         VABufferID buf_id	/* in */
     )
 {
-    LOG("In %s\n", __FUNCTION__);
-
     return VA_STATUS_SUCCESS;
 }
 
@@ -691,7 +687,6 @@ VAStatus nvDestroyBuffer(
     )
 {
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
-    LOG("In %s\n", __FUNCTION__);
 
     Object obj = getObject(drv, buffer_id);
 
@@ -707,7 +702,6 @@ VAStatus nvBeginPicture(
     )
 {
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
-    LOG("In %s\n", __FUNCTION__);
 
     NVContext *nvCtx = (NVContext*) getObject(drv, context)->obj;
     memset(&nvCtx->pPicParams, 0, sizeof(CUVIDPICPARAMS));
@@ -724,17 +718,14 @@ VAStatus nvRenderPicture(
     )
 {
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
-    LOG("In %s\n", __FUNCTION__);
 
     NVContext *nvCtx = (NVContext*) getObject(drv, context)->obj;
     CUVIDPICPARAMS *picParams = &nvCtx->pPicParams;
     VAProfile prof = nvCtx->profile;
     cudaVideoCodec codec = vaToCuCodec(prof);
 
-    //LOG("got %d buffers\n", num_buffers);
     for (int i = 0; i < num_buffers; i++)
     {
-        //LOG("got buffer %d\n", buffers[i]);
         NVBuffer *buf = (NVBuffer*) getObject(drv, buffers[i])->obj;
         VABufferType bt = buf->bufferType;
         HandlerFunc func = nvCtx->codec->handlers[bt];
@@ -772,7 +763,7 @@ VAStatus nvEndPicture(
         return VA_STATUS_ERROR_DECODING_ERROR;
     }
     LOG("cuvid decoded successful to idx: %d\n", picParams->CurrPicIdx);
-    nvCtx->render_target->decoder = nvCtx->decoder;
+    nvCtx->render_target->contextId = context;
     nvCtx->render_target->progressive_frame = !picParams->field_pic_flag;
     nvCtx->render_target->top_field_first = !picParams->bottom_field_flag;
     nvCtx->render_target->second_field = picParams->second_field;
@@ -785,7 +776,6 @@ VAStatus nvSyncSurface(
         VASurfaceID render_target
     )
 {
-    LOG("In %s\n", __FUNCTION__);
     return VA_STATUS_SUCCESS;
 }
 
@@ -795,7 +785,6 @@ VAStatus nvQuerySurfaceStatus(
         VASurfaceStatus *status	/* out */
     )
 {
-    LOG("In %s\n", __FUNCTION__);
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
@@ -865,7 +854,6 @@ VAStatus nvCreateImage(
     )
 {
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
-    LOG("In %s\n", __FUNCTION__);
 
     Object imageObj = allocateObject(drv, OBJECT_TYPE_IMAGE, sizeof(NVImage));
     image->image_id = imageObj->id;
@@ -939,8 +927,6 @@ VAStatus nvDestroyImage(
     )
 {
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
-    LOG("In %s\n", __FUNCTION__);
-
     NVImage *img = getObject(drv, image)->obj;
 
     Object imageBufferObj = getObjectByPtr(drv, img->imageBuffer);
@@ -979,10 +965,15 @@ VAStatus nvGetImage(
     )
 {
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
-    LOG("In %s\n", __FUNCTION__);
 
     NVSurface *surfaceObj = (NVSurface*) getObject(drv, surface)->obj;
     NVImage *imageObj = (NVImage*) getObject(drv, image)->obj;
+
+    if (getObject(drv, surfaceObj->contextId) == NULL) {
+        return VA_STATUS_ERROR_INVALID_CONTEXT;
+    }
+
+    NVContext *context = (NVContext*) getObject(drv, surfaceObj->contextId)->obj;
 
     int bytesPerPixel = 1;
     if (imageObj->format == VA_FOURCC_P010 || imageObj->format == VA_FOURCC_P012) {
@@ -997,7 +988,7 @@ VAStatus nvGetImage(
     CUdeviceptr deviceMemory = (CUdeviceptr) NULL;
     unsigned int pitch;
 
-    CUresult result = cuvidMapVideoFrame(surfaceObj->decoder, surfaceObj->pictureIdx, &deviceMemory, &pitch, &procParams);
+    CUresult result = cuvidMapVideoFrame(context->decoder, surfaceObj->pictureIdx, &deviceMemory, &pitch, &procParams);
     LOG("got address %X for surface %d\n", deviceMemory, getObject(drv, surface)->id);
 
     if (result != CUDA_SUCCESS)
@@ -1028,7 +1019,7 @@ VAStatus nvGetImage(
             return VA_STATUS_ERROR_DECODING_ERROR;
     }
 
-    cuvidUnmapVideoFrame(surfaceObj->decoder, deviceMemory);
+    cuvidUnmapVideoFrame(context->decoder, deviceMemory);
 
 //    static int counter = 0;
 //    char filename[64];
@@ -1060,7 +1051,6 @@ VAStatus nvPutImage(
     )
 {
     LOG("In %s\n", __FUNCTION__);
-
     return VA_STATUS_SUCCESS;
 }
 
@@ -1330,18 +1320,6 @@ VAStatus nvUnlockSurface(
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
-//        /* DEPRECATED */
-//VAStatus nvGetSurfaceAttributes(
-//            VADriverContextP    dpy,
-//            VAConfigID          config,
-//            VASurfaceAttrib    *attrib_list,
-//            unsigned int        num_attribs
-//        )
-//{
-//    LOG("In %s\n", __FUNCTION__);
-//    return VA_STATUS_ERROR_UNIMPLEMENTED;
-//}
-
 VAStatus nvCreateMFContext(
             VADriverContextP ctx,
             VAMFContextID *mfe_context    /* out */
@@ -1418,12 +1396,18 @@ VAStatus nvExportSurfaceHandle(
     //TODO check mem_type
     //TODO deal with flags
 
-    LOG("got %d %X %X\n", surface_id, mem_type, flags);
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
+    LOG("got %p\n", drv);
 
     cuCtxPushCurrent(drv->g_oContext);
 
-    NVSurface *surfaceObj = (NVSurface*) getObject(drv, surface_id)->obj;
+    NVSurface *surfaceObj = (NVSurface*) getObjectPtr(drv, surface_id);
+    //This will be NULL for surfaces that haven't been end
+    NVContext *context = (NVContext*) getObjectPtr(drv, surfaceObj->contextId);
+
+    if (surfaceObj->pictureIdx != -1 && context == NULL) {
+        return VA_STATUS_ERROR_INVALID_CONTEXT;
+    }
 
     CUdeviceptr deviceMemory = (CUdeviceptr) NULL;
     unsigned int pitch = 0;
@@ -1434,12 +1418,11 @@ VAStatus nvExportSurfaceHandle(
         procParams.top_field_first = surfaceObj->top_field_first;
         procParams.second_field = surfaceObj->second_field;
 
-        checkCudaErrors(cuvidMapVideoFrame(surfaceObj->decoder, surfaceObj->pictureIdx, &deviceMemory, &pitch, &procParams));
+        LOG("Decoding with %p\n", context);
+        checkCudaErrors(cuvidMapVideoFrame(context->decoder, surfaceObj->pictureIdx, &deviceMemory, &pitch, &procParams));
         LOG("got address %llX (%d) for surface %d (picIdx: %d)\n", deviceMemory, pitch, surface_id, surfaceObj->pictureIdx);
     } else {
-        //TODO what do we do about exporting surfaces that were not used for decoding
-        cuMemAlloc(&deviceMemory, 10 * 1024 * 1024);
-        pitch = 1024;
+        pitch = surfaceObj->width;
     }
 
     int fourcc, bpp, fds[4] = {0, 0, 0, 0}, strides[4] = {0, 0, 0, 0}, offsets[4] = {0, 0, 0, 0};
@@ -1448,9 +1431,7 @@ VAStatus nvExportSurfaceHandle(
 
     //since we have to make a copy of the data anyway, we can unmap here
     if (surfaceObj->pictureIdx != -1) {
-        cuvidUnmapVideoFrame(surfaceObj->decoder, deviceMemory);
-    } else {
-        cuMemFree(deviceMemory);
+        cuvidUnmapVideoFrame(context->decoder, deviceMemory);
     }
 
     //TODO only support 420 images (either NV12, P010 or P012)
@@ -1518,9 +1499,6 @@ VAStatus __vaDriverInit_1_0(VADriverContextP ctx)
     ctx->str_vendor = "VA-API NVDEC driver";
 
     initExporter(drv);
-
-    //LOG("Sleeping\n");
-    //sleep(30);
 
 #define VTABLE(ctx, func) ctx->vtable->va ## func = nv ## func
 
