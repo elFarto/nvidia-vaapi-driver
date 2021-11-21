@@ -75,7 +75,7 @@ void copyH264SliceParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picPar
     VASliceParameterBufferH264* buf = (VASliceParameterBufferH264*) buffer->ptr;
 
     picParams->CodecSpecific.h264.num_ref_idx_l0_active_minus1 = buf->num_ref_idx_l0_active_minus1;
-    picParams->CodecSpecific.h264.num_ref_idx_l1_active_minus1 = buf->num_ref_idx_l0_active_minus1;
+    picParams->CodecSpecific.h264.num_ref_idx_l1_active_minus1 = buf->num_ref_idx_l1_active_minus1;
 
     if (buf->slice_type != 2 && buf->slice_type != 4) { // != I && != SI
         picParams->intra_pic_flag = 0;

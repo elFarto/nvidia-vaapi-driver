@@ -1418,7 +1418,6 @@ VAStatus nvExportSurfaceHandle(
         procParams.top_field_first = surfaceObj->top_field_first;
         procParams.second_field = surfaceObj->second_field;
 
-        LOG("Decoding with %p\n", context);
         checkCudaErrors(cuvidMapVideoFrame(context->decoder, surfaceObj->pictureIdx, &deviceMemory, &pitch, &procParams));
         LOG("got address %llX (%d) for surface %d (picIdx: %d)\n", deviceMemory, pitch, surface_id, surfaceObj->pictureIdx);
     } else {
