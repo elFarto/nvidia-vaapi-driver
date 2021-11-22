@@ -22,14 +22,15 @@
 
 NVCodecHolder *codecs = NULL;
 
-void logger(const char *msg, ...) {
+void logger(const char *msg, const char *filename, const char *function, int line, ...) {
     va_list argList;
+    char formattedMessage[1024];
 
-    printf("[%d-%d] ", getpid(), gettid());
-
-    va_start(argList, msg);
-    vprintf(msg, argList);
+    va_start(argList, line);
+    vsnprintf(formattedMessage, 1024, msg, argList);
     va_end(argList);
+
+    printf("[%d-%d] %s :%4d %24s %s\n", getpid(), gettid(), filename, line, function, formattedMessage);
 }
 
 void __checkCudaErrors(CUresult err, const char *file, const int line)
@@ -176,7 +177,7 @@ cudaVideoCodec vaToCuCodec(VAProfile profile)
         }
     }
 
-    LOG("vaToCuCodec: Unknown codec: %d\n", profile);
+    //LOG("vaToCuCodec: Unknown codec: %d", profile);
     return cudaVideoCodec_NONE;
 }
 
@@ -283,6 +284,19 @@ VAStatus nvQueryConfigProfiles(
     if (doesGPUSupportCodec(cudaVideoCodec_AV1, 8, cudaVideoChromaFormat_444, NULL, NULL)) {
         profile_list[profiles++] = VAProfileAV1Profile1;
     }
+
+    //now filter out the codecs we don't support
+    for (int i = 0; i < profiles; i++) {
+        if (vaToCuCodec(profile_list[i]) == cudaVideoCodec_NONE) {
+            //LOG("Removing profile: %d", profile_list[i])
+            for (int x = i; x < profiles-1; x++) {
+                profile_list[x] = profile_list[x+1];
+            }
+            profiles--;
+            i--;
+        }
+    }
+
     *num_profiles = profiles;
 
     cuCtxPopCurrent(NULL);
@@ -335,7 +349,7 @@ VAStatus nvGetConfigAttributes(
         }
         else
         {
-            LOG("unhandled config attribute: %d\n", attrib_list[i].type);
+            LOG("unhandled config attribute: %d", attrib_list[i].type);
         }
     }
 
@@ -352,7 +366,7 @@ VAStatus nvCreateConfig(
     )
 {
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
-    LOG("In %s with profile: %d with %d attributes\n", __FUNCTION__, profile, num_attribs);
+    LOG("In %s with profile: %d with %d attributes", __FUNCTION__, profile, num_attribs);
 
     Object obj = allocateObject(drv, OBJECT_TYPE_CONFIG, sizeof(NVConfig));
     NVConfig *cfg = (NVConfig*) obj->obj;
@@ -363,7 +377,7 @@ VAStatus nvCreateConfig(
 
     for (int i = 0; i < num_attribs; i++)
     {
-      LOG("got config attrib: %d %d %d\n", i, attrib_list[i].type, attrib_list[i].value);
+      LOG("got config attrib: %d %d %d", i, attrib_list[i].type, attrib_list[i].value);
     }
 
     cfg->cudaCodec = vaToCuCodec(cfg->profile);
@@ -433,7 +447,7 @@ VAStatus nvCreateSurfaces2(
         )
 {
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
-    LOG("creating %d surface(s) %dx%d, format %X\n", num_surfaces, width, height, format);
+    LOG("creating %d surface(s) %dx%d, format %X", num_surfaces, width, height, format);
 
     cudaVideoSurfaceFormat nvFormat;
     int bitdepth;
@@ -448,7 +462,7 @@ VAStatus nvCreateSurfaces2(
         nvFormat = cudaVideoSurfaceFormat_P016;
         bitdepth = 12;
     } else {
-        LOG("Unknown format: %X\n", format);
+        LOG("Unknown format: %X", format);
         return VA_STATUS_ERROR_UNSUPPORTED_RT_FORMAT;
     }
 
@@ -507,7 +521,7 @@ VAStatus nvCreateContext(
         VAContextID *context		/* out */
     )
 {
-    LOG("with %d render targets\n", num_render_targets);
+    LOG("with %d render targets", num_render_targets);
 
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
     NVConfig *cfg = (NVConfig*) getObject(drv, config_id)->obj;
@@ -539,7 +553,7 @@ VAStatus nvCreateContext(
 
     if (result != CUDA_SUCCESS)
     {
-        LOG("cuvidCreateDecoder failed: %d\n", result);
+        LOG("cuvidCreateDecoder failed: %d", result);
         return VA_STATUS_ERROR_ALLOCATION_FAILED;
     }
 
@@ -564,7 +578,7 @@ VAStatus nvCreateContext(
     }
 
     if (nvCtx->codec == NULL) {
-        LOG("Unable to find codec for profile: %d\n", cfg->profile);
+        LOG("Unable to find codec for profile: %d", cfg->profile);
         return VA_STATUS_ERROR_UNSUPPORTED_PROFILE; //TODO not sure this is the correct error
     }
 
@@ -573,7 +587,7 @@ VAStatus nvCreateContext(
     for (int i = 0; i < num_render_targets; i++) {
         Object obj = getObject(drv, render_targets[i]);
         NVSurface *suf = obj->obj;
-        //LOG("assigning surface id %d to picture index %d\n", obj->id, i);
+        //LOG("assigning surface id %d to picture index %d", obj->id, i);
         suf->pictureIdx = i;
     }
 
@@ -585,7 +599,7 @@ VAStatus nvDestroyContext(
         VAContextID context)
 {
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
-    LOG("In %s\n", __FUNCTION__);
+    LOG("In %s", __FUNCTION__);
 
     NVContext *nvCtx = (NVContext*) getObject(drv, context)->obj;
 
@@ -605,7 +619,7 @@ VAStatus nvDestroyContext(
         CUresult result = cuvidDestroyDecoder(decoder);
         if (result != CUDA_SUCCESS)
         {
-            LOG("cuvidDestroyDecoder failed: %d\n", result);
+            LOG("cuvidDestroyDecoder failed: %d", result);
             return VA_STATUS_ERROR_OPERATION_FAILED;
         }
       }
@@ -637,7 +651,7 @@ VAStatus nvCreateBuffer(
     buf->ptr = memalign(16, buf->size);
 
     if (buf->ptr == NULL) {
-        LOG("Unable to allocate buffer of %d bytes\n", buf->size);
+        LOG("Unable to allocate buffer of %d bytes", buf->size);
         exit(EXIT_FAILURE);
     }
 
@@ -732,7 +746,7 @@ VAStatus nvRenderPicture(
         if (func != NULL) {
             func(nvCtx, buf, picParams);
         } else {
-            LOG("Unhandled buffer type: %d\n", bt);
+            LOG("Unhandled buffer type: %d", bt);
         }
     }
     return VA_STATUS_SUCCESS;
@@ -759,10 +773,10 @@ VAStatus nvEndPicture(
 
     if (result != CUDA_SUCCESS)
     {
-        LOG("cuvidDecodePicture failed: %d\n", result);
+        LOG("cuvidDecodePicture failed: %d", result);
         return VA_STATUS_ERROR_DECODING_ERROR;
     }
-    LOG("cuvid decoded successful to idx: %d\n", picParams->CurrPicIdx);
+    LOG("cuvid decoded successful to idx: %d", picParams->CurrPicIdx);
     nvCtx->render_target->contextId = context;
     nvCtx->render_target->progressive_frame = !picParams->field_pic_flag;
     nvCtx->render_target->top_field_first = !picParams->bottom_field_flag;
@@ -795,7 +809,7 @@ VAStatus nvQuerySurfaceError(
         void **error_info /*out*/
     )
 {
-    LOG("In %s\n", __FUNCTION__);
+    LOG("In %s", __FUNCTION__);
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
@@ -816,7 +830,7 @@ VAStatus nvPutSurface(
         unsigned int flags /* de-interlacing flags */
     )
 {
-    LOG("In %s\n", __FUNCTION__);
+    LOG("In %s", __FUNCTION__);
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
@@ -826,7 +840,7 @@ VAStatus nvQueryImageFormats(
         int *num_formats           /* out */
     )
 {
-    LOG("In %s\n", __FUNCTION__);
+    LOG("In %s", __FUNCTION__);
 
     format_list[0].fourcc = VA_FOURCC_NV12;
     format_list[0].byte_order = VA_LSB_FIRST;
@@ -858,7 +872,7 @@ VAStatus nvCreateImage(
     Object imageObj = allocateObject(drv, OBJECT_TYPE_IMAGE, sizeof(NVImage));
     image->image_id = imageObj->id;
 
-    LOG("created image id: %d\n", imageObj->id);
+    LOG("created image id: %d", imageObj->id);
 
     NVImage *img = (NVImage*) imageObj->obj;
     img->width = width;
@@ -916,7 +930,7 @@ VAStatus nvDeriveImage(
         VAImage *image     /* out */
     )
 {
-    LOG("In %s\n", __FUNCTION__);
+    LOG("In %s", __FUNCTION__);
     //FAILED because we don't support it yet
     return VA_STATUS_ERROR_OPERATION_FAILED;
 }
@@ -950,7 +964,7 @@ VAStatus nvSetImagePalette(
                 unsigned char *palette
     )
 {
-    LOG("In %s\n", __FUNCTION__);
+    LOG("In %s", __FUNCTION__);
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
@@ -989,11 +1003,11 @@ VAStatus nvGetImage(
     unsigned int pitch;
 
     CUresult result = cuvidMapVideoFrame(context->decoder, surfaceObj->pictureIdx, &deviceMemory, &pitch, &procParams);
-    LOG("got address %X for surface %d\n", deviceMemory, getObject(drv, surface)->id);
+    LOG("got address %X for surface %d", deviceMemory, getObject(drv, surface)->id);
 
     if (result != CUDA_SUCCESS)
     {
-            LOG("cuvidMapVideoFrame failed: %d\n", result);
+            LOG("cuvidMapVideoFrame failed: %d", result);
             return VA_STATUS_ERROR_DECODING_ERROR;
     }
 
@@ -1015,7 +1029,7 @@ VAStatus nvGetImage(
     result = cuMemcpy2D(&memcpy2d);
     if (result != CUDA_SUCCESS)
     {
-            LOG("cuMemcpy2D failed: %d\n", result);
+            LOG("cuMemcpy2D failed: %d", result);
             return VA_STATUS_ERROR_DECODING_ERROR;
     }
 
@@ -1026,7 +1040,7 @@ VAStatus nvGetImage(
 //    int size = (pitch * surfaceObj->height) + (pitch * surfaceObj->height>>1);
 //    char *buf = malloc(size);
 //    snprintf(filename, 64, "/tmp/frame-%03d.data\0", counter++);
-//    LOG("writing %d to %s\n", surfaceObj->pictureIdx, filename);
+//    LOG("writing %d to %s", surfaceObj->pictureIdx, filename);
 //    int fd = open(filename, O_RDWR | O_TRUNC | O_CREAT, 0644);
 //    cuMemcpyDtoH(buf, deviceMemory, size);
 //    write(fd, buf, size);
@@ -1050,7 +1064,7 @@ VAStatus nvPutImage(
         unsigned int dest_height
     )
 {
-    LOG("In %s\n", __FUNCTION__);
+    LOG("In %s", __FUNCTION__);
     return VA_STATUS_SUCCESS;
 }
 
@@ -1061,7 +1075,7 @@ VAStatus nvQuerySubpictureFormats(
         unsigned int *num_formats  /* out */
     )
 {
-    LOG("In %s\n", __FUNCTION__);
+    LOG("In %s", __FUNCTION__);
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
@@ -1071,7 +1085,7 @@ VAStatus nvCreateSubpicture(
         VASubpictureID *subpicture   /* out */
     )
 {
-    LOG("In %s\n", __FUNCTION__);
+    LOG("In %s", __FUNCTION__);
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
@@ -1080,7 +1094,7 @@ VAStatus nvDestroySubpicture(
         VASubpictureID subpicture
     )
 {
-    LOG("In %s\n", __FUNCTION__);
+    LOG("In %s", __FUNCTION__);
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
@@ -1090,7 +1104,7 @@ VAStatus nvSetSubpictureImage(
                 VAImageID image
         )
 {
-    LOG("In %s\n", __FUNCTION__);
+    LOG("In %s", __FUNCTION__);
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
@@ -1102,7 +1116,7 @@ VAStatus nvSetSubpictureChromakey(
         unsigned int chromakey_mask
     )
 {
-    LOG("In %s\n", __FUNCTION__);
+    LOG("In %s", __FUNCTION__);
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
@@ -1112,7 +1126,7 @@ VAStatus nvSetSubpictureGlobalAlpha(
         float global_alpha
     )
 {
-    LOG("In %s\n", __FUNCTION__);
+    LOG("In %s", __FUNCTION__);
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
@@ -1136,7 +1150,7 @@ VAStatus nvAssociateSubpicture(
         unsigned int flags
     )
 {
-    LOG("In %s\n", __FUNCTION__);
+    LOG("In %s", __FUNCTION__);
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
@@ -1147,7 +1161,7 @@ VAStatus nvDeassociateSubpicture(
         int num_surfaces
     )
 {
-    LOG("In %s\n", __FUNCTION__);
+    LOG("In %s", __FUNCTION__);
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
@@ -1157,7 +1171,7 @@ VAStatus nvQueryDisplayAttributes(
         int *num_attributes		/* out */
         )
 {
-    LOG("In %s\n", __FUNCTION__);
+    LOG("In %s", __FUNCTION__);
     *num_attributes = 0;
     return VA_STATUS_SUCCESS;
 }
@@ -1168,7 +1182,7 @@ VAStatus nvGetDisplayAttributes(
         int num_attributes
         )
 {
-    LOG("In %s\n", __FUNCTION__);
+    LOG("In %s", __FUNCTION__);
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
@@ -1178,7 +1192,7 @@ VAStatus nvSetDisplayAttributes(
                 int num_attributes
         )
 {
-    LOG("In %s\n", __FUNCTION__);
+    LOG("In %s", __FUNCTION__);
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
@@ -1192,7 +1206,7 @@ VAStatus nvQuerySurfaceAttributes(
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
     NVConfig *cfg = (NVConfig*) getObject(drv, config)->obj;
 
-    LOG("with %d %p %d\n", cfg->cudaCodec, attrib_list, *num_attribs);
+    LOG("with %d %p %d", cfg->cudaCodec, attrib_list, *num_attribs);
 
     if (attrib_list == NULL) {
             *num_attribs = 5;
@@ -1225,7 +1239,7 @@ VAStatus nvQuerySurfaceAttributes(
             }
         } else {
             //TODO not sure what pixel formats are needed for 422 and 444 formats
-            LOG("Unknown chrome format: %d\n", cfg->chromaFormat);
+            LOG("Unknown chrome format: %d", cfg->chromaFormat);
             return VA_STATUS_ERROR_INVALID_CONFIG;
         }
 
@@ -1262,7 +1276,7 @@ VAStatus nvBufferInfo(
            unsigned int *num_elements /* out */
 )
 {
-    LOG("In %s\n", __FUNCTION__);
+    LOG("In %s", __FUNCTION__);
     *size=0;
     *num_elements=0;
 
@@ -1275,7 +1289,7 @@ VAStatus nvAcquireBufferHandle(
             VABufferInfo *      buf_info        /* in/out */
         )
 {
-    LOG("In %s\n", __FUNCTION__);
+    LOG("In %s", __FUNCTION__);
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
@@ -1284,7 +1298,7 @@ VAStatus nvReleaseBufferHandle(
             VABufferID          buf_id          /* in */
         )
 {
-    LOG("In %s\n", __FUNCTION__);
+    LOG("In %s", __FUNCTION__);
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
@@ -1307,7 +1321,7 @@ VAStatus nvLockSurface(
                        */
 )
 {
-    LOG("In %s\n", __FUNCTION__);
+    LOG("In %s", __FUNCTION__);
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
@@ -1316,7 +1330,7 @@ VAStatus nvUnlockSurface(
                 VASurfaceID surface
         )
 {
-    LOG("In %s\n", __FUNCTION__);
+    LOG("In %s", __FUNCTION__);
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
@@ -1325,7 +1339,7 @@ VAStatus nvCreateMFContext(
             VAMFContextID *mfe_context    /* out */
         )
 {
-    LOG("In %s\n", __FUNCTION__);
+    LOG("In %s", __FUNCTION__);
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
@@ -1335,7 +1349,7 @@ VAStatus nvMFAddContext(
             VAContextID context
         )
 {
-    LOG("In %s\n", __FUNCTION__);
+    LOG("In %s", __FUNCTION__);
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
@@ -1345,7 +1359,7 @@ VAStatus nvMFReleaseContext(
             VAContextID context
         )
 {
-    LOG("In %s\n", __FUNCTION__);
+    LOG("In %s", __FUNCTION__);
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
@@ -1356,7 +1370,7 @@ VAStatus nvMFSubmit(
             int num_contexts
         )
 {
-    LOG("In %s\n", __FUNCTION__);
+    LOG("In %s", __FUNCTION__);
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 VAStatus nvCreateBuffer2(
@@ -1370,7 +1384,7 @@ VAStatus nvCreateBuffer2(
             VABufferID *buf_id                  /* out */
     )
 {
-    LOG("In %s\n", __FUNCTION__);
+    LOG("In %s", __FUNCTION__);
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
@@ -1381,7 +1395,7 @@ VAStatus nvQueryProcessingRate(
             unsigned int *processing_rate	/* out */
         )
 {
-    LOG("In %s\n", __FUNCTION__);
+    LOG("In %s", __FUNCTION__);
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
@@ -1397,7 +1411,7 @@ VAStatus nvExportSurfaceHandle(
     //TODO deal with flags
 
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
-    LOG("got %p\n", drv);
+    LOG("got %p", drv);
 
     cuCtxPushCurrent(drv->g_oContext);
 
@@ -1419,7 +1433,7 @@ VAStatus nvExportSurfaceHandle(
         procParams.second_field = surfaceObj->second_field;
 
         checkCudaErrors(cuvidMapVideoFrame(context->decoder, surfaceObj->pictureIdx, &deviceMemory, &pitch, &procParams));
-        LOG("got address %llX (%d) for surface %d (picIdx: %d)\n", deviceMemory, pitch, surface_id, surfaceObj->pictureIdx);
+        LOG("got address %llX (%d) for surface %d (picIdx: %d)", deviceMemory, pitch, surface_id, surfaceObj->pictureIdx);
     } else {
         pitch = surfaceObj->width;
     }
@@ -1470,7 +1484,7 @@ VAStatus nvExportSurfaceHandle(
 VAStatus nvTerminate( VADriverContextP ctx )
 {
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
-    LOG("In %s\n", __FUNCTION__);
+    LOG("In %s", __FUNCTION__);
 
     releaseExporter(drv);
 
@@ -1481,7 +1495,7 @@ VAStatus nvTerminate( VADriverContextP ctx )
 
 VAStatus __vaDriverInit_1_0(VADriverContextP ctx)
 {
-    LOG("Initing NVIDIA VA-API Driver\n");
+    LOG("Initing NVIDIA VA-API Driver");
     NVDriver *drv = (NVDriver*) calloc(1, sizeof(NVDriver));
     ctx->pDriverData = drv;
 

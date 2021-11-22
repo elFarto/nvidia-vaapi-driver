@@ -47,9 +47,8 @@ void copyVP8SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
 }
 
 cudaVideoCodec computeVP8CudaCodec(VAProfile profile) {
-    switch (profile) {
-        case VAProfileVP8Version0_3:
-            return cudaVideoCodec_VP8;
+    if (profile == VAProfileVP8Version0_3) {
+        return cudaVideoCodec_VP8;
     }
 
     return cudaVideoCodec_NONE;

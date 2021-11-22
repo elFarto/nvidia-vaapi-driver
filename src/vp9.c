@@ -117,8 +117,6 @@ void copyVP9SliceParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picPara
     VASliceParameterBufferVP9* buf = (VASliceParameterBufferVP9*) buffer->ptr;
     //don't bother doing anything here, we can just read it from the reparsed header
 
-    LOG("got buf: %p\n", buf);
-
     ctx->last_slice_params = buffer->ptr;
     ctx->last_slice_params_count = buffer->elements;
 

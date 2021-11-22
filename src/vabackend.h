@@ -128,10 +128,10 @@ void appendBuffer(AppendableBuffer *ab, void *buf, uint64_t size);
 int pictureIdxFromSurfaceId(NVDriver *ctx, VASurfaceID surf);
 void registerCodec(NVCodec *codec);
 void __checkCudaErrors(CUresult err, const char *file, const int line);
-void logger(const char *msg, ...);
+void logger(const char *msg, const char *filename, const char *function, int line, ...);
 #define checkCudaErrors(err)  __checkCudaErrors(err, __FILE__, __LINE__)
 #define cudaVideoCodec_NONE ((cudaVideoCodec) -1)
-#define LOG(msg, ...) logger(__FILE__ ":%4d %24s " msg, __LINE__, __FUNCTION__ __VA_OPT__(,) __VA_ARGS__);
+#define LOG(msg, ...) logger(msg, __FILE__, __FUNCTION__, __LINE__  __VA_OPT__(,) __VA_ARGS__);
 #define DEFINE_CODEC(c) __attribute__((constructor)) void reg_ ## c() { registerCodec(&c); }
 
 

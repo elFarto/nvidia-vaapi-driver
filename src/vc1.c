@@ -89,11 +89,8 @@ void copyVC1BitPlane(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
 
 }
 cudaVideoCodec computeVC1CudaCodec(VAProfile profile) {
-    switch (profile) {
-        case VAProfileVC1Advanced:
-        case VAProfileVC1Main:
-        case VAProfileVC1Simple:
-            return cudaVideoCodec_VC1;
+    if (profile == VAProfileVC1Advanced || profile == VAProfileVC1Main || profile == VAProfileVC1Simple) {
+        return cudaVideoCodec_VC1;
     }
 
     return cudaVideoCodec_NONE;
