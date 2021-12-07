@@ -20,13 +20,13 @@ void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams
     picParams->intra_pic_flag    = buf->pic_info_fields.bits.frame_type == 0 || //Key
                                    buf->pic_info_fields.bits.frame_type == 2; //Intra-Only
 //    picParams->ref_pic_flag      = buf->picture_fields.bits.picture_type == 0 || //Intra
-//                                   buf->picture_fields.bits.picture_type == 3; //Predicted
+//                                   buf->picture_fields.bits.picture_type == 2; //Predicted
 
     pps->width = ctx->width;
     pps->height = ctx->height;
 
     pps->frame_offset = buf->order_hint;
-    pps->decodePicIdx = ctx->render_target->pictureIdx; //not sure about this
+    pps->decodePicIdx = ctx->render_target->pictureIdx; //TODO not sure about this
 
     pps->profile = buf->profile;
     pps->use_128x128_superblock = buf->seq_info_fields.fields.use_128x128_superblock;
@@ -44,7 +44,7 @@ void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams
     pps->enable_jnt_comp = buf->seq_info_fields.fields.enable_jnt_comp;
     pps->enable_superres = buf->pic_info_fields.bits.use_superres; //TODO not quite correct, this can be 0, and enable can be 1
     pps->enable_cdef = buf->seq_info_fields.fields.enable_cdef;
-//    pps->enable_restoration = buf->seq_info_fields.fields.;
+//    pps->enable_restoration = buf->seq_info_fields.fields.; //TODO this flag just seems to be missing from libva
     pps->enable_fgs = buf->seq_info_fields.fields.film_grain_params_present;
 
     pps->frame_type = buf->pic_info_fields.bits.frame_type;
@@ -63,7 +63,6 @@ void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams
     pps->delta_q_present = buf->mode_control_fields.bits.delta_q_present_flag;
     pps->delta_q_res = buf->mode_control_fields.bits.log2_delta_q_res;
     pps->using_qmatrix = buf->qmatrix_fields.bits.using_qmatrix;
-//    pps->coded_lossless = buf->pic_info_fields.bits.allow_high_precision_mv; //TODO might be able to infer this one
     pps->use_superres = buf->pic_info_fields.bits.use_superres;
     pps->tx_mode = buf->mode_control_fields.bits.tx_mode;
     pps->reference_mode = buf->mode_control_fields.bits.reference_select;
@@ -77,11 +76,15 @@ void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams
 
     pps->cdef_damping_minus_3 = buf->cdef_damping_minus_3;
     pps->cdef_bits = buf->cdef_bits;
-//    pps->SkipModeFrame0 = buf->tile_rows;
-//    pps->SkipModeFrame1 = buf->tile_rows;
+    pps->SkipModeFrame0 = 0;
+    pps->SkipModeFrame1 = 0;
+
+    if (pps->skip_mode) {
+        //TODO compute SkipModeFrame0 and SkipModeFrame1
+    }
 
     pps->base_qindex = buf->base_qindex;
-    pps->qp_y_dc_delta_q = buf->y_dc_delta_q; //TODO not too sure about these
+    pps->qp_y_dc_delta_q = buf->y_dc_delta_q;
     pps->qp_u_dc_delta_q = buf->u_dc_delta_q;
     pps->qp_v_dc_delta_q = buf->v_dc_delta_q;
     pps->qp_u_ac_delta_q = buf->u_ac_delta_q;
@@ -113,10 +116,10 @@ void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams
     pps->lr_type[2] = buf->loop_restoration_fields.bits.crframe_restoration_type;
     pps->lr_unit_size[0] = 1 + buf->loop_restoration_fields.bits.lr_unit_shift;
     pps->lr_unit_size[1] = 1 + buf->loop_restoration_fields.bits.lr_unit_shift - buf->loop_restoration_fields.bits.lr_uv_shift;
-    pps->lr_unit_size[2] = pps->lr_unit_size[1]; //just copy the already computed value
+    pps->lr_unit_size[2] = pps->lr_unit_size[1];
 
-//    pps->temporal_layer_id = buf->;//TODO looks like these need to be derived from the frame itself? They're part of an extension, might just be able to set them to 0
-//    pps->spatial_layer_id = buf->;
+    //pps->temporal_layer_id = buf->;//TODO looks like these need to be derived from the frame itself? They're part of an extension, might just be able to set them to 0
+    //pps->spatial_layer_id = buf->;
 
     pps->apply_grain = buf->film_grain_info.film_grain_info_fields.bits.apply_grain;
     pps->overlap_flag = buf->film_grain_info.film_grain_info_fields.bits.overlap_flag;
@@ -137,10 +140,10 @@ void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams
     pps->cr_luma_mult = buf->film_grain_info.cr_luma_mult;
     pps->cr_offset = buf->film_grain_info.cr_offset;
 
-    for (int i = 0; i , pps->num_tile_cols; i++) {
+    for (int i = 0; i < pps->num_tile_cols; i++) {
         pps->tile_widths[i] = 1 + buf->width_in_sbs_minus_1[i];
     }
-    for (int i = 0; i , pps->num_tile_rows; i++) {
+    for (int i = 0; i < pps->num_tile_rows; i++) {
         pps->tile_heights[i] = 1 + buf->height_in_sbs_minus_1[i];
     }
 
@@ -150,11 +153,26 @@ void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams
         pps->cdef_uv_strength[i] = ((buf->cdef_uv_strengths[i] >> 2) & 0x0f) | ((buf->cdef_uv_strengths[i] & 0x03) << 4);
     }
 
-    //TODO replace with memcpy
+    //TODO replace with memcpy?
     for (int i = 0; i < 8; i++) { //MAX_SEGMENTS
         for (int j = 0; j < 8; j++) { //MAX_SEGMENT_LEVEL
             pps->segmentation_feature_mask[i] = buf->seg_info.feature_mask[i];
             pps->segmentation_feature_data[i][j] = buf->seg_info.feature_data[i][j];
+        }
+    }
+
+    //TODO i think it is correct
+    pps->coded_lossless = 1;
+    if (buf->y_dc_delta_q != 0 || buf->u_dc_delta_q != 0 || buf->v_dc_delta_q != 0 || buf->u_ac_delta_q != 0 || buf->v_ac_delta_q != 0) {
+        pps->coded_lossless = 0;
+    } else {
+        for (int i = 0; i < 8; i++) {
+            if (((pps->segmentation_feature_mask[i] & 1) != 0
+                 && (pps->base_qindex + pps->segmentation_feature_data[i][0] != 0))
+                || pps->base_qindex != 0) {
+                pps->coded_lossless = 0;
+                break;
+            }
         }
     }
 

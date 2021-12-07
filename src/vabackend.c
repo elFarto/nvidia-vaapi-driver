@@ -1469,7 +1469,7 @@ VAStatus nvExportSurfaceHandle(
     ptr->layers[0].offset[0] = offsets[0];
     ptr->layers[0].pitch[0] = strides[0];
 
-    ptr->layers[1].drm_format = fourcc == DRM_FORMAT_NV12 ? DRM_FORMAT_RG88 : DRM_FORMAT_RG1616;
+    ptr->layers[1].drm_format = fourcc == DRM_FORMAT_NV12 ? DRM_FORMAT_RG88 : DRM_FORMAT_RGB565;//DRM_FORMAT_RG1616;
     ptr->layers[1].num_planes = 1;
     ptr->layers[1].object_index[0] = 1;
     ptr->layers[1].offset[0] = offsets[1];

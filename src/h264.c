@@ -115,9 +115,9 @@ cudaVideoCodec computeH264CudaCodec(VAProfile profile) {
         return cudaVideoCodec_H264;
     }
 
-    if (profile == VAProfileH264StereoHigh || profile == VAProfileH264MultiviewHigh) {
-        return cudaVideoCodec_H264_MVC;
-    }
+    //if (profile == VAProfileH264StereoHigh || profile == VAProfileH264MultiviewHigh) {
+    //    return cudaVideoCodec_H264_MVC;
+    //}
 
     return cudaVideoCodec_NONE;
 }

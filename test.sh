@@ -17,4 +17,4 @@ export LIBVA_DRIVERS_PATH=$(dirname $(realpath $0))/build
 #mpv -v --hwdec=vaapi-copy --hwdec-codecs=all --vd-lavc-check-hw-profile=no $@
 #mpv -v -v --msg-level=all=debug --hwdec=vaapi --hwdec-codecs=all --vd-lavc-check-hw-profile=no $@
 #apitrace trace -v -a egl 
-$MPV -v --hwdec=vaapi --opengl-debug --hwdec-codecs=all --vd-lavc-check-hw-profile=no "$@"
+$MPV -v --msg-level=all=debug --hwdec=vaapi --opengl-debug --hwdec-codecs=all --vd-lavc-check-hw-profile=no "$@"

@@ -289,7 +289,7 @@ int exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t p
                 return 0;
             }
 
-//            LOG("eglExportDMABUFImageQueryMESA: %p %.4s (%x) planes:%d mods:%lx %lx", img, (char*)fourcc, *fourcc, planes, mods[0], mods[1]);
+            LOG("eglExportDMABUFImageQueryMESA: %p %.4s (%x) planes:%d mods:%lx %lx", img, (char*)fourcc, *fourcc, planes, mods[0], mods[1]);
 
             EGLBoolean r = eglExportDMABUFImageMESA(drv->eglDisplay, img, fds, strides, offsets);
 
@@ -297,9 +297,9 @@ int exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t p
                 LOG("Unable to export image");
                 return 0;
             }
-//            LOG("eglExportDMABUFImageMESA: %d %d %d %d %d", r, fds[0], fds[1], fds[2], fds[3]);
-//            LOG("strides: %d %d %d %d", strides[0], strides[1], strides[2], strides[3]);
-//            LOG("offsets: %d %d %d %d", offsets[0], offsets[1], offsets[2], offsets[3]);
+            LOG("eglExportDMABUFImageMESA: %d %d %d %d %d", r, fds[0], fds[1], fds[2], fds[3]);
+            LOG("strides: %d %d %d %d", strides[0], strides[1], strides[2], strides[3]);
+            LOG("offsets: %d %d %d %d", offsets[0], offsets[1], offsets[2], offsets[3]);
 
             r = eglStreamReleaseImageNV(drv->eglDisplay, drv->eglStream, img, EGL_NO_SYNC_NV);
             if (!r) {

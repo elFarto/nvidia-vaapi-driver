@@ -118,6 +118,8 @@ void copyHEVCPicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParam
 
     ppc->pps_beta_offset_div2 = buf->pps_beta_offset_div2;
     ppc->pps_tc_offset_div2 = buf->pps_tc_offset_div2;
+
+    //This is all Range Extension/Rext stuff
 //    ppc->sps_range_extension_flag = buf->;
 //    ppc->transform_skip_rotation_enabled_flag = buf->; in VAPictureParameterBufferHEVCRext
 //    ppc->transform_skip_context_enabled_flag = buf->slice_parsing_fields.bits.IdrPicFlag;
@@ -181,6 +183,7 @@ void copyHEVCPicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParam
         }
     }
 
+    //More Range Extension/Rext stuff
 //    ppc->pps_range_extension_flag = buf->pic_fields.bits.tiles_enabled_flag; //in VAPictureParameterBufferHEVCRext
 //    ppc->cross_component_prediction_enabled_flag = buf->pic_fields.bits.tiles_enabled_flag;
 //    ppc->chroma_qp_offset_list_enabled_flag = buf->pic_fields.bits.tiles_enabled_flag;
@@ -201,12 +204,6 @@ void copyHEVCPicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParam
     for (int i = 0; i <= ppc->num_tile_rows_minus1; i++)
         ppc->row_height_minus1[i] = buf->row_height_minus1[i];
 
-
-//    printf("NumDeltaPocsOfRefRpsIdx: %d\n", ppc->NumDeltaPocsOfRefRpsIdx);
-//    printf("NumPocTotalCurr: %d\n", ppc->NumPocTotalCurr);
-//    printf("CurrPicOrderCntVal: %d\n", ppc->CurrPicOrderCntVal);
-//    printf("uniform_spacing_flag: %d\n", ppc->uniform_spacing_flag);
-
     //in VAPictureParameterBufferHEVCRext
 //    for (int i = 0; i <= ppc->chroma_qp_offset_list_len_minus1; i++) {
 //        ppc->cb_qp_offset_list[i] = buf->cb_qp_offset_list[i];
@@ -219,7 +216,6 @@ void copyHEVCPicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParam
         ppc->RefPicIdx[i]      = pictureIdxFromSurfaceId(ctx->drv, pic[i].picture_id);
         ppc->PicOrderCntVal[i] = pic[i].pic_order_cnt;
         ppc->IsLongTerm[i]     = i != 0 && (pic[i].flags & VA_PICTURE_HEVC_LONG_TERM_REFERENCE) != 0;
-        //printf("DPB %d = %d - %d\n", i, ppc->RefPicIdx[i], ppc->PicOrderCntVal[i]);
 
         if (i != 0 && ppc->RefPicIdx[i] != -1) {
             ppc->NumPocTotalCurr++;
@@ -239,15 +235,6 @@ void copyHEVCPicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParam
     //I'm not sure this is correct
     qsort_r(ppc->RefPicSetStCurrBefore, ppc->NumPocStCurrBefore, sizeof(unsigned char), (__compar_d_fn_t) sortFuncRev, ppc->PicOrderCntVal);
     qsort_r(ppc->RefPicSetStCurrAfter, ppc->NumPocStCurrAfter, sizeof(unsigned char), (__compar_d_fn_t) sortFunc, ppc->PicOrderCntVal);
-//    for (int i = 0; i < ppc->NumPocStCurrBefore; i++) {
-//        printf("RefPicSetStCurrBefore[%d] = %d (%d)\n", i, ppc->RefPicSetStCurrBefore[i], ppc->PicOrderCntVal[ppc->RefPicSetStCurrBefore[i]]);
-//    }
-//    for (int i = 0; i < ppc->NumPocStCurrAfter; i++) {
-//        printf("RefPicSetStCurrAfter[%d] = %d (%d)\n", i, ppc->RefPicSetStCurrAfter[i], ppc->PicOrderCntVal[ppc->RefPicSetStCurrAfter[i]]);
-//    }
-//    for (int i = 0; i < ppc->NumPocLtCurr; i++) {
-//        printf("RefPicSetLtCurr[%d] = %d (%d)n", i, ppc->RefPicSetLtCurr[i], ppc->PicOrderCntVal[ppc->RefPicSetLtCurr[i]]);
-//    }
 }
 
 void copyHEVCSliceParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams)
