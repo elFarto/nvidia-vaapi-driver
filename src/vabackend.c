@@ -20,24 +20,22 @@
 #include <sys/types.h>
 #include <stdarg.h>
 
-NVCodecHolder *codecs = NULL;
-
-FILE *LOG_OUTPUT;
+NVCodecHolder   *CODECS = NULL;
+FILE            *LOG_OUTPUT;
 
 __attribute__ ((constructor))
-void initLogging() {
+void init() {
     LOG_OUTPUT = 0;
 
     char *nvdLog = getenv("NVD_LOG");
-    if (nvdLog == NULL) {
-        return;
-    }
-    if (strcmp(nvdLog, "1") == 0) {
-        LOG_OUTPUT = stdout;
-    } else {
-        LOG_OUTPUT = fopen(nvdLog, "a");
-        if (LOG_OUTPUT == NULL) {
+    if (nvdLog != NULL) {
+        if (strcmp(nvdLog, "1") == 0) {
             LOG_OUTPUT = stdout;
+        } else {
+            LOG_OUTPUT = fopen(nvdLog, "a");
+            if (LOG_OUTPUT == NULL) {
+                LOG_OUTPUT = stdout;
+            }
         }
     }
 }
@@ -71,8 +69,8 @@ void checkCudaErrors(CUresult err, const char *file, const char *function, const
 void registerCodec(NVCodec *codec) {
     NVCodecHolder *newCodecHolder = (NVCodecHolder*) calloc(1, sizeof(NVCodecHolder));
     newCodecHolder->codec = codec;
-    newCodecHolder->next = codecs;
-    codecs = newCodecHolder;
+    newCodecHolder->next = CODECS;
+    CODECS = newCodecHolder;
 }
 
 void appendBuffer(AppendableBuffer *ab, void *buf, uint64_t size)
@@ -194,7 +192,7 @@ int pictureIdxFromSurfaceId(NVDriver *drv, VASurfaceID surf) {
 
 cudaVideoCodec vaToCuCodec(VAProfile profile)
 {
-    for (NVCodecHolder *c = codecs; c != NULL; c = c->next) {
+    for (NVCodecHolder *c = CODECS; c != NULL; c = c->next) {
         cudaVideoCodec cvc = c->codec->computeCudaCodec(profile);
         if (cvc != cudaVideoCodec_NONE) {
             return cvc;
@@ -266,27 +264,27 @@ VAStatus nvQueryConfigProfiles(
     if (doesGPUSupportCodec(cudaVideoCodec_HEVC, 8, cudaVideoChromaFormat_420, NULL, NULL)) {
         profile_list[profiles++] = VAProfileHEVCMain;
     }
-    if (doesGPUSupportCodec(cudaVideoCodec_HEVC, 10, cudaVideoChromaFormat_420, NULL, NULL)) {
-        profile_list[profiles++] = VAProfileHEVCMain10;
-    }
-    if (doesGPUSupportCodec(cudaVideoCodec_HEVC, 10, cudaVideoChromaFormat_420, NULL, NULL)) {
-        profile_list[profiles++] = VAProfileHEVCMain422_10;
-    }
-    if (doesGPUSupportCodec(cudaVideoCodec_HEVC, 12, cudaVideoChromaFormat_420, NULL, NULL)) {
-        profile_list[profiles++] = VAProfileHEVCMain422_12;
-    }
-    if (doesGPUSupportCodec(cudaVideoCodec_HEVC, 8, cudaVideoChromaFormat_420, NULL, NULL)) {
-        profile_list[profiles++] = VAProfileHEVCMain444;
-    }
-    if (doesGPUSupportCodec(cudaVideoCodec_HEVC, 10, cudaVideoChromaFormat_420, NULL, NULL)) {
-        profile_list[profiles++] = VAProfileHEVCMain444_10;
-    }
-    if (doesGPUSupportCodec(cudaVideoCodec_HEVC, 12, cudaVideoChromaFormat_420, NULL, NULL)) {
-        profile_list[profiles++] = VAProfileHEVCMain444_12;
-    }
-    if (doesGPUSupportCodec(cudaVideoCodec_HEVC, 12, cudaVideoChromaFormat_420, NULL, NULL)) {
-        profile_list[profiles++] = VAProfileHEVCMain12;
-    }
+//    if (doesGPUSupportCodec(cudaVideoCodec_HEVC, 10, cudaVideoChromaFormat_420, NULL, NULL)) {
+//        profile_list[profiles++] = VAProfileHEVCMain10;
+//    }
+//    if (doesGPUSupportCodec(cudaVideoCodec_HEVC, 10, cudaVideoChromaFormat_420, NULL, NULL)) {
+//        profile_list[profiles++] = VAProfileHEVCMain422_10;
+//    }
+//    if (doesGPUSupportCodec(cudaVideoCodec_HEVC, 12, cudaVideoChromaFormat_420, NULL, NULL)) {
+//        profile_list[profiles++] = VAProfileHEVCMain422_12;
+//    }
+//    if (doesGPUSupportCodec(cudaVideoCodec_HEVC, 8, cudaVideoChromaFormat_420, NULL, NULL)) {
+//        profile_list[profiles++] = VAProfileHEVCMain444;
+//    }
+//    if (doesGPUSupportCodec(cudaVideoCodec_HEVC, 10, cudaVideoChromaFormat_420, NULL, NULL)) {
+//        profile_list[profiles++] = VAProfileHEVCMain444_10;
+//    }
+//    if (doesGPUSupportCodec(cudaVideoCodec_HEVC, 12, cudaVideoChromaFormat_420, NULL, NULL)) {
+//        profile_list[profiles++] = VAProfileHEVCMain444_12;
+//    }
+//    if (doesGPUSupportCodec(cudaVideoCodec_HEVC, 12, cudaVideoChromaFormat_420, NULL, NULL)) {
+//        profile_list[profiles++] = VAProfileHEVCMain12;
+//    }
     if (doesGPUSupportCodec(cudaVideoCodec_VP8, 8, cudaVideoChromaFormat_420, NULL, NULL)) {
         profile_list[profiles++] = VAProfileVP8Version0_3;
     }
@@ -296,12 +294,12 @@ VAStatus nvQueryConfigProfiles(
     if (doesGPUSupportCodec(cudaVideoCodec_VP9, 8, cudaVideoChromaFormat_444, NULL, NULL)) {
         profile_list[profiles++] = VAProfileVP9Profile1; //color depth: 8 bit, 4:2:2, 4:4:0, 4:4:4
     }
-    if (doesGPUSupportCodec(cudaVideoCodec_VP9, 10, cudaVideoChromaFormat_420, NULL, NULL)) {
-        profile_list[profiles++] = VAProfileVP9Profile2; //color depth: 10–12 bit, 4:2:0
-    }
-    if (doesGPUSupportCodec(cudaVideoCodec_VP9, 10, cudaVideoChromaFormat_444, NULL, NULL)) {
-        profile_list[profiles++] = VAProfileVP9Profile3; //color depth: 10–12 bit, 4:2:2, 4:4:0, 4:4:4
-    }
+//    if (doesGPUSupportCodec(cudaVideoCodec_VP9, 10, cudaVideoChromaFormat_420, NULL, NULL)) {
+//        profile_list[profiles++] = VAProfileVP9Profile2; //color depth: 10–12 bit, 4:2:0
+//    }
+//    if (doesGPUSupportCodec(cudaVideoCodec_VP9, 10, cudaVideoChromaFormat_444, NULL, NULL)) {
+//        profile_list[profiles++] = VAProfileVP9Profile3; //color depth: 10–12 bit, 4:2:2, 4:4:0, 4:4:4
+//    }
     if (doesGPUSupportCodec(cudaVideoCodec_AV1, 8, cudaVideoChromaFormat_420, NULL, NULL)) {
         profile_list[profiles++] = VAProfileAV1Profile0;
     }
@@ -592,7 +590,7 @@ VAStatus nvCreateContext(
     nvCtx->width = picture_width;
     nvCtx->height = picture_height;
 
-    for (NVCodecHolder *c = codecs; c != NULL; c = c->next) {
+    for (NVCodecHolder *c = CODECS; c != NULL; c = c->next) {
         for (int i = 0; i < c->codec->supportedProfileCount; i++) {
             if (c->codec->supportedProfiles[i] == cfg->profile) {
                 nvCtx->codec = c->codec;
@@ -866,19 +864,21 @@ VAStatus nvQueryImageFormats(
 {
     LOG("In %s", __FUNCTION__);
 
-    format_list[0].fourcc = VA_FOURCC_NV12;
-    format_list[0].byte_order = VA_LSB_FIRST;
-    format_list[0].bits_per_pixel = 12;
+    int i = 0;
 
-    format_list[1].fourcc = VA_FOURCC_P010;
-    format_list[1].byte_order = VA_LSB_FIRST;
-    format_list[1].bits_per_pixel = 24;
+    format_list[i].fourcc = VA_FOURCC_NV12;
+    format_list[i].byte_order = VA_LSB_FIRST;
+    format_list[i++].bits_per_pixel = 12;
 
-    format_list[2].fourcc = VA_FOURCC_P012;
-    format_list[2].byte_order = VA_LSB_FIRST;
-    format_list[2].bits_per_pixel = 24;
+//    format_list[i].fourcc = VA_FOURCC_P010;
+//    format_list[i].byte_order = VA_LSB_FIRST;
+//    format_list[i++].bits_per_pixel = 24;
 
-    *num_formats = 3;
+//    format_list[i].fourcc = VA_FOURCC_P012;
+//    format_list[i].byte_order = VA_LSB_FIRST;
+//    format_list[i++].bits_per_pixel = 24;
+
+    *num_formats = i;
 
     return VA_STATUS_SUCCESS;
 }
@@ -1493,7 +1493,7 @@ VAStatus nvExportSurfaceHandle(
     ptr->layers[0].offset[0] = offsets[0];
     ptr->layers[0].pitch[0] = strides[0];
 
-    ptr->layers[1].drm_format = fourcc == DRM_FORMAT_NV12 ? DRM_FORMAT_RG88 : DRM_FORMAT_RGB565;//DRM_FORMAT_RG1616;
+    ptr->layers[1].drm_format = fourcc == DRM_FORMAT_NV12 ? DRM_FORMAT_RG88 : DRM_FORMAT_RG1616;
     ptr->layers[1].num_planes = 1;
     ptr->layers[1].object_index[0] = 1;
     ptr->layers[1].offset[0] = offsets[1];
