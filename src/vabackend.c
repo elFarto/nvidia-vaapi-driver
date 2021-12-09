@@ -213,7 +213,7 @@ int doesGPUSupportCodec(cudaVideoCodec codec, int bitDepth, cudaVideoChromaForma
     videoDecodeCaps.eChromaFormat   = chromaFormat;
     videoDecodeCaps.nBitDepthMinus8 = bitDepth - 8;
 
-    checkCudaErrors(cuvidGetDecoderCaps(&videoDecodeCaps));
+    CHECK_CUDA_RESULT(cuvidGetDecoderCaps(&videoDecodeCaps));
     if (width != NULL) {
         *width = videoDecodeCaps.nMaxWidth;
     }
@@ -1241,11 +1241,11 @@ VAStatus nvQuerySurfaceAttributes(
             .nBitDepthMinus8 = cfg->bitDepth - 8
         };
 
-        checkCudaErrors(cuCtxPushCurrent(drv->cudaContext));
+        CHECK_CUDA_RESULT(cuCtxPushCurrent(drv->cudaContext));
         CUresult result = cuvidGetDecoderCaps(&videoDecodeCaps);
         cuCtxPopCurrent(NULL);
         if (result != CUDA_SUCCESS) {
-            checkCudaErrors(result);
+            CHECK_CUDA_RESULT(result);
             return VA_STATUS_ERROR_OPERATION_FAILED;
         }
 
@@ -1456,7 +1456,7 @@ VAStatus nvExportSurfaceHandle(
         procParams.top_field_first = surfaceObj->topFieldFirst;
         procParams.second_field = surfaceObj->secondField;
 
-        checkCudaErrors(cuvidMapVideoFrame(context->decoder, surfaceObj->pictureIdx, &deviceMemory, &pitch, &procParams));
+        CHECK_CUDA_RESULT(cuvidMapVideoFrame(context->decoder, surfaceObj->pictureIdx, &deviceMemory, &pitch, &procParams));
         LOG("got address %llX (%d) for surface %d (picIdx: %d)", deviceMemory, pitch, surface_id, surfaceObj->pictureIdx);
     } else {
         pitch = surfaceObj->width;
@@ -1523,8 +1523,8 @@ VAStatus __vaDriverInit_1_0(VADriverContextP ctx)
     NVDriver *drv = (NVDriver*) calloc(1, sizeof(NVDriver));
     ctx->pDriverData = drv;
 
-    checkCudaErrors(cuInit(0));
-    checkCudaErrors(cuCtxCreate(&drv->cudaContext, CU_CTX_SCHED_BLOCKING_SYNC, 0));
+    CHECK_CUDA_RESULT(cuInit(0));
+    CHECK_CUDA_RESULT(cuCtxCreate(&drv->cudaContext, CU_CTX_SCHED_BLOCKING_SYNC, 0));
 
     ctx->max_profiles = MAX_PROFILES;
     ctx->max_entrypoints = 1;
