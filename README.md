@@ -30,6 +30,10 @@ meson setup build
 meson install -C build
 ```
 
+# Debugging
+
+The `NVD_LOG` environment variable can be used to control logging, `NVD_LOG=1` will log to stdout, and `NVD_LOG=<filename>` will append to the specified file (or stdout if the file can't be opened).
+
 # Firefox
 
 To use the driver with firefox, the following config options need to be set:

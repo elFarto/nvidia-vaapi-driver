@@ -22,7 +22,31 @@
 
 NVCodecHolder *codecs = NULL;
 
+FILE *LOG_OUTPUT;
+
+__attribute__ ((constructor))
+void init_logging() {
+    LOG_OUTPUT = 0;
+
+    char *nvdLog = getenv("NVD_LOG");
+    if (nvdLog == NULL) {
+        return;
+    }
+    if (strcmp(nvdLog, "1") == 0) {
+        LOG_OUTPUT = stdout;
+    } else {
+        LOG_OUTPUT = fopen(nvdLog, "a");
+        if (LOG_OUTPUT == NULL) {
+            LOG_OUTPUT = stdout;
+        }
+    }
+}
+
 void logger(const char *msg, const char *filename, const char *function, int line, ...) {
+    if (LOG_OUTPUT == 0) {
+        return;
+    }
+
     va_list argList;
     char formattedMessage[1024];
 
@@ -30,16 +54,16 @@ void logger(const char *msg, const char *filename, const char *function, int lin
     vsnprintf(formattedMessage, 1024, msg, argList);
     va_end(argList);
 
-    printf("[%d-%d] %s :%4d %24s %s\n", getpid(), gettid(), filename, line, function, formattedMessage);
+    fprintf(LOG_OUTPUT, "[%d-%d] %s :%4d %24s %s\n", getpid(), gettid(), filename, line, function, formattedMessage);
 }
 
-void __checkCudaErrors(CUresult err, const char *file, const int line)
+void __checkCudaErrors(CUresult err, const char *file, const char *function, const int line)
 {
     if (CUDA_SUCCESS != err)
     {
         const char *errStr = NULL;
         cuGetErrorString(err, &errStr);
-        LOG("cuda error '%s' (%d) at file <%s>, line %i.\n", errStr, err, file, line);
+        logger("cuda error '%s' (%d)\n", file, function, line, errStr, err);
         exit(EXIT_FAILURE);
     }
 }
@@ -177,7 +201,7 @@ cudaVideoCodec vaToCuCodec(VAProfile profile)
         }
     }
 
-    //LOG("vaToCuCodec: Unknown codec: %d", profile);
+    LOG("vaToCuCodec: Unknown codec: %d", profile);
     return cudaVideoCodec_NONE;
 }
 
@@ -276,7 +300,7 @@ VAStatus nvQueryConfigProfiles(
         profile_list[profiles++] = VAProfileVP9Profile2; //color depth: 10–12 bit, 4:2:0
     }
     if (doesGPUSupportCodec(cudaVideoCodec_VP9, 10, cudaVideoChromaFormat_444, NULL, NULL)) {
-        profile_list[profiles++] = VAProfileVP9Profile3; //color depth: 10–12 bit, :2:2, 4:4:0, 4:4:4
+        profile_list[profiles++] = VAProfileVP9Profile3; //color depth: 10–12 bit, 4:2:2, 4:4:0, 4:4:4
     }
     if (doesGPUSupportCodec(cudaVideoCodec_AV1, 8, cudaVideoChromaFormat_420, NULL, NULL)) {
         profile_list[profiles++] = VAProfileAV1Profile0;
