@@ -20,6 +20,8 @@ Only decoding video is currently supported.
 |VC-1|:heavy_check_mark:||
 |JPEG|:x:|This is unlikely to ever work, the two APIs are too different|
 
+Currently, 10-bit videos are not supported due to the NVIDIA driver not allowing R16 and RG1616 surfaces to be imported.
+
 # Building
 
 You'll need the gstreamer-plugins-bad library installed.
