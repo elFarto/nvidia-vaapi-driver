@@ -5,8 +5,6 @@
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 
-#include <fcntl.h>
-
 #ifndef EGL_NV_stream_consumer_eglimage
 #define EGL_NV_stream_consumer_eglimage 1
 #define EGL_STREAM_CONSUMER_IMAGE_NV      0x3373
@@ -25,9 +23,6 @@ EGLAPI EGLBoolean EGLAPIENTRY eglStreamReleaseImageNV (EGLDisplay dpy, EGLStream
 #endif
 #endif /* EGL_NV_stream_consumer_eglimage */
 
-#include <execinfo.h>
-#include <unistd.h>
-
 PFNEGLQUERYSTREAMCONSUMEREVENTNVPROC eglQueryStreamConsumerEventNV;
 PFNEGLSTREAMRELEASEIMAGENVPROC eglStreamReleaseImageNV;
 PFNEGLSTREAMACQUIREIMAGENVPROC eglStreamAcquireImageNV;
@@ -39,14 +34,6 @@ PFNEGLSTREAMIMAGECONSUMERCONNECTNVPROC eglStreamImageConsumerConnectNV;
 
 void debug(EGLenum error,const char *command,EGLint messageType,EGLLabelKHR threadLabel,EGLLabelKHR objectLabel,const char* message) {
     LOG("[EGL] %s: %s", command, message);
-
-//    void* ptrs[50];
-//    int x = backtrace(&ptrs, 50);
-//    char **names = backtrace_symbols(ptrs, 50);
-//    for (int i = 0; i < x; i++) {
-//        LOG("ptr %d: %p %s", i, ptrs[i], names[i]);
-//    }
-
 }
 
 void releaseExporter(NVDriver *drv) {
@@ -76,7 +63,7 @@ void reconnect(NVDriver *drv) {
     }
     drv->eglStream = eglCreateStreamKHR(drv->eglDisplay, NULL);
     eglStreamImageConsumerConnectNV(drv->eglDisplay, drv->eglStream, 0, 0, NULL);
-    checkCudaErrors(cuEGLStreamProducerConnect(&drv->cuStreamConnection, drv->eglStream, 1024, 1024));
+    CHECK_CUDA_RESULT(cuEGLStreamProducerConnect(&drv->cuStreamConnection, drv->eglStream, 1024, 1024));
     drv->numFramesPresented = 0;
 }
 
@@ -125,7 +112,7 @@ int exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t p
         //LOG("timeout with %d outstanding", numFramesPresented);
         break;
       } else if (cuStatus != CUDA_SUCCESS) {
-        checkCudaErrors(cuStatus);
+        CHECK_CUDA_RESULT(cuStatus);
       } else {
         //LOG("returned frame %dx%d %p %p", eglframe.width, eglframe.height, eglframe.frame.pArray[0], eglframe.frame.pArray[1]);
         drv->numFramesPresented--;
@@ -164,9 +151,9 @@ int exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t p
         //EGL_BAD_MATCH error: In eglCreateImageKHR: requested LINUX_DRM_FORMAT is not supported
         //this error seems to be coming from the NVIDIA EGL driver
         //this might be caused by the DRM_FORMAT_*'s in nvExportSurfaceHandle
-        if (surface->bitdepth == 10) {
+        if (surface->bitDepth == 10) {
             eglframe.eglColorFormat = CU_EGL_COLOR_FORMAT_Y10V10U10_420_SEMIPLANAR;
-        } else if (surface->bitdepth == 12) {
+        } else if (surface->bitDepth == 12) {
             eglframe.eglColorFormat = CU_EGL_COLOR_FORMAT_Y12V12U12_420_SEMIPLANAR;
         } else {
             LOG("Unknown bitdepth");
@@ -194,7 +181,7 @@ int exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t p
             .Flags = 0,
             .Format = eglframe.cuFormat
         };
-        checkCudaErrors(cuArray3DCreate(&eglframe.frame.pArray[0], &arrDesc));
+        CHECK_CUDA_RESULT(cuArray3DCreate(&eglframe.frame.pArray[0], &arrDesc));
     }
     if (eglframe.frame.pArray[1] == NULL) {
         CUDA_ARRAY3D_DESCRIPTOR arr2Desc = {
@@ -205,7 +192,7 @@ int exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t p
             .Flags = 0,
             .Format = eglframe.cuFormat
         };
-        checkCudaErrors(cuArray3DCreate(&eglframe.frame.pArray[1], &arr2Desc));
+        CHECK_CUDA_RESULT(cuArray3DCreate(&eglframe.frame.pArray[1], &arr2Desc));
     }
     if (ptr != 0) {
         CUDA_MEMCPY2D cpy = {
@@ -217,7 +204,7 @@ int exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t p
             .Height = height,
             .WidthInBytes = width * bpp
         };
-        checkCudaErrors(cuMemcpy2D(&cpy));
+        CHECK_CUDA_RESULT(cuMemcpy2D(&cpy));
         CUDA_MEMCPY2D cpy2 = {
             .srcMemoryType = CU_MEMORYTYPE_DEVICE,
             .srcDevice = ptr,
@@ -228,7 +215,7 @@ int exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t p
             .Height = height >> 1,
             .WidthInBytes = width * bpp
         };
-        checkCudaErrors(cuMemcpy2D(&cpy2));
+        CHECK_CUDA_RESULT(cuMemcpy2D(&cpy2));
     }
 //    static int counter = 0;
 //    char filename[64];
@@ -247,7 +234,7 @@ int exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t p
 //        .WidthInBytes = width,
 //        .Depth = 1
 //    };
-//    checkCudaErrors(cuMemcpy3D(&cpy3));
+//    CHECK_CUDA_RESULT(cuMemcpy3D(&cpy3));
 
 //    write(fd, buf, size);
 //    free(buf);
@@ -258,7 +245,7 @@ int exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t p
     CUresult ret = cuEGLStreamProducerPresentFrame( &drv->cuStreamConnection, eglframe, NULL );
     if (ret == CUDA_ERROR_UNKNOWN) {
         reconnect(drv);
-        checkCudaErrors(cuEGLStreamProducerPresentFrame( &drv->cuStreamConnection, eglframe, NULL ));
+        CHECK_CUDA_RESULT(cuEGLStreamProducerPresentFrame( &drv->cuStreamConnection, eglframe, NULL ));
     }
 
     drv->numFramesPresented++;

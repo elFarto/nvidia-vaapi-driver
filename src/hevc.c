@@ -242,19 +242,19 @@ void copyHEVCSliceParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picPar
     VASliceParameterBufferHEVC* buf = (VASliceParameterBufferHEVC*) buffer->ptr;
     CUVIDHEVCPICPARAMS* ppc = &picParams->CodecSpecific.hevc;
 
-    ctx->last_slice_params = buffer->ptr;
-    ctx->last_slice_params_count = buffer->elements;
+    ctx->lastSliceParams = buffer->ptr;
+    ctx->lastSliceParamsCount = buffer->elements;
 
     picParams->nNumSlices += buffer->elements;
 }
 
 void copyHEVCSliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
 {
-    for (int i = 0; i < ctx->last_slice_params_count; i++)
+    for (int i = 0; i < ctx->lastSliceParamsCount; i++)
     {
-        VASliceParameterBufferH264 *sliceParams = &((VASliceParameterBufferH264*) ctx->last_slice_params)[i];
+        VASliceParameterBufferH264 *sliceParams = &((VASliceParameterBufferH264*) ctx->lastSliceParams)[i];
         uint32_t offset = (uint32_t) ctx->buf.size;
-        appendBuffer(&ctx->slice_offsets, &offset, sizeof(offset));
+        appendBuffer(&ctx->sliceOffsets, &offset, sizeof(offset));
         uint8_t header[] = { 0, 0, 1 }; //1 as a 24-bit Big Endian
         appendBuffer(&ctx->buf, header, 3);
         appendBuffer(&ctx->buf, buf->ptr + sliceParams->slice_data_offset, sliceParams->slice_data_size);

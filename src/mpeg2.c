@@ -81,19 +81,19 @@ void copyMPEG2PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picPara
 
 void copyMPEG2SliceParam(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
 {
-    ctx->last_slice_params = buf->ptr;
-    ctx->last_slice_params_count = buf->elements;
+    ctx->lastSliceParams = buf->ptr;
+    ctx->lastSliceParamsCount = buf->elements;
 
     picParams->nNumSlices += buf->elements;
 }
 
 void copyMPEG2SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
 {
-    for (int i = 0; i < ctx->last_slice_params_count; i++)
+    for (int i = 0; i < ctx->lastSliceParamsCount; i++)
     {
-        VASliceParameterBufferMPEG2 *sliceParams = &((VASliceParameterBufferMPEG2*) ctx->last_slice_params)[i];
+        VASliceParameterBufferMPEG2 *sliceParams = &((VASliceParameterBufferMPEG2*) ctx->lastSliceParams)[i];
         uint32_t offset = (uint32_t) ctx->buf.size;
-        appendBuffer(&ctx->slice_offsets, &offset, sizeof(offset));
+        appendBuffer(&ctx->sliceOffsets, &offset, sizeof(offset));
         appendBuffer(&ctx->buf, buf->ptr + sliceParams->slice_data_offset, sliceParams->slice_data_size);
         picParams->nBitstreamDataLen += sliceParams->slice_data_size;
     }

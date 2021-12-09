@@ -25,7 +25,7 @@ NVCodecHolder *codecs = NULL;
 FILE *LOG_OUTPUT;
 
 __attribute__ ((constructor))
-void init_logging() {
+void initLogging() {
     LOG_OUTPUT = 0;
 
     char *nvdLog = getenv("NVD_LOG");
@@ -54,10 +54,10 @@ void logger(const char *msg, const char *filename, const char *function, int lin
     vsnprintf(formattedMessage, 1024, msg, argList);
     va_end(argList);
 
-    fprintf(LOG_OUTPUT, "[%d-%d] %s :%4d %24s %s\n", getpid(), gettid(), filename, line, function, formattedMessage);
+    fprintf(LOG_OUTPUT, "[%d-%d] %s:%4d %24s %s\n", getpid(), gettid(), filename, line, function, formattedMessage);
 }
 
-void __checkCudaErrors(CUresult err, const char *file, const char *function, const int line)
+void checkCudaErrors(CUresult err, const char *file, const char *function, const int line)
 {
     if (CUDA_SUCCESS != err)
     {
@@ -231,7 +231,7 @@ VAStatus nvQueryConfigProfiles(
     )
 {
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
-    cuCtxPushCurrent(drv->g_oContext);
+    cuCtxPushCurrent(drv->cudaContext);
 
     int profiles = 0;
     if (doesGPUSupportCodec(cudaVideoCodec_MPEG2, 8, cudaVideoChromaFormat_420, NULL, NULL)) {
@@ -396,8 +396,8 @@ VAStatus nvCreateConfig(
     NVConfig *cfg = (NVConfig*) obj->obj;
     cfg->profile = profile;
     cfg->entrypoint = entrypoint;
-    cfg->attrib_list = attrib_list; //TODO might need to make a copy of this
-    cfg->num_attribs = num_attribs;
+    cfg->attributes = attrib_list; //TODO might need to make a copy of this
+    cfg->numAttribs = num_attribs;
 
     for (int i = 0; i < num_attribs; i++)
     {
@@ -452,7 +452,7 @@ VAStatus nvQueryConfigAttributes(
         *profile = cfg->profile;
         *entrypoint = cfg->entrypoint;
         //*attrib_list = cfg->attrib_list; //TODO is that the right thing/type?
-        *num_attribs = cfg->num_attribs;
+        *num_attribs = cfg->numAttribs;
         return VA_STATUS_SUCCESS;
     }
 
@@ -499,7 +499,7 @@ VAStatus nvCreateSurfaces2(
         suf->height = height;
         suf->format = nvFormat;
         suf->pictureIdx = -1;
-        suf->bitdepth = bitdepth;
+        suf->bitDepth = bitdepth;
     }
 
     return VA_STATUS_SUCCESS;
@@ -571,7 +571,7 @@ VAStatus nvCreateContext(
     vdci.ulTargetHeight = picture_height;
     vdci.ulNumOutputSurfaces = num_render_targets;
 
-    cuvidCtxLockCreate(&vdci.vidLock, drv->g_oContext);
+    cuvidCtxLockCreate(&vdci.vidLock, drv->cudaContext);
 
     CUresult result = cuvidCreateDecoder(&decoder, &vdci);
 
@@ -631,7 +631,7 @@ VAStatus nvDestroyContext(
     {
       CUvideodecoder decoder = nvCtx->decoder;
       nvCtx->decoder = NULL;
-      freeBuffer(&nvCtx->slice_offsets);
+      freeBuffer(&nvCtx->sliceOffsets);
       freeBuffer(&nvCtx->buf);
 
       //delete the NVContext object before we try to free the decoder
@@ -743,7 +743,7 @@ VAStatus nvBeginPicture(
 
     NVContext *nvCtx = (NVContext*) getObject(drv, context)->obj;
     memset(&nvCtx->pPicParams, 0, sizeof(CUVIDPICPARAMS));
-    nvCtx->render_target = (NVSurface*) getObject(drv, render_target)->obj;
+    nvCtx->renderTargets = (NVSurface*) getObject(drv, render_target)->obj;
 
     return VA_STATUS_SUCCESS;
 }
@@ -787,11 +787,11 @@ VAStatus nvEndPicture(
     CUVIDPICPARAMS *picParams = &nvCtx->pPicParams;
 
     picParams->pBitstreamData = nvCtx->buf.buf;
-    picParams->pSliceDataOffsets = nvCtx->slice_offsets.buf;
+    picParams->pSliceDataOffsets = nvCtx->sliceOffsets.buf;
     nvCtx->buf.size = 0;
-    nvCtx->slice_offsets.size = 0;
+    nvCtx->sliceOffsets.size = 0;
 
-    picParams->CurrPicIdx = nvCtx->render_target->pictureIdx;
+    picParams->CurrPicIdx = nvCtx->renderTargets->pictureIdx;
 
     CUresult result = cuvidDecodePicture(nvCtx->decoder, picParams);
 
@@ -801,10 +801,10 @@ VAStatus nvEndPicture(
         return VA_STATUS_ERROR_DECODING_ERROR;
     }
     LOG("cuvid decoded successful to idx: %d", picParams->CurrPicIdx);
-    nvCtx->render_target->contextId = context;
-    nvCtx->render_target->progressive_frame = !picParams->field_pic_flag;
-    nvCtx->render_target->top_field_first = !picParams->bottom_field_flag;
-    nvCtx->render_target->second_field = picParams->second_field;
+    nvCtx->renderTargets->contextId = context;
+    nvCtx->renderTargets->progressiveFrame = !picParams->field_pic_flag;
+    nvCtx->renderTargets->topFieldFirst = !picParams->bottom_field_flag;
+    nvCtx->renderTargets->secondField = picParams->second_field;
 
     return VA_STATUS_SUCCESS;
 }
@@ -1019,9 +1019,9 @@ VAStatus nvGetImage(
     }
 
     CUVIDPROCPARAMS procParams = {0};
-    procParams.progressive_frame = surfaceObj->progressive_frame;
-    procParams.top_field_first = surfaceObj->top_field_first;
-    procParams.second_field = surfaceObj->second_field;
+    procParams.progressive_frame = surfaceObj->progressiveFrame;
+    procParams.top_field_first = surfaceObj->topFieldFirst;
+    procParams.second_field = surfaceObj->secondField;
 
     CUdeviceptr deviceMemory = (CUdeviceptr) NULL;
     unsigned int pitch;
@@ -1241,7 +1241,7 @@ VAStatus nvQuerySurfaceAttributes(
             .nBitDepthMinus8 = cfg->bitDepth - 8
         };
 
-        checkCudaErrors(cuCtxPushCurrent(drv->g_oContext));
+        checkCudaErrors(cuCtxPushCurrent(drv->cudaContext));
         CUresult result = cuvidGetDecoderCaps(&videoDecodeCaps);
         cuCtxPopCurrent(NULL);
         if (result != CUDA_SUCCESS) {
@@ -1437,7 +1437,7 @@ VAStatus nvExportSurfaceHandle(
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
     LOG("got %p", drv);
 
-    cuCtxPushCurrent(drv->g_oContext);
+    cuCtxPushCurrent(drv->cudaContext);
 
     NVSurface *surfaceObj = (NVSurface*) getObjectPtr(drv, surface_id);
     //This will be NULL for surfaces that haven't been end
@@ -1452,9 +1452,9 @@ VAStatus nvExportSurfaceHandle(
 
     if (surfaceObj->pictureIdx != -1) {
         CUVIDPROCPARAMS procParams = {0};
-        procParams.progressive_frame = surfaceObj->progressive_frame;
-        procParams.top_field_first = surfaceObj->top_field_first;
-        procParams.second_field = surfaceObj->second_field;
+        procParams.progressive_frame = surfaceObj->progressiveFrame;
+        procParams.top_field_first = surfaceObj->topFieldFirst;
+        procParams.second_field = surfaceObj->secondField;
 
         checkCudaErrors(cuvidMapVideoFrame(context->decoder, surfaceObj->pictureIdx, &deviceMemory, &pitch, &procParams));
         LOG("got address %llX (%d) for surface %d (picIdx: %d)", deviceMemory, pitch, surface_id, surfaceObj->pictureIdx);
@@ -1512,7 +1512,7 @@ VAStatus nvTerminate( VADriverContextP ctx )
 
     releaseExporter(drv);
 
-    cuCtxDestroy(drv->g_oContext);
+    cuCtxDestroy(drv->cudaContext);
 
     return VA_STATUS_SUCCESS;
 }
@@ -1524,7 +1524,7 @@ VAStatus __vaDriverInit_1_0(VADriverContextP ctx)
     ctx->pDriverData = drv;
 
     checkCudaErrors(cuInit(0));
-    checkCudaErrors(cuCtxCreate(&drv->g_oContext, CU_CTX_SCHED_BLOCKING_SYNC, 0));
+    checkCudaErrors(cuCtxCreate(&drv->cudaContext, CU_CTX_SCHED_BLOCKING_SYNC, 0));
 
     ctx->max_profiles = MAX_PROFILES;
     ctx->max_entrypoints = 1;

@@ -117,19 +117,19 @@ void copyVP9SliceParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picPara
     VASliceParameterBufferVP9* buf = (VASliceParameterBufferVP9*) buffer->ptr;
     //don't bother doing anything here, we can just read it from the reparsed header
 
-    ctx->last_slice_params = buffer->ptr;
-    ctx->last_slice_params_count = buffer->elements;
+    ctx->lastSliceParams = buffer->ptr;
+    ctx->lastSliceParamsCount = buffer->elements;
 
     picParams->nNumSlices += buffer->elements;
 }
 
 void copyVP9SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
 {
-    for (int i = 0; i < ctx->last_slice_params_count; i++)
+    for (int i = 0; i < ctx->lastSliceParamsCount; i++)
     {
-        VASliceParameterBufferVP9 *sliceParams = &((VASliceParameterBufferVP9*) ctx->last_slice_params)[i];
+        VASliceParameterBufferVP9 *sliceParams = &((VASliceParameterBufferVP9*) ctx->lastSliceParams)[i];
         uint32_t offset = (uint32_t) ctx->buf.size;
-        appendBuffer(&ctx->slice_offsets, &offset, sizeof(offset));
+        appendBuffer(&ctx->sliceOffsets, &offset, sizeof(offset));
         appendBuffer(&ctx->buf, buf->ptr + sliceParams->slice_data_offset, sliceParams->slice_data_size);
 
         //TODO this might not be the best place to call as we may not have a complete packet yet...

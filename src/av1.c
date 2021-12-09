@@ -26,7 +26,7 @@ void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams
     pps->height = ctx->height;
 
     pps->frame_offset = buf->order_hint;
-    pps->decodePicIdx = ctx->render_target->pictureIdx; //TODO not sure about this
+    pps->decodePicIdx = ctx->renderTargets->pictureIdx; //TODO not sure about this
 
     pps->profile = buf->profile;
     pps->use_128x128_superblock = buf->seq_info_fields.fields.use_128x128_superblock;
@@ -227,19 +227,19 @@ void copyAV1SliceParam(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
 {
     //TODO needs rework, will have multiple slice parameters buffers
     //will need to reconstruct them into a linear stream
-    ctx->last_slice_params = buf->ptr;
-    ctx->last_slice_params_count = buf->elements;
+    ctx->lastSliceParams = buf->ptr;
+    ctx->lastSliceParamsCount = buf->elements;
 
     picParams->nNumSlices += buf->elements;
 }
 
 void copyAV1SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
 {
-    for (int i = 0; i < ctx->last_slice_params_count; i++)
+    for (int i = 0; i < ctx->lastSliceParamsCount; i++)
     {
-        VASliceParameterBufferVC1 *sliceParams = &((VASliceParameterBufferVC1*) ctx->last_slice_params)[i];
+        VASliceParameterBufferVC1 *sliceParams = &((VASliceParameterBufferVC1*) ctx->lastSliceParams)[i];
         uint32_t offset = (uint32_t) ctx->buf.size;
-        appendBuffer(&ctx->slice_offsets, &offset, sizeof(offset));
+        appendBuffer(&ctx->sliceOffsets, &offset, sizeof(offset));
         appendBuffer(&ctx->buf, buf->ptr + sliceParams->slice_data_offset, sliceParams->slice_data_size);
         picParams->nBitstreamDataLen += sliceParams->slice_data_size;
     }
