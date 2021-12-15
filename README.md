@@ -38,15 +38,18 @@ The `NVD_LOG` environment variable can be used to control logging, `NVD_LOG=1` w
 
 # Firefox
 
-To use the driver with firefox, the following config options need to be set:
+To use the driver with firefox you will need at least Firefox 96, the following config options need to be set:
 | Option | Value | Reason |
 |---|---|---|
 | media.ffmpeg.vaapi.enabled | true | Required, enables the use of VA-API |
-| security.sandbox.content.syscall_whitelist | 41,49,50,332 | Required, allows certain syscalls through the sandbox. In order those are: socket, bind, listen, statx.  *Note* This is not recommended for general use as it reduces security |
+| security.sandbox.content.level | 0 | Required on Firefox 96, disables the sandboxing for the content process. *Note* This is not recommended for general use as it reduces security | 
+| security.sandbox.content.syscall_whitelist | 41,49,50,332 | Required on Firefox 97+, allows certain syscalls through the sandbox. In order those are: socket, bind, listen, statx.  *Note* This is not recommended for general use as it reduces security |
 | media.navigator.mediadatadecoder_vpx_enabled | true | Recommended, enables hardware VA-API decoding for WebRTC. |
 | media.ffvpx.enabled | false | Recommended, disables the internal software decoders for VP8/VP9 |
 | media.rdd-vpx.enabled | false | Required, disables the remote data decoder process for VP8/VP9 |
 | media.av1.enabled | false | Optional, disables AV1. The driver doesn't support AV1 playback yet. This will prevent sites attempting to use it and falling back to software decoding |
+
+In addition the `LIBVA_DRIVER_NAME` environment variable needs to be set to `nvidia`.
 
 # MPV
 
