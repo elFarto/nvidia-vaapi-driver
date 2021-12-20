@@ -48,6 +48,7 @@ To use the driver with firefox you will need at least Firefox 96, the following 
 | media.ffvpx.enabled | false | Recommended, disables the internal software decoders for VP8/VP9 |
 | media.rdd-vpx.enabled | false | Required, disables the remote data decoder process for VP8/VP9 |
 | media.av1.enabled | false | Optional, disables AV1. The driver doesn't support AV1 playback yet. This will prevent sites attempting to use it and falling back to software decoding |
+| gfx.x11-egl.force-enabled | true | This driver requires the EGL backend. If Firefox isn't selecting it, it'll need to be forced on using this option. |
 
 In addition the `LIBVA_DRIVER_NAME` environment variable needs to be set to `nvidia`.
 
