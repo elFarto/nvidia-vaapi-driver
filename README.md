@@ -44,11 +44,11 @@ To use the driver with firefox you will need at least Firefox 96, the following 
 | media.ffmpeg.vaapi.enabled | true | Required, enables the use of VA-API |
 | security.sandbox.content.level | 0 | Required on Firefox 96, disables the sandboxing for the content process. *Note* This is not recommended for general use as it reduces security | 
 | security.sandbox.content.syscall_whitelist | 41,49,50,332 | Required on Firefox 97+, allows certain syscalls through the sandbox. In order those are: socket, bind, listen, statx.  *Note* This is not recommended for general use as it reduces security |
-| media.navigator.mediadatadecoder_vpx_enabled | true | Recommended, enables hardware VA-API decoding for WebRTC. |
-| media.ffvpx.enabled | false | Recommended, disables the internal software decoders for VP8/VP9 |
+| media.ffvpx.enabled | false | Required, disables the internal software decoders for VP8/VP9 |
 | media.rdd-vpx.enabled | false | Required, disables the remote data decoder process for VP8/VP9 |
+| media.navigator.mediadatadecoder_vpx_enabled | true | Optional, enables hardware VA-API decoding for WebRTC. |
 | media.av1.enabled | false | Optional, disables AV1. The driver doesn't support AV1 playback yet. This will prevent sites attempting to use it and falling back to software decoding |
-| gfx.x11-egl.force-enabled | true | This driver requires that Firefox use the EGL backend. If it isn't selecting it by default, it'll need to be forced on using this option or by setting the `MOZ_X11_EGL` environment variable to `1`. |
+| gfx.x11-egl.force-enabled | true | This driver requires that Firefox use the EGL backend. If it isn't selecting it by default, it'll need to be forced on using this option or by setting the `MOZ_X11_EGL` environment variable to `1`. It's recommended you try the environment variable method first to test it. |
 
 In addition the `LIBVA_DRIVER_NAME` environment variable needs to be set to `nvidia`.
 
