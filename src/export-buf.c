@@ -62,7 +62,14 @@ void reconnect(NVDriver *drv) {
         eglDestroyStreamKHR(drv->eglDisplay, drv->eglStream);
     }
     drv->eglStream = eglCreateStreamKHR(drv->eglDisplay, NULL);
-    eglStreamImageConsumerConnectNV(drv->eglDisplay, drv->eglStream, 0, 0, NULL);
+    if (drv->eglStream == EGL_NO_STREAM_KHR) {
+        LOG("Unable to create EGLStream");
+        return;
+    }
+    if (!eglStreamImageConsumerConnectNV(drv->eglDisplay, drv->eglStream, 0, 0, NULL)) {
+        LOG("Unable to connect EGLImage stream consumer");
+        return;
+    }
     CHECK_CUDA_RESULT(cuEGLStreamProducerConnect(&drv->cuStreamConnection, drv->eglStream, 1024, 1024));
     drv->numFramesPresented = 0;
 }
@@ -77,16 +84,21 @@ void initExporter(NVDriver *drv) {
     eglDestroyStreamKHR = (PFNEGLDESTROYSTREAMKHRPROC) eglGetProcAddress("eglDestroyStreamKHR");
     eglStreamImageConsumerConnectNV = (PFNEGLSTREAMIMAGECONSUMERCONNECTNVPROC) eglGetProcAddress("eglStreamImageConsumerConnectNV");
 
+    PFNEGLDEBUGMESSAGECONTROLKHRPROC eglDebugMessageControlKHR = (PFNEGLDEBUGMESSAGECONTROLKHRPROC) eglGetProcAddress("eglDebugMessageControlKHR");
+    EGLAttrib debugAttribs[] = {EGL_DEBUG_MSG_WARN_KHR, EGL_TRUE, EGL_DEBUG_MSG_INFO_KHR, EGL_TRUE, EGL_NONE};
+
     drv->eglDisplay = eglGetDisplay(NULL);
-    eglInitialize(drv->eglDisplay, NULL, NULL);
+    if (!eglInitialize(drv->eglDisplay, NULL, NULL)) {
+        LOG("Unable to initialise EGL for display: %p", drv->eglDisplay);
+        return;
+    }
+    //setup debug logging
+    eglDebugMessageControlKHR(debug, debugAttribs);
+
 //    drv->eglContext = eglCreateContext(drv->eglDisplay, EGL_NO_CONFIG_KHR, EGL_NO_CONTEXT, NULL);
 //    eglMakeCurrent(drv->eglDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, drv->eglContext);
     reconnect(drv);
 
-    PFNEGLDEBUGMESSAGECONTROLKHRPROC eglDebugMessageControlKHR = (PFNEGLDEBUGMESSAGECONTROLKHRPROC) eglGetProcAddress("eglDebugMessageControlKHR");
-    //setup debug logging
-    EGLAttrib debugAttribs[] = {EGL_DEBUG_MSG_WARN_KHR, EGL_TRUE, EGL_DEBUG_MSG_INFO_KHR, EGL_TRUE, EGL_NONE};
-    eglDebugMessageControlKHR(debug, debugAttribs);
 }
 
 int exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t pitch, int *fourcc, int *fds, int *offsets, int *strides, uint64_t *mods, int *bppOut) {
