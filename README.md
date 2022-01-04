@@ -4,6 +4,8 @@ This is an VA-API implementation that uses NVDEC as a backend. This implementati
 
 It's currently in early development, so don't expect it to work well.
 
+This library requires that the `nvidia_drm` kernel module is configured with the parameter `nvidia-drm.modeset=1`
+
 # Codec Support
 
 Only decoding video is currently supported.
