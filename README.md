@@ -51,6 +51,7 @@ To use the driver with firefox you will need at least Firefox 96 (currently in b
 | gfx.x11-egl.force-enabled | true | This driver requires that Firefox use the EGL backend. If it isn't selecting it by default, it'll need to be forced on using this option or by setting the `MOZ_X11_EGL` environment variable to `1`. It's recommended you try the environment variable method first to test it. |
 
 In addition the `LIBVA_DRIVER_NAME` environment variable needs to be set to `nvidia`.
+Firefox 97 currently requires setting the `MOZ_DISABLE_RDD_SANDBOX` environment variable to `1`, as a change has force VA-API into the RDD process, not the content process which bypasses all the whitelisting.
 
 # MPV
 
