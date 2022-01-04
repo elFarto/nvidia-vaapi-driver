@@ -74,6 +74,35 @@ void reconnect(NVDriver *drv) {
     drv->numFramesPresented = 0;
 }
 
+EGLDisplay findCudaDisplay() {
+    PFNEGLQUERYDEVICESEXTPROC eglQueryDevicesEXT = (PFNEGLQUERYDEVICESEXTPROC) eglGetProcAddress("eglQueryDevicesEXT");
+    PFNEGLQUERYDEVICEATTRIBEXTPROC eglQueryDeviceAttribEXT = (PFNEGLQUERYDEVICEATTRIBEXTPROC) eglGetProcAddress("eglQueryDeviceAttribEXT");
+    if (eglQueryDevicesEXT == NULL || eglQueryDeviceAttribEXT == NULL) {
+        return EGL_NO_DISPLAY;
+    }
+
+    EGLDeviceEXT devices[8];
+    EGLint num_devices;
+    if(!eglQueryDevicesEXT(8, devices, &num_devices)) {
+        return EGL_NO_DISPLAY;
+    }
+
+    LOG("Found %d EGL devices", num_devices);
+    for (int i = 0; i < num_devices; i++) {
+        EGLAttrib attr;
+        if (eglQueryDeviceAttribEXT(devices[i], EGL_CUDA_DEVICE_NV, &attr)) {
+            LOG("Got EGL_CUDA_DEVICE_NV value '%d' from device %d", attr, i);
+            //TODO: currently we're hardcoding the CUDA device to 0, so only create the display on that device
+            if (attr == 0) {
+                //attr contains the cuda device id
+                return eglGetPlatformDisplay(EGL_PLATFORM_DEVICE_EXT, devices[i], NULL);
+            }
+        }
+    }
+
+    return EGL_NO_DISPLAY;
+}
+
 void initExporter(NVDriver *drv) {
     eglQueryStreamConsumerEventNV = (PFNEGLQUERYSTREAMCONSUMEREVENTNVPROC) eglGetProcAddress("eglQueryStreamConsumerEventNV");
     eglStreamReleaseImageNV = (PFNEGLSTREAMRELEASEIMAGENVPROC) eglGetProcAddress("eglStreamReleaseImageNV");
@@ -87,7 +116,13 @@ void initExporter(NVDriver *drv) {
     PFNEGLDEBUGMESSAGECONTROLKHRPROC eglDebugMessageControlKHR = (PFNEGLDEBUGMESSAGECONTROLKHRPROC) eglGetProcAddress("eglDebugMessageControlKHR");
     EGLAttrib debugAttribs[] = {EGL_DEBUG_MSG_WARN_KHR, EGL_TRUE, EGL_DEBUG_MSG_INFO_KHR, EGL_TRUE, EGL_NONE};
 
-    drv->eglDisplay = eglGetDisplay(NULL);
+    drv->eglDisplay = findCudaDisplay();
+    if (drv->eglDisplay != NULL) {
+        LOG("Got EGLDisplay from CUDA device");
+    } else {
+        LOG("Falling back to using default EGLDisplay");
+        drv->eglDisplay = eglGetDisplay(NULL);
+    }
     if (!eglInitialize(drv->eglDisplay, NULL, NULL)) {
         LOG("Unable to initialise EGL for display: %p", drv->eglDisplay);
         return;
