@@ -3,8 +3,8 @@ project('nvidia-vaapi-driver', 'c', version : '0.1', default_options : ['prefix=
 cc = meson.get_compiler('c')
 
 m_dep = cc.find_library('m')
-egl_dep = cc.find_library('EGL', required: true)
-cuda_lib = cc.find_library('cuda', required: true)
+egl_dep = cc.find_library('EGL')
+cuda_lib = cc.find_library('cuda')
 
 if cuda_lib.found() and cc.has_function('cuInit', dependencies: cuda_lib)
     fs = import('fs')
@@ -15,7 +15,7 @@ if cuda_lib.found() and cc.has_function('cuInit', dependencies: cuda_lib)
     endif
 endif
 
-cuvid_lib = cc.find_library('nvcuvid', required: true)
+cuvid_lib = cc.find_library('nvcuvid')
 
 if cuvid_lib.found() and cc.has_function('cuvidCtxLock', dependencies: cuvid_lib)
     cuvid_dep = declare_dependency(dependencies: cuvid_lib, include_directories: [])
