@@ -115,10 +115,10 @@ typedef struct _NVCodec
 void appendBuffer(AppendableBuffer *ab, const void *buf, uint64_t size);
 int pictureIdxFromSurfaceId(NVDriver *ctx, VASurfaceID surf);
 void checkCudaErrors(CUresult err, const char *file, const char *function, const int line);
-void logger(const char *msg, const char *filename, const char *function, int line, ...);
+void logger(const char *filename, const char *function, int line, const char *msg, ...);
 #define CHECK_CUDA_RESULT(err) checkCudaErrors(err, __FILE__, __func__, __LINE__)
 #define cudaVideoCodec_NONE ((cudaVideoCodec) -1)
-#define LOG(msg, ...) logger(msg, __FILE__, __func__, __LINE__  __VA_OPT__(,) __VA_ARGS__);
+#define LOG(...) logger(__FILE__, __func__, __LINE__, __VA_ARGS__);
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
 #define DECLARE_CODEC(name) \
     __attribute__((section("nvd_codecs"), used)) \

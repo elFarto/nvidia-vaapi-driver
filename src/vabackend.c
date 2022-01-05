@@ -51,7 +51,7 @@ static void init() {
     }
 }
 
-void logger(const char *msg, const char *filename, const char *function, int line, ...) {
+void logger(const char *filename, const char *function, int line, const char *msg, ...) {
     if (LOG_OUTPUT == 0) {
         return;
     }
@@ -59,7 +59,7 @@ void logger(const char *msg, const char *filename, const char *function, int lin
     va_list argList;
     char formattedMessage[1024];
 
-    va_start(argList, line);
+    va_start(argList, msg);
     vsnprintf(formattedMessage, 1024, msg, argList);
     va_end(argList);
 
@@ -72,7 +72,7 @@ void checkCudaErrors(CUresult err, const char *file, const char *function, const
     {
         const char *errStr = NULL;
         cuGetErrorString(err, &errStr);
-        logger("cuda error '%s' (%d)\n", file, function, line, errStr, err);
+        logger(file, function, line, "cuda error '%s' (%d)\n", errStr, err);
         exit(EXIT_FAILURE);
     }
 }
