@@ -45,7 +45,7 @@ static const uint8_t ff_mpeg1_default_non_intra_matrix[64] = {
     16, 16, 16, 16, 16, 16, 16, 16
 };
 
-void copyMPEG2PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams)
+static void copyMPEG2PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams)
 {
     VAPictureParameterBufferMPEG2* buf = (VAPictureParameterBufferMPEG2*) buffer->ptr;
 
@@ -79,7 +79,7 @@ void copyMPEG2PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picPara
     picParams->CodecSpecific.mpeg2.top_field_first = buf->picture_coding_extension.bits.top_field_first;
 }
 
-void copyMPEG2SliceParam(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
+static void copyMPEG2SliceParam(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
 {
     ctx->lastSliceParams = buf->ptr;
     ctx->lastSliceParamsCount = buf->elements;
@@ -87,7 +87,7 @@ void copyMPEG2SliceParam(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParam
     picParams->nNumSlices += buf->elements;
 }
 
-void copyMPEG2SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
+static void copyMPEG2SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
 {
     for (int i = 0; i < ctx->lastSliceParamsCount; i++)
     {
@@ -99,7 +99,7 @@ void copyMPEG2SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams
     }
 }
 
-void copyMPEG2IQMatrix(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
+static void copyMPEG2IQMatrix(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
 {
     VAIQMatrixBufferMPEG2 *iq = (VAIQMatrixBufferMPEG2*) buf->ptr;
 
@@ -129,7 +129,7 @@ void copyMPEG2IQMatrix(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
     }
 }
 
-cudaVideoCodec computeMPEG2CudaCodec(VAProfile profile) {
+static cudaVideoCodec computeMPEG2CudaCodec(VAProfile profile) {
     switch (profile) {
         case VAProfileMPEG2Main:
         case VAProfileMPEG2Simple:

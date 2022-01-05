@@ -56,16 +56,16 @@ const uint8_t ff_hevc_diag_scan8x8_y[64] = {
     5, 7, 6, 7,
 };
 
-int sortFunc(const char *a, const char * b, int *POCV) {
+static int sortFunc(const char *a, const char * b, int *POCV) {
     return POCV[*a] < POCV[*b] ? -1 : 1;
 }
 
-int sortFuncRev(const char *a, const char * b, int *POCV) {
+static int sortFuncRev(const char *a, const char * b, int *POCV) {
     return POCV[*a] < POCV[*b] ? 1 : -1;
 }
 
 
-void copyHEVCPicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams)
+static void copyHEVCPicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams)
 {
     VAPictureParameterBufferHEVC* buf = (VAPictureParameterBufferHEVC*) buffer->ptr;
 
@@ -237,7 +237,7 @@ void copyHEVCPicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParam
     qsort_r(ppc->RefPicSetStCurrAfter, ppc->NumPocStCurrAfter, sizeof(unsigned char), (__compar_d_fn_t) sortFunc, ppc->PicOrderCntVal);
 }
 
-void copyHEVCSliceParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams)
+static void copyHEVCSliceParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams)
 {
     VASliceParameterBufferHEVC* buf = (VASliceParameterBufferHEVC*) buffer->ptr;
     CUVIDHEVCPICPARAMS* ppc = &picParams->CodecSpecific.hevc;
@@ -248,7 +248,7 @@ void copyHEVCSliceParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picPar
     picParams->nNumSlices += buffer->elements;
 }
 
-void copyHEVCSliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
+static void copyHEVCSliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
 {
     for (int i = 0; i < ctx->lastSliceParamsCount; i++)
     {
@@ -262,7 +262,7 @@ void copyHEVCSliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
     }
 }
 
-void copyHEVCIQMatrix(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
+static void copyHEVCIQMatrix(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
 {
     VAIQMatrixBufferHEVC *iq = (VAIQMatrixBufferHEVC*) buf->ptr;
     CUVIDHEVCPICPARAMS* ppc = &picParams->CodecSpecific.hevc;
@@ -288,7 +288,7 @@ void copyHEVCIQMatrix(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
     }
 }
 
-cudaVideoCodec computeHEVCCudaCodec(VAProfile profile) {
+static cudaVideoCodec computeHEVCCudaCodec(VAProfile profile) {
     switch (profile) {
         case VAProfileHEVCMain:
         case VAProfileHEVCMain10:

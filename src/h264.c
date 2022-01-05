@@ -1,7 +1,7 @@
 #include "vabackend.h"
 #include <string.h>
 
-void copyH264PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams)
+static void copyH264PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams)
 {
     VAPictureParameterBufferH264* buf = (VAPictureParameterBufferH264*) buffer->ptr;
 
@@ -70,7 +70,7 @@ void copyH264PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParam
     }
 }
 
-void copyH264SliceParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams)
+static void copyH264SliceParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams)
 {
     VASliceParameterBufferH264* buf = (VASliceParameterBufferH264*) buffer->ptr;
 
@@ -87,7 +87,7 @@ void copyH264SliceParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picPar
     picParams->nNumSlices += buffer->elements;
 }
 
-void copyH264SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
+static void copyH264SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
 {
     for (int i = 0; i < ctx->lastSliceParamsCount; i++)
     {
@@ -101,7 +101,7 @@ void copyH264SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
     }
 }
 
-void copyH264IQMatrix(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
+static void copyH264IQMatrix(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
 {
     VAIQMatrixBufferH264 *iq = (VAIQMatrixBufferH264*) buf->ptr;
 
@@ -109,7 +109,7 @@ void copyH264IQMatrix(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
     memcpy(picParams->CodecSpecific.h264.WeightScale8x8, iq->ScalingList8x8, sizeof(iq->ScalingList8x8));
 }
 
-cudaVideoCodec computeH264CudaCodec(VAProfile profile) {
+static cudaVideoCodec computeH264CudaCodec(VAProfile profile) {
     //cudaVideoCodec_H264_SVC missing in VA-API?
     if (profile == VAProfileH264Baseline || profile == VAProfileH264ConstrainedBaseline || profile == VAProfileH264Main || profile == VAProfileH264High) {
         return cudaVideoCodec_H264;

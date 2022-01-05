@@ -33,7 +33,7 @@ NVCodecHolder   *CODECS;
 FILE            *LOG_OUTPUT;
 
 __attribute__ ((constructor))
-void init() {
+static void init() {
     LOG_OUTPUT = 0;
 
     char *nvdLog = getenv("NVD_LOG");
@@ -110,7 +110,7 @@ void freeBuffer(AppendableBuffer *ab) {
   }
 }
 
-Object allocateObject(NVDriver *drv, ObjectType type, int allocatePtrSize)
+static Object allocateObject(NVDriver *drv, ObjectType type, int allocatePtrSize)
 {
     Object newObj = (Object) calloc(1, sizeof(struct Object_t));
 
@@ -135,7 +135,7 @@ Object allocateObject(NVDriver *drv, ObjectType type, int allocatePtrSize)
     return newObj;
 }
 
-void* getObjectPtr(NVDriver *drv, VAGenericID id) {
+static void* getObjectPtr(NVDriver *drv, VAGenericID id) {
     if (id != VA_INVALID_ID) {
         for (Object o = drv->objRoot; o != NULL; o = o->next) {
             if (o->id == id && o != NULL) {
@@ -146,7 +146,7 @@ void* getObjectPtr(NVDriver *drv, VAGenericID id) {
     return NULL;
 }
 
-Object getObject(NVDriver *drv, VAGenericID id) {
+static Object getObject(NVDriver *drv, VAGenericID id) {
     if (id != VA_INVALID_ID) {
         for (Object o = drv->objRoot; o != NULL; o = o->next) {
             if (o->id == id) {
@@ -157,7 +157,7 @@ Object getObject(NVDriver *drv, VAGenericID id) {
     return NULL;
 }
 
-Object getObjectByPtr(NVDriver *drv, void *ptr) {
+static Object getObjectByPtr(NVDriver *drv, void *ptr) {
     if (ptr != NULL) {
         for (Object o = drv->objRoot; o != NULL; o = o->next) {
             if (o->obj == ptr) {
@@ -168,7 +168,7 @@ Object getObjectByPtr(NVDriver *drv, void *ptr) {
     return NULL;
 }
 
-void deleteObject(NVDriver *drv, VAGenericID id) {
+static void deleteObject(NVDriver *drv, VAGenericID id) {
     if (drv->objRoot == NULL || id == VA_INVALID_ID) {
         return;
     } else if (drv->objRoot->id == id) {
@@ -205,7 +205,7 @@ int pictureIdxFromSurfaceId(NVDriver *drv, VASurfaceID surf) {
     return -1;
 }
 
-cudaVideoCodec vaToCuCodec(VAProfile profile)
+static cudaVideoCodec vaToCuCodec(VAProfile profile)
 {
     for (NVCodecHolder *c = CODECS; c != NULL; c = c->next) {
         cudaVideoCodec cvc = c->codec->computeCudaCodec(profile);
@@ -218,7 +218,7 @@ cudaVideoCodec vaToCuCodec(VAProfile profile)
     return cudaVideoCodec_NONE;
 }
 
-int doesGPUSupportCodec(cudaVideoCodec codec, int bitDepth, cudaVideoChromaFormat chromaFormat, int *width, int *height)
+static int doesGPUSupportCodec(cudaVideoCodec codec, int bitDepth, cudaVideoChromaFormat chromaFormat, int *width, int *height)
 {
     CUVIDDECODECAPS videoDecodeCaps;
     memset(&videoDecodeCaps, 0, sizeof(CUVIDDECODECAPS));
@@ -237,7 +237,7 @@ int doesGPUSupportCodec(cudaVideoCodec codec, int bitDepth, cudaVideoChromaForma
 }
 
 #define MAX_PROFILES 32
-VAStatus nvQueryConfigProfiles(
+static VAStatus nvQueryConfigProfiles(
         VADriverContextP ctx,
         VAProfile *profile_list,	/* out */
         int *num_profiles			/* out */
@@ -341,7 +341,7 @@ VAStatus nvQueryConfigProfiles(
     return VA_STATUS_SUCCESS;
 }
 
-VAStatus nvQueryConfigEntrypoints(
+static VAStatus nvQueryConfigEntrypoints(
         VADriverContextP ctx,
         VAProfile profile,
         VAEntrypoint  *entrypoint_list,	/* out */
@@ -354,7 +354,7 @@ VAStatus nvQueryConfigEntrypoints(
     return VA_STATUS_SUCCESS;
 }
 
-VAStatus nvGetConfigAttributes(
+static VAStatus nvGetConfigAttributes(
         VADriverContextP ctx,
         VAProfile profile,
         VAEntrypoint entrypoint,
@@ -393,7 +393,7 @@ VAStatus nvGetConfigAttributes(
     return VA_STATUS_SUCCESS;
 }
 
-VAStatus nvCreateConfig(
+static VAStatus nvCreateConfig(
         VADriverContextP ctx,
         VAProfile profile,
         VAEntrypoint entrypoint,
@@ -434,7 +434,7 @@ VAStatus nvCreateConfig(
     return VA_STATUS_SUCCESS;
 }
 
-VAStatus nvDestroyConfig(
+static VAStatus nvDestroyConfig(
         VADriverContextP ctx,
         VAConfigID config_id
     )
@@ -446,7 +446,7 @@ VAStatus nvDestroyConfig(
     return VA_STATUS_SUCCESS;
 }
 
-VAStatus nvQueryConfigAttributes(
+static VAStatus nvQueryConfigAttributes(
         VADriverContextP ctx,
         VAConfigID config_id,
         VAProfile *profile,		/* out */
@@ -472,7 +472,7 @@ VAStatus nvQueryConfigAttributes(
     return VA_STATUS_ERROR_INVALID_CONFIG;
 }
 
-VAStatus nvCreateSurfaces2(
+static VAStatus nvCreateSurfaces2(
             VADriverContextP    ctx,
             unsigned int        format,
             unsigned int        width,
@@ -518,7 +518,7 @@ VAStatus nvCreateSurfaces2(
     return VA_STATUS_SUCCESS;
 }
 
-VAStatus nvCreateSurfaces(
+static VAStatus nvCreateSurfaces(
         VADriverContextP ctx,
         int width,
         int height,
@@ -531,7 +531,7 @@ VAStatus nvCreateSurfaces(
 }
 
 
-VAStatus nvDestroySurfaces(
+static VAStatus nvDestroySurfaces(
         VADriverContextP ctx,
         VASurfaceID *surface_list,
         int num_surfaces
@@ -547,7 +547,7 @@ VAStatus nvDestroySurfaces(
     return VA_STATUS_SUCCESS;
 }
 
-VAStatus nvCreateContext(
+static VAStatus nvCreateContext(
         VADriverContextP ctx,
         VAConfigID config_id,
         int picture_width,
@@ -631,7 +631,7 @@ VAStatus nvCreateContext(
     return VA_STATUS_SUCCESS;
 }
 
-VAStatus nvDestroyContext(
+static VAStatus nvDestroyContext(
         VADriverContextP ctx,
         VAContextID context)
 {
@@ -665,7 +665,7 @@ VAStatus nvDestroyContext(
     return VA_STATUS_SUCCESS;
 }
 
-VAStatus nvCreateBuffer(
+static VAStatus nvCreateBuffer(
         VADriverContextP ctx,
         VAContextID context,		/* in */
         VABufferType type,		/* in */
@@ -700,7 +700,7 @@ VAStatus nvCreateBuffer(
     return VA_STATUS_SUCCESS;
 }
 
-VAStatus nvBufferSetNumElements(
+static VAStatus nvBufferSetNumElements(
         VADriverContextP ctx,
         VABufferID buf_id,	/* in */
         unsigned int num_elements	/* in */
@@ -709,7 +709,7 @@ VAStatus nvBufferSetNumElements(
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
-VAStatus nvMapBuffer(
+static VAStatus nvMapBuffer(
         VADriverContextP ctx,
         VABufferID buf_id,	/* in */
         void **pbuf         /* out */
@@ -724,7 +724,7 @@ VAStatus nvMapBuffer(
     return VA_STATUS_SUCCESS;
 }
 
-VAStatus nvUnmapBuffer(
+static VAStatus nvUnmapBuffer(
         VADriverContextP ctx,
         VABufferID buf_id	/* in */
     )
@@ -732,7 +732,7 @@ VAStatus nvUnmapBuffer(
     return VA_STATUS_SUCCESS;
 }
 
-VAStatus nvDestroyBuffer(
+static VAStatus nvDestroyBuffer(
         VADriverContextP ctx,
         VABufferID buffer_id
     )
@@ -753,7 +753,7 @@ VAStatus nvDestroyBuffer(
     return VA_STATUS_SUCCESS;
 }
 
-VAStatus nvBeginPicture(
+static VAStatus nvBeginPicture(
         VADriverContextP ctx,
         VAContextID context,
         VASurfaceID render_target
@@ -768,7 +768,7 @@ VAStatus nvBeginPicture(
     return VA_STATUS_SUCCESS;
 }
 
-VAStatus nvRenderPicture(
+static VAStatus nvRenderPicture(
         VADriverContextP ctx,
         VAContextID context,
         VABufferID *buffers,
@@ -796,7 +796,7 @@ VAStatus nvRenderPicture(
     return VA_STATUS_SUCCESS;
 }
 
-VAStatus nvEndPicture(
+static VAStatus nvEndPicture(
         VADriverContextP ctx,
         VAContextID context
     )
@@ -829,7 +829,7 @@ VAStatus nvEndPicture(
     return VA_STATUS_SUCCESS;
 }
 
-VAStatus nvSyncSurface(
+static VAStatus nvSyncSurface(
         VADriverContextP ctx,
         VASurfaceID render_target
     )
@@ -837,7 +837,7 @@ VAStatus nvSyncSurface(
     return VA_STATUS_SUCCESS;
 }
 
-VAStatus nvQuerySurfaceStatus(
+static VAStatus nvQuerySurfaceStatus(
         VADriverContextP ctx,
         VASurfaceID render_target,
         VASurfaceStatus *status	/* out */
@@ -846,7 +846,7 @@ VAStatus nvQuerySurfaceStatus(
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
-VAStatus nvQuerySurfaceError(
+static VAStatus nvQuerySurfaceError(
         VADriverContextP ctx,
         VASurfaceID render_target,
         VAStatus error_status,
@@ -857,7 +857,7 @@ VAStatus nvQuerySurfaceError(
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
-VAStatus nvPutSurface(
+static VAStatus nvPutSurface(
         VADriverContextP ctx,
         VASurfaceID surface,
         void* draw, /* Drawable of window system */
@@ -878,7 +878,7 @@ VAStatus nvPutSurface(
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
-VAStatus nvQueryImageFormats(
+static VAStatus nvQueryImageFormats(
         VADriverContextP ctx,
         VAImageFormat *format_list,        /* out */
         int *num_formats           /* out */
@@ -905,7 +905,7 @@ VAStatus nvQueryImageFormats(
     return VA_STATUS_SUCCESS;
 }
 
-VAStatus nvCreateImage(
+static VAStatus nvCreateImage(
         VADriverContextP ctx,
         VAImageFormat *format,
         int width,
@@ -970,7 +970,7 @@ VAStatus nvCreateImage(
     return VA_STATUS_SUCCESS;
 }
 
-VAStatus nvDeriveImage(
+static VAStatus nvDeriveImage(
         VADriverContextP ctx,
         VASurfaceID surface,
         VAImage *image     /* out */
@@ -981,7 +981,7 @@ VAStatus nvDeriveImage(
     return VA_STATUS_ERROR_OPERATION_FAILED;
 }
 
-VAStatus nvDestroyImage(
+static VAStatus nvDestroyImage(
         VADriverContextP ctx,
         VAImageID image
     )
@@ -1006,7 +1006,7 @@ VAStatus nvDestroyImage(
     return VA_STATUS_SUCCESS;
 }
 
-VAStatus nvSetImagePalette(
+static VAStatus nvSetImagePalette(
             VADriverContextP ctx,
             VAImageID image,
             /*
@@ -1021,7 +1021,7 @@ VAStatus nvSetImagePalette(
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
-VAStatus nvGetImage(
+static VAStatus nvGetImage(
         VADriverContextP ctx,
         VASurfaceID surface,
         int x,     /* coordinates of the upper left source pixel */
@@ -1103,7 +1103,7 @@ VAStatus nvGetImage(
     return VA_STATUS_SUCCESS;
 }
 
-VAStatus nvPutImage(
+static VAStatus nvPutImage(
         VADriverContextP ctx,
         VASurfaceID surface,
         VAImageID image,
@@ -1121,7 +1121,7 @@ VAStatus nvPutImage(
     return VA_STATUS_SUCCESS;
 }
 
-VAStatus nvQuerySubpictureFormats(
+static VAStatus nvQuerySubpictureFormats(
         VADriverContextP ctx,
         VAImageFormat *format_list,        /* out */
         unsigned int *flags,       /* out */
@@ -1132,7 +1132,7 @@ VAStatus nvQuerySubpictureFormats(
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
-VAStatus nvCreateSubpicture(
+static VAStatus nvCreateSubpicture(
         VADriverContextP ctx,
         VAImageID image,
         VASubpictureID *subpicture   /* out */
@@ -1142,7 +1142,7 @@ VAStatus nvCreateSubpicture(
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
-VAStatus nvDestroySubpicture(
+static VAStatus nvDestroySubpicture(
         VADriverContextP ctx,
         VASubpictureID subpicture
     )
@@ -1151,7 +1151,7 @@ VAStatus nvDestroySubpicture(
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
-VAStatus nvSetSubpictureImage(
+static VAStatus nvSetSubpictureImage(
                 VADriverContextP ctx,
                 VASubpictureID subpicture,
                 VAImageID image
@@ -1161,7 +1161,7 @@ VAStatus nvSetSubpictureImage(
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
-VAStatus nvSetSubpictureChromakey(
+static VAStatus nvSetSubpictureChromakey(
         VADriverContextP ctx,
         VASubpictureID subpicture,
         unsigned int chromakey_min,
@@ -1173,7 +1173,7 @@ VAStatus nvSetSubpictureChromakey(
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
-VAStatus nvSetSubpictureGlobalAlpha(
+static VAStatus nvSetSubpictureGlobalAlpha(
         VADriverContextP ctx,
         VASubpictureID subpicture,
         float global_alpha
@@ -1183,7 +1183,7 @@ VAStatus nvSetSubpictureGlobalAlpha(
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
-VAStatus nvAssociateSubpicture(
+static VAStatus nvAssociateSubpicture(
         VADriverContextP ctx,
         VASubpictureID subpicture,
         VASurfaceID *target_surfaces,
@@ -1207,7 +1207,7 @@ VAStatus nvAssociateSubpicture(
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
-VAStatus nvDeassociateSubpicture(
+static VAStatus nvDeassociateSubpicture(
         VADriverContextP ctx,
         VASubpictureID subpicture,
         VASurfaceID *target_surfaces,
@@ -1218,7 +1218,7 @@ VAStatus nvDeassociateSubpicture(
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
-VAStatus nvQueryDisplayAttributes(
+static VAStatus nvQueryDisplayAttributes(
         VADriverContextP ctx,
         VADisplayAttribute *attr_list,	/* out */
         int *num_attributes		/* out */
@@ -1229,7 +1229,7 @@ VAStatus nvQueryDisplayAttributes(
     return VA_STATUS_SUCCESS;
 }
 
-VAStatus nvGetDisplayAttributes(
+static VAStatus nvGetDisplayAttributes(
         VADriverContextP ctx,
         VADisplayAttribute *attr_list,	/* in/out */
         int num_attributes
@@ -1239,7 +1239,7 @@ VAStatus nvGetDisplayAttributes(
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
-VAStatus nvSetDisplayAttributes(
+static VAStatus nvSetDisplayAttributes(
         VADriverContextP ctx,
                 VADisplayAttribute *attr_list,
                 int num_attributes
@@ -1249,7 +1249,7 @@ VAStatus nvSetDisplayAttributes(
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
-VAStatus nvQuerySurfaceAttributes(
+static VAStatus nvQuerySurfaceAttributes(
         VADriverContextP    ctx,
 	    VAConfigID          config,
 	    VASurfaceAttrib    *attrib_list,
@@ -1321,7 +1321,7 @@ VAStatus nvQuerySurfaceAttributes(
 }
 
 /* used by va trace */
-VAStatus nvBufferInfo(
+static VAStatus nvBufferInfo(
            VADriverContextP ctx,      /* in */
            VABufferID buf_id,         /* in */
            VABufferType *type,        /* out */
@@ -1336,7 +1336,7 @@ VAStatus nvBufferInfo(
     return VA_STATUS_SUCCESS;
 }
 
-VAStatus nvAcquireBufferHandle(
+static VAStatus nvAcquireBufferHandle(
             VADriverContextP    ctx,
             VABufferID          buf_id,         /* in */
             VABufferInfo *      buf_info        /* in/out */
@@ -1346,7 +1346,7 @@ VAStatus nvAcquireBufferHandle(
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
-VAStatus nvReleaseBufferHandle(
+static VAStatus nvReleaseBufferHandle(
             VADriverContextP    ctx,
             VABufferID          buf_id          /* in */
         )
@@ -1356,7 +1356,7 @@ VAStatus nvReleaseBufferHandle(
 }
 
 //        /* lock/unlock surface for external access */
-VAStatus nvLockSurface(
+static VAStatus nvLockSurface(
         VADriverContextP ctx,
         VASurfaceID surface,
         unsigned int *fourcc, /* out  for follow argument */
@@ -1378,7 +1378,7 @@ VAStatus nvLockSurface(
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
-VAStatus nvUnlockSurface(
+static VAStatus nvUnlockSurface(
         VADriverContextP ctx,
                 VASurfaceID surface
         )
@@ -1387,7 +1387,7 @@ VAStatus nvUnlockSurface(
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
-VAStatus nvCreateMFContext(
+static VAStatus nvCreateMFContext(
             VADriverContextP ctx,
             VAMFContextID *mfe_context    /* out */
         )
@@ -1396,7 +1396,7 @@ VAStatus nvCreateMFContext(
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
-VAStatus nvMFAddContext(
+static VAStatus nvMFAddContext(
             VADriverContextP ctx,
             VAMFContextID mf_context,
             VAContextID context
@@ -1406,7 +1406,7 @@ VAStatus nvMFAddContext(
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
-VAStatus nvMFReleaseContext(
+static VAStatus nvMFReleaseContext(
             VADriverContextP ctx,
             VAMFContextID mf_context,
             VAContextID context
@@ -1416,7 +1416,7 @@ VAStatus nvMFReleaseContext(
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
-VAStatus nvMFSubmit(
+static VAStatus nvMFSubmit(
             VADriverContextP ctx,
             VAMFContextID mf_context,
             VAContextID *contexts,
@@ -1426,7 +1426,7 @@ VAStatus nvMFSubmit(
     LOG("In %s", __func__);
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
-VAStatus nvCreateBuffer2(
+static VAStatus nvCreateBuffer2(
             VADriverContextP ctx,
             VAContextID context,                /* in */
             VABufferType type,                  /* in */
@@ -1441,7 +1441,7 @@ VAStatus nvCreateBuffer2(
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
-VAStatus nvQueryProcessingRate(
+static VAStatus nvQueryProcessingRate(
             VADriverContextP ctx,               /* in */
             VAConfigID config_id,               /* in */
             VAProcessingRateParameter *proc_buf,/* in */
@@ -1452,7 +1452,7 @@ VAStatus nvQueryProcessingRate(
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
-VAStatus nvExportSurfaceHandle(
+static VAStatus nvExportSurfaceHandle(
             VADriverContextP    ctx,
             VASurfaceID         surface_id,     /* in */
             uint32_t            mem_type,       /* in */
@@ -1534,7 +1534,7 @@ VAStatus nvExportSurfaceHandle(
 }
 
 
-VAStatus nvTerminate( VADriverContextP ctx )
+static VAStatus nvTerminate( VADriverContextP ctx )
 {
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
     LOG("In %s", __func__);

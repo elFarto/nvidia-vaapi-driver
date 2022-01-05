@@ -2,7 +2,7 @@
 
 //TODO incomplete as no hardware to test with
 
-void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams)
+static void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams)
 {
     VADecPictureParameterBufferAV1* buf = (VADecPictureParameterBufferAV1*) buffer->ptr;
 
@@ -223,7 +223,7 @@ void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams
     }
 }
 
-void copyAV1SliceParam(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
+static void copyAV1SliceParam(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
 {
     //TODO needs rework, will have multiple slice parameters buffers
     //will need to reconstruct them into a linear stream
@@ -233,7 +233,7 @@ void copyAV1SliceParam(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
     picParams->nNumSlices += buf->elements;
 }
 
-void copyAV1SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
+static void copyAV1SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
 {
     for (int i = 0; i < ctx->lastSliceParamsCount; i++)
     {
@@ -245,7 +245,7 @@ void copyAV1SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
     }
 }
 
-cudaVideoCodec computeAV1CudaCodec(VAProfile profile) {
+static cudaVideoCodec computeAV1CudaCodec(VAProfile profile) {
     switch (profile) {
         case VAProfileAV1Profile0:
         case VAProfileAV1Profile1:

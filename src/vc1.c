@@ -1,6 +1,6 @@
 #include "vabackend.h"
 
-void copyVC1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams)
+static void copyVC1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams)
 {
     VAPictureParameterBufferVC1* buf = (VAPictureParameterBufferVC1*) buffer->ptr;
 
@@ -63,7 +63,7 @@ void copyVC1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams
     pps->rangeredfrm = buf->range_reduction_frame;
 }
 
-void copyVC1SliceParam(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
+static void copyVC1SliceParam(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
 {
     ctx->lastSliceParams = buf->ptr;
     ctx->lastSliceParamsCount = buf->elements;
@@ -71,7 +71,7 @@ void copyVC1SliceParam(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
     picParams->nNumSlices += buf->elements;
 }
 
-void copyVC1SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
+static void copyVC1SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
 {
     for (int i = 0; i < ctx->lastSliceParamsCount; i++)
     {
@@ -83,12 +83,12 @@ void copyVC1SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
     }
 }
 
-void copyVC1BitPlane(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
+static void copyVC1BitPlane(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
 {
     //not sure anything needs to be done here, but this method is here to suppress the unhandled type error
 
 }
-cudaVideoCodec computeVC1CudaCodec(VAProfile profile) {
+static cudaVideoCodec computeVC1CudaCodec(VAProfile profile) {
     if (profile == VAProfileVC1Advanced || profile == VAProfileVC1Main || profile == VAProfileVC1Simple) {
         return cudaVideoCodec_VC1;
     }

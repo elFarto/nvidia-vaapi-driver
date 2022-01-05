@@ -3,7 +3,7 @@
 
 /* This one looks difficult to implement as NVDEC wants the whole JPEG file, and VA-API only supplied part of it */
 
-void copyJPEGPicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams)
+static void copyJPEGPicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams)
 {
     VAPictureParameterBufferJPEGBaseline* buf = (VAPictureParameterBufferJPEGBaseline*) buffer->ptr;
 
@@ -18,7 +18,7 @@ void copyJPEGPicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParam
     picParams->ref_pic_flag      = 0;
 }
 
-void copyJPEGSliceParam(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
+static void copyJPEGSliceParam(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
 {
     ctx->lastSliceParams = buf->ptr;
     ctx->lastSliceParamsCount = buf->elements;
@@ -26,7 +26,7 @@ void copyJPEGSliceParam(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams
     picParams->nNumSlices += buf->elements;
 }
 
-void copyJPEGSliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
+static void copyJPEGSliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
 {
     for (int i = 0; i < ctx->lastSliceParamsCount; i++)
     {
@@ -38,7 +38,7 @@ void copyJPEGSliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
     }
 }
 
-cudaVideoCodec computeJPEGCudaCodec(VAProfile profile) {
+static cudaVideoCodec computeJPEGCudaCodec(VAProfile profile) {
     switch (profile) {
         case VAProfileJPEGBaseline:
             return cudaVideoCodec_JPEG;

@@ -4,7 +4,7 @@
 #define GST_USE_UNSTABLE_API
 #include <gst/codecparsers/gstvp9parser.h>
 
-void copyVP9PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams)
+static void copyVP9PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams)
 {
     VADecPictureParameterBufferVP9* buf = (VADecPictureParameterBufferVP9*) buffer->ptr;
 
@@ -69,7 +69,7 @@ void copyVP9PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams
 }
 
 GstVp9Parser *parser = NULL;
-void parseExtraInfo(void *buf, uint32_t size, CUVIDPICPARAMS *picParams) {
+static void parseExtraInfo(void *buf, uint32_t size, CUVIDPICPARAMS *picParams) {
     //TODO a bit of a hack as we don't have per decoder init/deinit functions atm
     if (parser == NULL) {
         parser = gst_vp9_parser_new ();
@@ -112,7 +112,7 @@ void parseExtraInfo(void *buf, uint32_t size, CUVIDPICPARAMS *picParams) {
     //gst_vp9_parser_free(parser);
 }
 
-void copyVP9SliceParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams)
+static void copyVP9SliceParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams)
 {
     VASliceParameterBufferVP9* buf = (VASliceParameterBufferVP9*) buffer->ptr;
     //don't bother doing anything here, we can just read it from the reparsed header
@@ -123,7 +123,7 @@ void copyVP9SliceParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picPara
     picParams->nNumSlices += buffer->elements;
 }
 
-void copyVP9SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
+static void copyVP9SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
 {
     for (int i = 0; i < ctx->lastSliceParamsCount; i++)
     {
@@ -138,7 +138,7 @@ void copyVP9SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
     }
 }
 
-cudaVideoCodec computeVP9CudaCodec(VAProfile profile) {
+static cudaVideoCodec computeVP9CudaCodec(VAProfile profile) {
     switch (profile) {
         case VAProfileVP9Profile0:
         case VAProfileVP9Profile1:

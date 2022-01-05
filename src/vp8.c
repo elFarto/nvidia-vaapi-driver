@@ -1,7 +1,7 @@
 #include "vabackend.h"
 
 
-void copyVP8PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams)
+static void copyVP8PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams)
 {
     //Untested, my 1060 (GP106) doesn't support this, however it's simple enough that it should work
     VAPictureParameterBufferVP8* buf = (VAPictureParameterBufferVP8*) buffer->ptr;
@@ -22,7 +22,7 @@ void copyVP8PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams
     picParams->CodecSpecific.vp8.vp8_frame_tag.update_mb_segmentation_data = buf->pic_fields.bits.segmentation_enabled ? buf->pic_fields.bits.update_segment_feature_data : 0;
 }
 
-void copyVP8SliceParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams)
+static void copyVP8SliceParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams)
 {
     VASliceParameterBufferVP8* buf = (VASliceParameterBufferVP8*) buffer->ptr;
 
@@ -34,7 +34,7 @@ void copyVP8SliceParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picPara
     picParams->nNumSlices += buffer->elements;
 }
 
-void copyVP8SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
+static void copyVP8SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
 {
     for (int i = 0; i < ctx->lastSliceParamsCount; i++)
     {
@@ -46,7 +46,7 @@ void copyVP8SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
     }
 }
 
-cudaVideoCodec computeVP8CudaCodec(VAProfile profile) {
+static cudaVideoCodec computeVP8CudaCodec(VAProfile profile) {
     if (profile == VAProfileVP8Version0_3) {
         return cudaVideoCodec_VP8;
     }

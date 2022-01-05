@@ -32,7 +32,7 @@ PFNEGLCREATESTREAMKHRPROC eglCreateStreamKHR;
 PFNEGLDESTROYSTREAMKHRPROC eglDestroyStreamKHR;
 PFNEGLSTREAMIMAGECONSUMERCONNECTNVPROC eglStreamImageConsumerConnectNV;
 
-void debug(EGLenum error,const char *command,EGLint messageType,EGLLabelKHR threadLabel,EGLLabelKHR objectLabel,const char* message) {
+static void debug(EGLenum error,const char *command,EGLint messageType,EGLLabelKHR threadLabel,EGLLabelKHR objectLabel,const char* message) {
     LOG("[EGL] %s: %s", command, message);
 }
 
@@ -53,7 +53,7 @@ void releaseExporter(NVDriver *drv) {
     }
 }
 
-void reconnect(NVDriver *drv) {
+static void reconnect(NVDriver *drv) {
     LOG("Reconnecting to stream");
     eglInitialize(drv->eglDisplay, NULL, NULL);
     if (drv->cuStreamConnection != NULL) {
@@ -75,7 +75,7 @@ void reconnect(NVDriver *drv) {
     drv->numFramesPresented = 0;
 }
 
-EGLDisplay findCudaDisplay() {
+static EGLDisplay findCudaDisplay() {
     PFNEGLQUERYDEVICESEXTPROC eglQueryDevicesEXT = (PFNEGLQUERYDEVICESEXTPROC) eglGetProcAddress("eglQueryDevicesEXT");
     PFNEGLQUERYDEVICEATTRIBEXTPROC eglQueryDeviceAttribEXT = (PFNEGLQUERYDEVICEATTRIBEXTPROC) eglGetProcAddress("eglQueryDeviceAttribEXT");
     if (eglQueryDevicesEXT == NULL || eglQueryDeviceAttribEXT == NULL) {

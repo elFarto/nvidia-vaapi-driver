@@ -2,7 +2,7 @@
 
 #include <math.h>
 
-void copyMPEG4PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams)
+static void copyMPEG4PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams)
 {
     //Not working, it seems that the information that VA-API supplies is not enough to feed NVDEC
     //It might be possible to reconstruct it from the supplied fields like the VDPAU implementation does.
@@ -86,7 +86,7 @@ void copyMPEG4PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picPara
 //    printf("gmc_enabled: %d\n", ppc->gmc_enabled );
 }
 
-void copyMPEG4SliceParam(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
+static void copyMPEG4SliceParam(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
 {
     ctx->lastSliceParams = buf->ptr;
     ctx->lastSliceParamsCount = buf->elements;
@@ -94,7 +94,7 @@ void copyMPEG4SliceParam(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParam
     picParams->nNumSlices += buf->elements;
 }
 
-void copyMPEG4SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
+static void copyMPEG4SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
 {
     for (int i = 0; i < ctx->lastSliceParamsCount; i++)
     {
@@ -106,7 +106,7 @@ void copyMPEG4SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams
     }
 }
 
-void copyMPEG4IQMatrix(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
+static void copyMPEG4IQMatrix(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
 {
     VAIQMatrixBufferMPEG4 *iq = (VAIQMatrixBufferMPEG4*) buf->ptr;
 
@@ -121,7 +121,7 @@ void copyMPEG4IQMatrix(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
 //    }
 }
 
-cudaVideoCodec computeMPEG4CudaCodec(VAProfile profile) {
+static cudaVideoCodec computeMPEG4CudaCodec(VAProfile profile) {
     switch (profile) {
         case VAProfileH263Baseline:
         case VAProfileMPEG4Main:
