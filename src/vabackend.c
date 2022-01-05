@@ -29,8 +29,8 @@
 #include <sys/types.h>
 #include <stdarg.h>
 
-NVCodecHolder   *CODECS;
-FILE            *LOG_OUTPUT;
+static NVCodecHolder   *CODECS;
+static FILE            *LOG_OUTPUT;
 
 __attribute__ ((constructor))
 static void init() {

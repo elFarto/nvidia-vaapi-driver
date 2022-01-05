@@ -133,7 +133,7 @@ static cudaVideoCodec computeMPEG4CudaCodec(VAProfile profile) {
     return cudaVideoCodec_NONE;
 }
 //uncomment this to reenable MPEG-4 support
-/*NVCodec mpeg4Codec = {
+/*static NVCodec mpeg4Codec = {
     .computeCudaCodec = computeMPEG4CudaCodec,
     .handlers = {
         [VAPictureParameterBufferType] = copyMPEG4PicParam,

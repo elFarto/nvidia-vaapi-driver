@@ -48,7 +48,7 @@ static cudaVideoCodec computeJPEGCudaCodec(VAProfile profile) {
 }
 
 /*
-NVCodec jpegCodec = {
+static NVCodec jpegCodec = {
     .computeCudaCodec = computeJPEGCudaCodec,
     .handlers = {
         [VAPictureParameterBufferType] = copyJPEGPicParam,

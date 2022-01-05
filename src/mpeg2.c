@@ -139,7 +139,7 @@ static cudaVideoCodec computeMPEG2CudaCodec(VAProfile profile) {
     return cudaVideoCodec_NONE;
 }
 
-NVCodec mpeg2Codec = {
+static NVCodec mpeg2Codec = {
     .computeCudaCodec = computeMPEG2CudaCodec,
     .handlers = {
         [VAPictureParameterBufferType] = copyMPEG2PicParam,

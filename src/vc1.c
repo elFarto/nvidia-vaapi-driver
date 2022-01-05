@@ -96,7 +96,7 @@ static cudaVideoCodec computeVC1CudaCodec(VAProfile profile) {
     return cudaVideoCodec_NONE;
 }
 
-NVCodec vc1Codec = {
+static NVCodec vc1Codec = {
     .computeCudaCodec = computeVC1CudaCodec,
     .handlers = {
         [VAPictureParameterBufferType] = copyVC1PicParam,

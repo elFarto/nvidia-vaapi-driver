@@ -122,7 +122,7 @@ static cudaVideoCodec computeH264CudaCodec(VAProfile profile) {
     return cudaVideoCodec_NONE;
 }
 
-NVCodec h264Codec = {
+static NVCodec h264Codec = {
     .computeCudaCodec = computeH264CudaCodec,
     .handlers = {
         [VAPictureParameterBufferType] = copyH264PicParam,

@@ -54,7 +54,7 @@ static cudaVideoCodec computeVP8CudaCodec(VAProfile profile) {
     return cudaVideoCodec_NONE;
 }
 
-NVCodec vp8Codec = {
+static NVCodec vp8Codec = {
     .computeCudaCodec = computeVP8CudaCodec,
     .handlers = {
         [VAPictureParameterBufferType] = copyVP8PicParam,
