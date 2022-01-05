@@ -302,7 +302,7 @@ int exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t p
         EGLAttrib aux = 0;
 //        LOG("eglQueryStreamConsumerEventNV: %p", drv->eglStream);
         EGLint eventRet = eglQueryStreamConsumerEventNV(drv->eglDisplay, drv->eglStream, 0, &event, &aux);
-        if (eventRet == EGL_TIMEOUT_EXPIRED_KHR) {
+        if (eventRet == EGL_TIMEOUT_EXPIRED_KHR || (eventRet == EGL_FALSE && eglGetError() == EGL_SUCCESS)) {
             break;
         }
 
