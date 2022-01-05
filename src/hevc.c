@@ -256,7 +256,7 @@ static void copyHEVCSliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *pic
         uint32_t offset = (uint32_t) ctx->buf.size;
         appendBuffer(&ctx->sliceOffsets, &offset, sizeof(offset));
         uint8_t header[] = { 0, 0, 1 }; //1 as a 24-bit Big Endian
-        appendBuffer(&ctx->buf, header, 3);
+        appendBuffer(&ctx->buf, header, sizeof(header));
         appendBuffer(&ctx->buf, buf->ptr + sliceParams->slice_data_offset, sliceParams->slice_data_size);
         picParams->nBitstreamDataLen += sliceParams->slice_data_size + 3;
     }
