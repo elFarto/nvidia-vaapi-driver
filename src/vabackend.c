@@ -92,7 +92,7 @@ void appendBuffer(AppendableBuffer *ab, const void *buf, uint64_t size)
       free(ab->buf);
       ab->buf = nb;
   }
-  memcpy(ab->buf + ab->size, buf, size);
+  memcpy(PTROFF(ab->buf, ab->size), buf, size);
   ab->size += size;
 }
 

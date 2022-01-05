@@ -120,6 +120,7 @@ void logger(const char *filename, const char *function, int line, const char *ms
 #define cudaVideoCodec_NONE ((cudaVideoCodec) -1)
 #define LOG(...) logger(__FILE__, __func__, __LINE__, __VA_ARGS__);
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
+#define PTROFF(base, bytes) ((void *)((unsigned char *)(base) + (bytes)))
 #define DECLARE_CODEC(name) \
     __attribute__((section("nvd_codecs"), used)) \
     NVCodec name
