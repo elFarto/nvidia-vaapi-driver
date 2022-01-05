@@ -4,11 +4,11 @@
 
 static void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams)
 {
-    VADecPictureParameterBufferAV1* buf = (VADecPictureParameterBufferAV1*) buffer->ptr;
+    static const int bit_depth_map[] = {0, 2, 4}; //8-bpc, 10-bpc, 12-bpc
 
+    VADecPictureParameterBufferAV1* buf = (VADecPictureParameterBufferAV1*) buffer->ptr;
     CUVIDAV1PICPARAMS *pps = &picParams->CodecSpecific.av1;
 
-    int bit_depth_map[] = {0, 2, 4}; //8-bpc, 10-bpc, 12-bpc
 
     picParams->PicWidthInMbs = (ctx->width + 15)/16;
     picParams->FrameHeightInMbs = (ctx->height + 15)/16;

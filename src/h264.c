@@ -91,10 +91,11 @@ static void copyH264SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *pic
 {
     for (int i = 0; i < ctx->lastSliceParamsCount; i++)
     {
+        static const uint8_t header[] = { 0, 0, 1 }; //1 as a 24-bit Big Endian
+
         VASliceParameterBufferH264 *sliceParams = &((VASliceParameterBufferH264*) ctx->lastSliceParams)[i];
         uint32_t offset = (uint32_t) ctx->buf.size;
         appendBuffer(&ctx->sliceOffsets, &offset, sizeof(offset));
-        uint8_t header[] = { 0, 0, 1 }; //1 as a 24-bit Big Endian
         appendBuffer(&ctx->buf, header, sizeof(header));
         appendBuffer(&ctx->buf, buf->ptr + sliceParams->slice_data_offset, sliceParams->slice_data_size);
         picParams->nBitstreamDataLen += sliceParams->slice_data_size + 3;
