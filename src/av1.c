@@ -250,9 +250,9 @@ static cudaVideoCodec computeAV1CudaCodec(VAProfile profile) {
         case VAProfileAV1Profile0:
         case VAProfileAV1Profile1:
             return cudaVideoCodec_AV1;
+        default:
+            return cudaVideoCodec_NONE;
     }
-
-    return cudaVideoCodec_NONE;
 }
 
 static const VAProfile av1SupportedProfiles[] =  {

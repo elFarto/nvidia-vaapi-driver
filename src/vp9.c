@@ -145,9 +145,9 @@ static cudaVideoCodec computeVP9CudaCodec(VAProfile profile) {
         case VAProfileVP9Profile2:
         case VAProfileVP9Profile3:
             return cudaVideoCodec_VP9;
+        default:
+            return cudaVideoCodec_NONE;
     }
-
-    return cudaVideoCodec_NONE;
 }
 
 static const VAProfile vp9SupportedProfiles[] = {

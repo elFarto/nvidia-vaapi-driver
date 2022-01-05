@@ -128,9 +128,9 @@ static cudaVideoCodec computeMPEG4CudaCodec(VAProfile profile) {
         case VAProfileMPEG4Simple:
         case VAProfileMPEG4AdvancedSimple:
             return cudaVideoCodec_MPEG4;
+        default:
+            return cudaVideoCodec_NONE;
     }
-
-    return cudaVideoCodec_NONE;
 }
 //uncomment this to reenable MPEG-4 support
 /*

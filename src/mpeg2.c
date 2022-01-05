@@ -134,9 +134,9 @@ static cudaVideoCodec computeMPEG2CudaCodec(VAProfile profile) {
         case VAProfileMPEG2Main:
         case VAProfileMPEG2Simple:
             return cudaVideoCodec_MPEG2;
+        default:
+            return cudaVideoCodec_NONE;
     }
-
-    return cudaVideoCodec_NONE;
 }
 
 static const VAProfile mpeg2SupportedProfiles[] = {

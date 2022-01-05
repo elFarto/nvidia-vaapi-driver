@@ -42,9 +42,9 @@ static cudaVideoCodec computeJPEGCudaCodec(VAProfile profile) {
     switch (profile) {
         case VAProfileJPEGBaseline:
             return cudaVideoCodec_JPEG;
+        default:
+            return cudaVideoCodec_NONE;
     }
-
-    return -1;
 }
 
 /*
