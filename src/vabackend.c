@@ -29,8 +29,10 @@
 #include <sys/types.h>
 #include <stdarg.h>
 
-static NVCodecHolder   *CODECS;
-static FILE            *LOG_OUTPUT;
+extern const NVCodec __start_nvd_codecs[];
+extern const NVCodec __stop_nvd_codecs[];
+
+static FILE *LOG_OUTPUT;
 
 __attribute__ ((constructor))
 static void init() {
@@ -73,13 +75,6 @@ void checkCudaErrors(CUresult err, const char *file, const char *function, const
         logger("cuda error '%s' (%d)\n", file, function, line, errStr, err);
         exit(EXIT_FAILURE);
     }
-}
-
-void registerCodec(NVCodec *codec) {
-    NVCodecHolder *newCodecHolder = (NVCodecHolder*) calloc(1, sizeof(NVCodecHolder));
-    newCodecHolder->codec = codec;
-    newCodecHolder->next = CODECS;
-    CODECS = newCodecHolder;
 }
 
 void appendBuffer(AppendableBuffer *ab, const void *buf, uint64_t size)
@@ -207,8 +202,8 @@ int pictureIdxFromSurfaceId(NVDriver *drv, VASurfaceID surf) {
 
 static cudaVideoCodec vaToCuCodec(VAProfile profile)
 {
-    for (NVCodecHolder *c = CODECS; c != NULL; c = c->next) {
-        cudaVideoCodec cvc = c->codec->computeCudaCodec(profile);
+    for (const NVCodec *c = __start_nvd_codecs; c < __stop_nvd_codecs; c++) {
+        cudaVideoCodec cvc = c->computeCudaCodec(profile);
         if (cvc != cudaVideoCodec_NONE) {
             return cvc;
         }
@@ -605,10 +600,10 @@ static VAStatus nvCreateContext(
     nvCtx->width = picture_width;
     nvCtx->height = picture_height;
 
-    for (NVCodecHolder *c = CODECS; c != NULL; c = c->next) {
-        for (int i = 0; i < c->codec->supportedProfileCount; i++) {
-            if (c->codec->supportedProfiles[i] == cfg->profile) {
-                nvCtx->codec = c->codec;
+    for (const NVCodec *c = __start_nvd_codecs; c < __stop_nvd_codecs; c++) {
+        for (int i = 0; i < c->supportedProfileCount; i++) {
+            if (c->supportedProfiles[i] == cfg->profile) {
+                nvCtx->codec = c;
                 break;
             }
         }

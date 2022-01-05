@@ -141,7 +141,7 @@ static const VAProfile mpeg4SupportProfiles[] = {
     VAProfileMPEG4AdvancedSimple,
 };
 
-static NVCodec mpeg4Codec = {
+static const DECLARE_CODEC(mpeg4Codec) = {
     .computeCudaCodec = computeMPEG4CudaCodec,
     .handlers = {
         [VAPictureParameterBufferType] = copyMPEG4PicParam,
@@ -152,5 +152,4 @@ static NVCodec mpeg4Codec = {
     .supportedProfileCount = ARRAY_SIZE(mpeg4SupportProfiles),
     .supportedProfiles = mpeg4SupportProfiles,
 };
-DEFINE_CODEC(mpeg4Codec)
 */

@@ -130,7 +130,7 @@ static const VAProfile h264SupportedProfiles[] = {
     VAProfileH264High,
 };
 
-static NVCodec h264Codec = {
+static const DECLARE_CODEC(h264Codec) = {
     .computeCudaCodec = computeH264CudaCodec,
     .handlers = {
         [VAPictureParameterBufferType] = copyH264PicParam,
@@ -141,4 +141,3 @@ static NVCodec h264Codec = {
     .supportedProfileCount = ARRAY_SIZE(h264SupportedProfiles),
     .supportedProfiles = h264SupportedProfiles,
 };
-DEFINE_CODEC(h264Codec)
