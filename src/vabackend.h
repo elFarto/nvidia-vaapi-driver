@@ -118,7 +118,7 @@ typedef struct _NVCodecHolder
     struct _NVCodecHolder   *next;
 } NVCodecHolder;
 
-void appendBuffer(AppendableBuffer *ab, void *buf, uint64_t size);
+void appendBuffer(AppendableBuffer *ab, const void *buf, uint64_t size);
 int pictureIdxFromSurfaceId(NVDriver *ctx, VASurfaceID surf);
 void registerCodec(NVCodec *codec);
 void checkCudaErrors(CUresult err, const char *file, const char *function, const int line);

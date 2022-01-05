@@ -82,7 +82,7 @@ void registerCodec(NVCodec *codec) {
     CODECS = newCodecHolder;
 }
 
-void appendBuffer(AppendableBuffer *ab, void *buf, uint64_t size)
+void appendBuffer(AppendableBuffer *ab, const void *buf, uint64_t size)
 {
   if (ab->buf == NULL) {
       ab->allocated = size*2;
