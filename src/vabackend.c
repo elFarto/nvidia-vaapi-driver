@@ -403,7 +403,7 @@ VAStatus nvCreateConfig(
     )
 {
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
-    LOG("In %s with profile: %d with %d attributes", __FUNCTION__, profile, num_attribs);
+    LOG("In %s with profile: %d with %d attributes", __func__, profile, num_attribs);
 
     Object obj = allocateObject(drv, OBJECT_TYPE_CONFIG, sizeof(NVConfig));
     NVConfig *cfg = (NVConfig*) obj->obj;
@@ -636,7 +636,7 @@ VAStatus nvDestroyContext(
         VAContextID context)
 {
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
-    LOG("In %s", __FUNCTION__);
+    LOG("In %s", __func__);
 
     NVContext *nvCtx = (NVContext*) getObject(drv, context)->obj;
 
@@ -853,7 +853,7 @@ VAStatus nvQuerySurfaceError(
         void **error_info /*out*/
     )
 {
-    LOG("In %s", __FUNCTION__);
+    LOG("In %s", __func__);
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
@@ -874,7 +874,7 @@ VAStatus nvPutSurface(
         unsigned int flags /* de-interlacing flags */
     )
 {
-    LOG("In %s", __FUNCTION__);
+    LOG("In %s", __func__);
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
@@ -884,7 +884,7 @@ VAStatus nvQueryImageFormats(
         int *num_formats           /* out */
     )
 {
-    LOG("In %s", __FUNCTION__);
+    LOG("In %s", __func__);
 
     int i = 0;
 
@@ -976,7 +976,7 @@ VAStatus nvDeriveImage(
         VAImage *image     /* out */
     )
 {
-    LOG("In %s", __FUNCTION__);
+    LOG("In %s", __func__);
     //FAILED because we don't support it yet
     return VA_STATUS_ERROR_OPERATION_FAILED;
 }
@@ -1017,7 +1017,7 @@ VAStatus nvSetImagePalette(
                 unsigned char *palette
     )
 {
-    LOG("In %s", __FUNCTION__);
+    LOG("In %s", __func__);
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
@@ -1117,7 +1117,7 @@ VAStatus nvPutImage(
         unsigned int dest_height
     )
 {
-    LOG("In %s", __FUNCTION__);
+    LOG("In %s", __func__);
     return VA_STATUS_SUCCESS;
 }
 
@@ -1128,7 +1128,7 @@ VAStatus nvQuerySubpictureFormats(
         unsigned int *num_formats  /* out */
     )
 {
-    LOG("In %s", __FUNCTION__);
+    LOG("In %s", __func__);
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
@@ -1138,7 +1138,7 @@ VAStatus nvCreateSubpicture(
         VASubpictureID *subpicture   /* out */
     )
 {
-    LOG("In %s", __FUNCTION__);
+    LOG("In %s", __func__);
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
@@ -1147,7 +1147,7 @@ VAStatus nvDestroySubpicture(
         VASubpictureID subpicture
     )
 {
-    LOG("In %s", __FUNCTION__);
+    LOG("In %s", __func__);
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
@@ -1157,7 +1157,7 @@ VAStatus nvSetSubpictureImage(
                 VAImageID image
         )
 {
-    LOG("In %s", __FUNCTION__);
+    LOG("In %s", __func__);
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
@@ -1169,7 +1169,7 @@ VAStatus nvSetSubpictureChromakey(
         unsigned int chromakey_mask
     )
 {
-    LOG("In %s", __FUNCTION__);
+    LOG("In %s", __func__);
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
@@ -1179,7 +1179,7 @@ VAStatus nvSetSubpictureGlobalAlpha(
         float global_alpha
     )
 {
-    LOG("In %s", __FUNCTION__);
+    LOG("In %s", __func__);
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
@@ -1203,7 +1203,7 @@ VAStatus nvAssociateSubpicture(
         unsigned int flags
     )
 {
-    LOG("In %s", __FUNCTION__);
+    LOG("In %s", __func__);
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
@@ -1214,7 +1214,7 @@ VAStatus nvDeassociateSubpicture(
         int num_surfaces
     )
 {
-    LOG("In %s", __FUNCTION__);
+    LOG("In %s", __func__);
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
@@ -1224,7 +1224,7 @@ VAStatus nvQueryDisplayAttributes(
         int *num_attributes		/* out */
         )
 {
-    LOG("In %s", __FUNCTION__);
+    LOG("In %s", __func__);
     *num_attributes = 0;
     return VA_STATUS_SUCCESS;
 }
@@ -1235,7 +1235,7 @@ VAStatus nvGetDisplayAttributes(
         int num_attributes
         )
 {
-    LOG("In %s", __FUNCTION__);
+    LOG("In %s", __func__);
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
@@ -1245,7 +1245,7 @@ VAStatus nvSetDisplayAttributes(
                 int num_attributes
         )
 {
-    LOG("In %s", __FUNCTION__);
+    LOG("In %s", __func__);
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
@@ -1329,7 +1329,7 @@ VAStatus nvBufferInfo(
            unsigned int *num_elements /* out */
 )
 {
-    LOG("In %s", __FUNCTION__);
+    LOG("In %s", __func__);
     *size=0;
     *num_elements=0;
 
@@ -1342,7 +1342,7 @@ VAStatus nvAcquireBufferHandle(
             VABufferInfo *      buf_info        /* in/out */
         )
 {
-    LOG("In %s", __FUNCTION__);
+    LOG("In %s", __func__);
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
@@ -1351,7 +1351,7 @@ VAStatus nvReleaseBufferHandle(
             VABufferID          buf_id          /* in */
         )
 {
-    LOG("In %s", __FUNCTION__);
+    LOG("In %s", __func__);
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
@@ -1374,7 +1374,7 @@ VAStatus nvLockSurface(
                        */
 )
 {
-    LOG("In %s", __FUNCTION__);
+    LOG("In %s", __func__);
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
@@ -1383,7 +1383,7 @@ VAStatus nvUnlockSurface(
                 VASurfaceID surface
         )
 {
-    LOG("In %s", __FUNCTION__);
+    LOG("In %s", __func__);
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
@@ -1392,7 +1392,7 @@ VAStatus nvCreateMFContext(
             VAMFContextID *mfe_context    /* out */
         )
 {
-    LOG("In %s", __FUNCTION__);
+    LOG("In %s", __func__);
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
@@ -1402,7 +1402,7 @@ VAStatus nvMFAddContext(
             VAContextID context
         )
 {
-    LOG("In %s", __FUNCTION__);
+    LOG("In %s", __func__);
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
@@ -1412,7 +1412,7 @@ VAStatus nvMFReleaseContext(
             VAContextID context
         )
 {
-    LOG("In %s", __FUNCTION__);
+    LOG("In %s", __func__);
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
@@ -1423,7 +1423,7 @@ VAStatus nvMFSubmit(
             int num_contexts
         )
 {
-    LOG("In %s", __FUNCTION__);
+    LOG("In %s", __func__);
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 VAStatus nvCreateBuffer2(
@@ -1437,7 +1437,7 @@ VAStatus nvCreateBuffer2(
             VABufferID *buf_id                  /* out */
     )
 {
-    LOG("In %s", __FUNCTION__);
+    LOG("In %s", __func__);
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
@@ -1448,7 +1448,7 @@ VAStatus nvQueryProcessingRate(
             unsigned int *processing_rate	/* out */
         )
 {
-    LOG("In %s", __FUNCTION__);
+    LOG("In %s", __func__);
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
@@ -1537,7 +1537,7 @@ VAStatus nvExportSurfaceHandle(
 VAStatus nvTerminate( VADriverContextP ctx )
 {
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
-    LOG("In %s", __FUNCTION__);
+    LOG("In %s", __func__);
 
     releaseExporter(drv);
 
