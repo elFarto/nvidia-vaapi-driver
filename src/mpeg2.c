@@ -139,6 +139,11 @@ static cudaVideoCodec computeMPEG2CudaCodec(VAProfile profile) {
     return cudaVideoCodec_NONE;
 }
 
+static const VAProfile mpeg2SupportedProfiles[] = {
+    VAProfileMPEG2Main,
+    VAProfileMPEG2Simple,
+};
+
 static NVCodec mpeg2Codec = {
     .computeCudaCodec = computeMPEG2CudaCodec,
     .handlers = {
@@ -147,7 +152,7 @@ static NVCodec mpeg2Codec = {
         [VASliceParameterBufferType] = copyMPEG2SliceParam,
         [VASliceDataBufferType] = copyMPEG2SliceData,
     },
-    .supportedProfileCount = 2,
-    .supportedProfiles = {VAProfileMPEG2Main, VAProfileMPEG2Simple}
+    .supportedProfileCount = ARRAY_SIZE(mpeg2SupportedProfiles),
+    .supportedProfiles = mpeg2SupportedProfiles,
 };
 DEFINE_CODEC(mpeg2Codec)

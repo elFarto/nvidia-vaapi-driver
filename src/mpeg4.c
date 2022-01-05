@@ -133,7 +133,15 @@ static cudaVideoCodec computeMPEG4CudaCodec(VAProfile profile) {
     return cudaVideoCodec_NONE;
 }
 //uncomment this to reenable MPEG-4 support
-/*static NVCodec mpeg4Codec = {
+/*
+static const VAProfile mpeg4SupportProfiles[] = {
+    VAProfileH263Baseline,
+    VAProfileMPEG4Main,
+    VAProfileMPEG4Simple,
+    VAProfileMPEG4AdvancedSimple,
+};
+
+static NVCodec mpeg4Codec = {
     .computeCudaCodec = computeMPEG4CudaCodec,
     .handlers = {
         [VAPictureParameterBufferType] = copyMPEG4PicParam,
@@ -141,7 +149,8 @@ static cudaVideoCodec computeMPEG4CudaCodec(VAProfile profile) {
         [VASliceParameterBufferType] = copyMPEG4SliceParam,
         [VASliceDataBufferType] = copyMPEG4SliceData,
     },
-    .supportedProfileCount = 4,
-    .supportedProfiles = { VAProfileH263Baseline, VAProfileMPEG4Main, VAProfileMPEG4Simple, VAProfileMPEG4AdvancedSimple }
+    .supportedProfileCount = ARRAY_SIZE(mpeg4SupportProfiles),
+    .supportedProfiles = mpeg4SupportProfiles,
 };
-DEFINE_CODEC(mpeg4Codec)*/
+DEFINE_CODEC(mpeg4Codec)
+*/

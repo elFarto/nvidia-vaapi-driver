@@ -48,6 +48,10 @@ static cudaVideoCodec computeJPEGCudaCodec(VAProfile profile) {
 }
 
 /*
+static const VAProfile jpegSupportedProfiles[] = {
+    VAProfileJPEGBaseline,
+};
+
 static NVCodec jpegCodec = {
     .computeCudaCodec = computeJPEGCudaCodec,
     .handlers = {
@@ -56,8 +60,8 @@ static NVCodec jpegCodec = {
         [VASliceParameterBufferType] = copyJPEGSliceParam,
         [VASliceDataBufferType] = copyJPEGSliceData,
     },
-    .supportedProfileCount = 1,
-    .supportedProfiles = { VAProfileJPEGBaseline }
+    .supportedProfileCount = ARRAY_SIZE(jpegSupportedProfiles),
+    .supportedProfiles = jpegSupportedProfiles,
 };
 DEFINE_CODEC(jpegCodec)
 */

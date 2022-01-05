@@ -299,6 +299,12 @@ static cudaVideoCodec computeHEVCCudaCodec(VAProfile profile) {
     return cudaVideoCodec_NONE;
 }
 
+static const VAProfile hevcSupportedProfiles[] = {
+    VAProfileHEVCMain,
+    VAProfileHEVCMain10,
+    // VAProfileHEVCMain12,
+};
+
 static NVCodec hevcCodec = {
     .computeCudaCodec = computeHEVCCudaCodec,
     .handlers = {
@@ -307,7 +313,7 @@ static NVCodec hevcCodec = {
         [VASliceParameterBufferType] = copyHEVCSliceParam,
         [VASliceDataBufferType] = copyHEVCSliceData,
     },
-    .supportedProfileCount = 2,//3,
-    .supportedProfiles = { VAProfileHEVCMain, VAProfileHEVCMain10 /*, VAProfileHEVCMain12 */ }
+    .supportedProfileCount = ARRAY_SIZE(hevcSupportedProfiles),
+    .supportedProfiles = hevcSupportedProfiles,
 };
 DEFINE_CODEC(hevcCodec)

@@ -54,6 +54,10 @@ static cudaVideoCodec computeVP8CudaCodec(VAProfile profile) {
     return cudaVideoCodec_NONE;
 }
 
+static const VAProfile vp8SupportedProfiles[] = {
+    VAProfileVP8Version0_3,
+};
+
 static NVCodec vp8Codec = {
     .computeCudaCodec = computeVP8CudaCodec,
     .handlers = {
@@ -61,7 +65,7 @@ static NVCodec vp8Codec = {
         [VASliceParameterBufferType] = copyVP8SliceParam,
         [VASliceDataBufferType] = copyVP8SliceData,
     },
-    .supportedProfileCount = 1,
-    .supportedProfiles = { VAProfileVP8Version0_3 }
+    .supportedProfileCount = ARRAY_SIZE(vp8SupportedProfiles),
+    .supportedProfiles = vp8SupportedProfiles,
 };
 DEFINE_CODEC(vp8Codec)

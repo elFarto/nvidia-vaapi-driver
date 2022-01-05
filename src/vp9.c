@@ -150,6 +150,13 @@ static cudaVideoCodec computeVP9CudaCodec(VAProfile profile) {
     return cudaVideoCodec_NONE;
 }
 
+static const VAProfile vp9SupportedProfiles[] = {
+    VAProfileVP9Profile0,
+    VAProfileVP9Profile1,
+    VAProfileVP9Profile2,
+    VAProfileVP9Profile3,
+};
+
 static NVCodec vp9Codec = {
     .computeCudaCodec = computeVP9CudaCodec,
     .handlers = {
@@ -157,7 +164,7 @@ static NVCodec vp9Codec = {
         [VASliceParameterBufferType] = copyVP9SliceParam,
         [VASliceDataBufferType] = copyVP9SliceData,
     },
-    .supportedProfileCount = 4,
-    .supportedProfiles = { VAProfileVP9Profile0, VAProfileVP9Profile1, VAProfileVP9Profile2, VAProfileVP9Profile3 }
+    .supportedProfileCount = ARRAY_SIZE(vp9SupportedProfiles),
+    .supportedProfiles = vp9SupportedProfiles,
 };
 DEFINE_CODEC(vp9Codec)

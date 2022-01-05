@@ -122,6 +122,13 @@ static cudaVideoCodec computeH264CudaCodec(VAProfile profile) {
     return cudaVideoCodec_NONE;
 }
 
+static const VAProfile h264SupportedProfiles[] = {
+    VAProfileH264Baseline,
+    VAProfileH264ConstrainedBaseline,
+    VAProfileH264Main,
+    VAProfileH264High,
+};
+
 static NVCodec h264Codec = {
     .computeCudaCodec = computeH264CudaCodec,
     .handlers = {
@@ -130,7 +137,7 @@ static NVCodec h264Codec = {
         [VASliceParameterBufferType] = copyH264SliceParam,
         [VASliceDataBufferType] = copyH264SliceData,
     },
-    .supportedProfileCount = 4,
-    .supportedProfiles = { VAProfileH264Baseline, VAProfileH264ConstrainedBaseline, VAProfileH264Main, VAProfileH264High }
+    .supportedProfileCount = ARRAY_SIZE(h264SupportedProfiles),
+    .supportedProfiles = h264SupportedProfiles,
 };
 DEFINE_CODEC(h264Codec)

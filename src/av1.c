@@ -255,6 +255,11 @@ static cudaVideoCodec computeAV1CudaCodec(VAProfile profile) {
     return cudaVideoCodec_NONE;
 }
 
+static const VAProfile av1SupportedProfiles[] =  {
+    VAProfileAV1Profile0,
+    VAProfileAV1Profile1,
+};
+
 static NVCodec av1Codec = {
     .computeCudaCodec = computeAV1CudaCodec,
     .handlers = {
@@ -262,7 +267,7 @@ static NVCodec av1Codec = {
         [VASliceParameterBufferType] = copyAV1SliceParam,
         [VASliceDataBufferType] = copyAV1SliceData
     },
-    .supportedProfileCount = 2,
-    .supportedProfiles = {VAProfileAV1Profile0, VAProfileAV1Profile1}
+    .supportedProfileCount = ARRAY_SIZE(av1SupportedProfiles),
+    .supportedProfiles = av1SupportedProfiles,
 };
 DEFINE_CODEC(av1Codec)

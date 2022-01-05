@@ -109,7 +109,7 @@ typedef struct _NVCodec
     ComputeCudaCodec    computeCudaCodec;
     HandlerFunc         handlers[VABufferTypeMax];
     int                 supportedProfileCount;
-    VAProfile           supportedProfiles[];
+    const VAProfile     *supportedProfiles;
 } NVCodec;
 
 typedef struct _NVCodecHolder
@@ -127,5 +127,6 @@ void logger(const char *msg, const char *filename, const char *function, int lin
 #define cudaVideoCodec_NONE ((cudaVideoCodec) -1)
 #define LOG(msg, ...) logger(msg, __FILE__, __func__, __LINE__  __VA_OPT__(,) __VA_ARGS__);
 #define DEFINE_CODEC(c) __attribute__((constructor)) void reg_ ## c() { registerCodec(&c); }
+#define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
 
 #endif // VABACKEND_H
