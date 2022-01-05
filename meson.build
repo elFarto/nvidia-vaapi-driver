@@ -37,5 +37,6 @@ shared_library('nvidia_drv_video', name_prefix: '', sources: [
            'src/vabackend.c'],
            dependencies: [ cuda_dep, cuvid_dep, gst_codecs_deps, egl_dep, m_dep ],
            install: true,
-           install_dir: get_option('libdir') / 'dri'
+           install_dir: get_option('libdir') / 'dri',
+           gnu_symbol_visibility: 'hidden',
            )

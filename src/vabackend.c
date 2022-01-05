@@ -1546,6 +1546,7 @@ static VAStatus nvTerminate( VADriverContextP ctx )
     return VA_STATUS_SUCCESS;
 }
 
+__attribute__((visibility("default")))
 VAStatus __vaDriverInit_1_0(VADriverContextP ctx)
 {
     LOG("Initing NVIDIA VA-API Driver");
