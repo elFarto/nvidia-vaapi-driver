@@ -29,7 +29,7 @@
 #include <sys/types.h>
 #include <stdarg.h>
 
-NVCodecHolder   *CODECS = NULL;
+NVCodecHolder   *CODECS;
 FILE            *LOG_OUTPUT;
 
 __attribute__ ((constructor))
