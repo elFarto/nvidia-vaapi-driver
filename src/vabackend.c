@@ -133,7 +133,7 @@ static Object allocateObject(NVDriver *drv, ObjectType type, int allocatePtrSize
 static void* getObjectPtr(NVDriver *drv, VAGenericID id) {
     if (id != VA_INVALID_ID) {
         for (Object o = drv->objRoot; o != NULL; o = o->next) {
-            if (o->id == id && o != NULL) {
+            if (o->id == id) {
                 return o->obj;
             }
         }
