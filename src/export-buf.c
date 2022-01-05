@@ -264,31 +264,7 @@ int exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t p
         };
         CHECK_CUDA_RESULT(cuMemcpy2D(&cpy2));
     }
-//    static int counter = 0;
-//    char filename[64];
-//    int size = surface->height * surface->width;//(pitch * surface->height) + (pitch * surface->height>>1);
-//    char *buf = malloc(size);
-//    snprintf(filename, 64, "/tmp/frame-%03d.data\0", counter++);
-//    LOG("writing %d to %s", surface->pictureIdx, filename);
-//    int fd = open(filename, O_RDWR | O_TRUNC | O_CREAT, 0644);
-//    //cuMemcpyAtoH(buf, eglframe.frame.pArray[0], 0, size);
-//    CUDA_MEMCPY3D cpy3 = {
-//        .srcMemoryType = CU_MEMORYTYPE_ARRAY,
-//        .srcArray = eglframe.frame.pArray[0],
-//        .dstMemoryType = CU_MEMORYTYPE_HOST,
-//        .dstHost = buf,
-//        .Height = height,
-//        .WidthInBytes = width,
-//        .Depth = 1
-//    };
-//    CHECK_CUDA_RESULT(cuMemcpy3D(&cpy3));
 
-//    write(fd, buf, size);
-//    free(buf);
-//    close(fd);
-
-
-//    LOG("PrePresent drv %p, dsp: %p, str: %p, sc: %p", drv, drv->eglDisplay, drv->eglStream, drv->cuStreamConnection);
     CUresult ret = cuEGLStreamProducerPresentFrame( &drv->cuStreamConnection, eglframe, NULL );
     if (ret == CUDA_ERROR_UNKNOWN) {
         reconnect(drv);
@@ -300,15 +276,13 @@ int exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t p
     while (1) {
         EGLenum event = 0;
         EGLAttrib aux = 0;
-//        LOG("eglQueryStreamConsumerEventNV: %p", drv->eglStream);
-        EGLint eventRet = eglQueryStreamConsumerEventNV(drv->eglDisplay, drv->eglStream, 0, &event, &aux);
-        if (eventRet == EGL_TIMEOUT_EXPIRED_KHR || (eventRet == EGL_FALSE && eglGetError() == EGL_SUCCESS)) {
+        //check for the next event
+        if (eglQueryStreamConsumerEventNV(drv->eglDisplay, drv->eglStream, 0, &event, &aux) != EGL_TRUE) {
             break;
         }
 
         if (event == EGL_STREAM_IMAGE_ADD_NV) {
-            EGLImage image = eglCreateImage(drv->eglDisplay, EGL_NO_CONTEXT, EGL_STREAM_CONSUMER_IMAGE_NV, drv->eglStream, NULL);
-//            LOG("Adding image from EGLStream, eglCreateImage: %p", image);
+            eglCreateImage(drv->eglDisplay, EGL_NO_CONTEXT, EGL_STREAM_CONSUMER_IMAGE_NV, drv->eglStream, NULL);
         } else if (event == EGL_STREAM_IMAGE_AVAILABLE_NV) {
             EGLImage img;
             //somehow we get here with the previous frame, not the next one
