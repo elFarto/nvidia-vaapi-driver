@@ -62,3 +62,9 @@ shared_library(
     install_dir: get_option('libdir') / 'dri',
     gnu_symbol_visibility: 'hidden',
 )
+
+meson.add_devenv(environment({
+    'NVD_LOG': '1',
+    'LIBVA_DRIVER_NAME': 'nvidia',
+    'LIBVA_DRIVERS_PATH': meson.project_build_root(),
+}))
