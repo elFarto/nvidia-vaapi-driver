@@ -37,9 +37,12 @@ void debug(EGLenum error,const char *command,EGLint messageType,EGLLabelKHR thre
 }
 
 void releaseExporter(NVDriver *drv) {
+    cuEGLStreamProducerDisconnect(&drv->cuStreamConnection);
+
     if (drv->cuStreamConnection != NULL) {
         cuEGLStreamConsumerDisconnect(&drv->cuStreamConnection);
     }
+
     if (drv->eglDisplay != EGL_NO_DISPLAY) {
         if (drv->eglStream != EGL_NO_STREAM_KHR) {
             eglDestroyStreamKHR(drv->eglDisplay, drv->eglStream);
@@ -48,8 +51,6 @@ void releaseExporter(NVDriver *drv) {
         //TODO terminate the EGLDisplay here, sounds like that could break stuff
         drv->eglDisplay = EGL_NO_DISPLAY;
     }
-
-    cuEGLStreamProducerDisconnect(&drv->cuStreamConnection);
 }
 
 void reconnect(NVDriver *drv) {
