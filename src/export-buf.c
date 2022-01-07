@@ -157,7 +157,7 @@ int exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t p
       //LOG("waiting for returned frame: %lx %d", drv->cuStreamConnection, drv->numFramesPresented);
       CUresult cuStatus = cuEGLStreamProducerReturnFrame(&drv->cuStreamConnection, &eglframe, NULL);
       if (cuStatus == CUDA_ERROR_LAUNCH_TIMEOUT) {
-        //LOG("timeout with %d outstanding", numFramesPresented);
+        //LOG("timeout with %d outstanding", drv->numFramesPresented);
         break;
       } else if (cuStatus != CUDA_SUCCESS) {
         CHECK_CUDA_RESULT(cuStatus);

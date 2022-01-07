@@ -214,7 +214,7 @@ cudaVideoCodec vaToCuCodec(VAProfile profile)
         }
     }
 
-    LOG("vaToCuCodec: Unknown codec: %d", profile);
+    //LOG("vaToCuCodec: Unknown codec: %d", profile);
     return cudaVideoCodec_NONE;
 }
 
