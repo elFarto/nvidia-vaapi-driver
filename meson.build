@@ -7,7 +7,12 @@ egl_dep = cc.find_library('EGL', required: true)
 cuda_lib = cc.find_library('cuda', required: true)
 
 if cuda_lib.found() and cc.has_function('cuInit', dependencies: cuda_lib)
-    cuda_dep = declare_dependency(dependencies: cuda_lib, include_directories: [ '/usr/include/cuda' ])
+    fs = import('fs')
+    if fs.is_dir('/opt/cuda/include')
+        cuda_dep = declare_dependency(dependencies: cuda_lib, include_directories: [ '/opt/cuda/include' ])
+    else
+        cuda_dep = declare_dependency(dependencies: cuda_lib, include_directories: [ '/usr/include/cuda' ])
+    endif
 endif
 
 cuvid_lib = cc.find_library('nvcuvid', required: true)
