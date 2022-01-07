@@ -165,6 +165,9 @@ void deleteObject(NVDriver *drv, VAGenericID id) {
     } else if (drv->objRoot->id == id) {
         Object o = drv->objRoot;
         drv->objRoot = (Object) drv->objRoot->next;
+        if (o->obj != NULL) {
+            free(o->obj);
+        }
         free(o);
     } else {
         Object last = NULL;
@@ -176,6 +179,9 @@ void deleteObject(NVDriver *drv, VAGenericID id) {
 
         if (o != NULL) {
             last->next = o->next;
+            if (o->obj != NULL) {
+                free(o->obj);
+            }
             free(o);
         }
     }
@@ -726,6 +732,13 @@ VAStatus nvDestroyBuffer(
 
     Object obj = getObject(drv, buffer_id);
 
+    if (obj->obj != NULL) {
+        NVBuffer *buf = (NVBuffer*) obj->obj;
+        if (buf->ptr != NULL) {
+            free(buf->ptr);
+        }
+    }
+
     deleteObject(drv, buffer_id);
 
     return VA_STATUS_SUCCESS;
@@ -969,6 +982,13 @@ VAStatus nvDestroyImage(
 
     Object imageBufferObj = getObjectByPtr(drv, img->imageBuffer);
     if (imageBufferObj != NULL) {
+        NVBuffer *imageBuffer = (NVBuffer*) imageBufferObj->obj;
+        if (imageBuffer != NULL){
+            if (imageBuffer->ptr != NULL) {
+                free(imageBuffer->ptr);
+            }
+        }
+
         deleteObject(drv, imageBufferObj->id);
     }
 
