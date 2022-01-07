@@ -52,7 +52,7 @@ In addition the following environment variables need to be set:
 | Variable | Value | Reason |
 |---|---|---|
 |LIBVA_DRIVER_NAME|nvidia|This forces libva to load the `nvidia` backend, as the current version doesn't know which driver to load for the nvidia-drm driver.|
-|MOZ_DISABLE_RDD_SANDBOX|1|This disables the sandbox for the RDD thread that the decoder runs in.|
+|MOZ_DISABLE_RDD_SANDBOX|1|This disables the sandbox for the RDD process that the decoder runs in.|
 
 # MPV
 
