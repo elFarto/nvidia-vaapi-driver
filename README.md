@@ -44,8 +44,7 @@ To use the driver with firefox you will need at least Firefox 96 (currently in b
 | Option | Value | Reason |
 |---|---|---|
 | media.ffmpeg.vaapi.enabled | true | Required, enables the use of VA-API.|
-| media.rdd-ffmpeg.enabled | true | Required, default on FF97. Forces ffmpeg usage into the RDD thread, rather than the content thread.|
-| media.navigator.mediadatadecoder_vpx_enabled | true | Optional, enables hardware VA-API decoding for WebRTC. |
+| media.rdd-ffmpeg.enabled | true | Required, default on FF97. Forces ffmpeg usage into the RDD process, rather than the content process.|
 | media.av1.enabled | false | Optional, disables AV1. The driver doesn't support AV1 playback yet. This will prevent sites attempting to use it and falling back to software decoding |
 | gfx.x11-egl.force-enabled | true | This driver requires that Firefox use the EGL backend. If it isn't selecting it by default, it'll need to be forced on using this option or by setting the `MOZ_X11_EGL` environment variable to `1`. It's recommended you try the environment variable method first to test it. |
 
