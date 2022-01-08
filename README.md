@@ -26,7 +26,7 @@ Currently, 10-bit videos are not supported due to the NVIDIA driver not allowing
 
 # Building
 
-You'll need the gstreamer-plugins-bad library installed.
+You'll need the gstreamer-plugins-bad library and the [nv-codec-headers](https://git.videolan.org/?p=ffmpeg/nv-codec-headers.git) installed.
 
 Then run the following commands:
 ```
