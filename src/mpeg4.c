@@ -2,7 +2,7 @@
 
 #include <math.h>
 
-void copyMPEG4PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams)
+static void copyMPEG4PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams)
 {
     //Not working, it seems that the information that VA-API supplies is not enough to feed NVDEC
     //It might be possible to reconstruct it from the supplied fields like the VDPAU implementation does.
@@ -86,7 +86,7 @@ void copyMPEG4PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picPara
 //    printf("gmc_enabled: %d\n", ppc->gmc_enabled );
 }
 
-void copyMPEG4SliceParam(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
+static void copyMPEG4SliceParam(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
 {
     ctx->lastSliceParams = buf->ptr;
     ctx->lastSliceParamsCount = buf->elements;
@@ -94,19 +94,19 @@ void copyMPEG4SliceParam(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParam
     picParams->nNumSlices += buf->elements;
 }
 
-void copyMPEG4SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
+static void copyMPEG4SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
 {
     for (int i = 0; i < ctx->lastSliceParamsCount; i++)
     {
         VASliceParameterBufferMPEG4 *sliceParams = &((VASliceParameterBufferMPEG4*) ctx->lastSliceParams)[i];
         uint32_t offset = (uint32_t) ctx->buf.size;
         appendBuffer(&ctx->sliceOffsets, &offset, sizeof(offset));
-        appendBuffer(&ctx->buf, buf->ptr + sliceParams->slice_data_offset, sliceParams->slice_data_size);
+        appendBuffer(&ctx->buf, PTROFF(buf->ptr, sliceParams->slice_data_offset), sliceParams->slice_data_size);
         picParams->nBitstreamDataLen += sliceParams->slice_data_size;
     }
 }
 
-void copyMPEG4IQMatrix(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
+static void copyMPEG4IQMatrix(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
 {
     VAIQMatrixBufferMPEG4 *iq = (VAIQMatrixBufferMPEG4*) buf->ptr;
 
@@ -121,19 +121,27 @@ void copyMPEG4IQMatrix(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
 //    }
 }
 
-cudaVideoCodec computeMPEG4CudaCodec(VAProfile profile) {
+static cudaVideoCodec computeMPEG4CudaCodec(VAProfile profile) {
     switch (profile) {
         case VAProfileH263Baseline:
         case VAProfileMPEG4Main:
         case VAProfileMPEG4Simple:
         case VAProfileMPEG4AdvancedSimple:
             return cudaVideoCodec_MPEG4;
+        default:
+            return cudaVideoCodec_NONE;
     }
-
-    return cudaVideoCodec_NONE;
 }
 //uncomment this to reenable MPEG-4 support
-/*NVCodec mpeg4Codec = {
+/*
+static const VAProfile mpeg4SupportProfiles[] = {
+    VAProfileH263Baseline,
+    VAProfileMPEG4Main,
+    VAProfileMPEG4Simple,
+    VAProfileMPEG4AdvancedSimple,
+};
+
+static const DECLARE_CODEC(mpeg4Codec) = {
     .computeCudaCodec = computeMPEG4CudaCodec,
     .handlers = {
         [VAPictureParameterBufferType] = copyMPEG4PicParam,
@@ -141,7 +149,7 @@ cudaVideoCodec computeMPEG4CudaCodec(VAProfile profile) {
         [VASliceParameterBufferType] = copyMPEG4SliceParam,
         [VASliceDataBufferType] = copyMPEG4SliceData,
     },
-    .supportedProfileCount = 4,
-    .supportedProfiles = { VAProfileH263Baseline, VAProfileMPEG4Main, VAProfileMPEG4Simple, VAProfileMPEG4AdvancedSimple }
+    .supportedProfileCount = ARRAY_SIZE(mpeg4SupportProfiles),
+    .supportedProfiles = mpeg4SupportProfiles,
 };
-DEFINE_CODEC(mpeg4Codec)*/
+*/

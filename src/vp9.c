@@ -4,7 +4,7 @@
 #define GST_USE_UNSTABLE_API
 #include <gst/codecparsers/gstvp9parser.h>
 
-void copyVP9PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams)
+static void copyVP9PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams)
 {
     VADecPictureParameterBufferVP9* buf = (VADecPictureParameterBufferVP9*) buffer->ptr;
 
@@ -69,7 +69,7 @@ void copyVP9PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams
 }
 
 GstVp9Parser *parser = NULL;
-void parseExtraInfo(void *buf, uint32_t size, CUVIDPICPARAMS *picParams) {
+static void parseExtraInfo(void *buf, uint32_t size, CUVIDPICPARAMS *picParams) {
     //TODO a bit of a hack as we don't have per decoder init/deinit functions atm
     if (parser == NULL) {
         parser = gst_vp9_parser_new ();
@@ -112,7 +112,7 @@ void parseExtraInfo(void *buf, uint32_t size, CUVIDPICPARAMS *picParams) {
     //gst_vp9_parser_free(parser);
 }
 
-void copyVP9SliceParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams)
+static void copyVP9SliceParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams)
 {
     VASliceParameterBufferVP9* buf = (VASliceParameterBufferVP9*) buffer->ptr;
     //don't bother doing anything here, we can just read it from the reparsed header
@@ -123,41 +123,47 @@ void copyVP9SliceParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picPara
     picParams->nNumSlices += buffer->elements;
 }
 
-void copyVP9SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
+static void copyVP9SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
 {
     for (int i = 0; i < ctx->lastSliceParamsCount; i++)
     {
         VASliceParameterBufferVP9 *sliceParams = &((VASliceParameterBufferVP9*) ctx->lastSliceParams)[i];
         uint32_t offset = (uint32_t) ctx->buf.size;
         appendBuffer(&ctx->sliceOffsets, &offset, sizeof(offset));
-        appendBuffer(&ctx->buf, buf->ptr + sliceParams->slice_data_offset, sliceParams->slice_data_size);
+        appendBuffer(&ctx->buf, PTROFF(buf->ptr, sliceParams->slice_data_offset), sliceParams->slice_data_size);
 
         //TODO this might not be the best place to call as we may not have a complete packet yet...
-        parseExtraInfo(buf->ptr + sliceParams->slice_data_offset, sliceParams->slice_data_size, picParams);
+        parseExtraInfo(PTROFF(buf->ptr, sliceParams->slice_data_offset), sliceParams->slice_data_size, picParams);
         picParams->nBitstreamDataLen += sliceParams->slice_data_size;
     }
 }
 
-cudaVideoCodec computeVP9CudaCodec(VAProfile profile) {
+static cudaVideoCodec computeVP9CudaCodec(VAProfile profile) {
     switch (profile) {
         case VAProfileVP9Profile0:
         case VAProfileVP9Profile1:
         case VAProfileVP9Profile2:
         case VAProfileVP9Profile3:
             return cudaVideoCodec_VP9;
+        default:
+            return cudaVideoCodec_NONE;
     }
-
-    return cudaVideoCodec_NONE;
 }
 
-NVCodec vp9Codec = {
+static const VAProfile vp9SupportedProfiles[] = {
+    VAProfileVP9Profile0,
+    VAProfileVP9Profile1,
+    VAProfileVP9Profile2,
+    VAProfileVP9Profile3,
+};
+
+static const DECLARE_CODEC(vp9Codec) = {
     .computeCudaCodec = computeVP9CudaCodec,
     .handlers = {
         [VAPictureParameterBufferType] = copyVP9PicParam,
         [VASliceParameterBufferType] = copyVP9SliceParam,
         [VASliceDataBufferType] = copyVP9SliceData,
     },
-    .supportedProfileCount = 4,
-    .supportedProfiles = { VAProfileVP9Profile0, VAProfileVP9Profile1, VAProfileVP9Profile2, VAProfileVP9Profile3 }
+    .supportedProfileCount = ARRAY_SIZE(vp9SupportedProfiles),
+    .supportedProfiles = vp9SupportedProfiles,
 };
-DEFINE_CODEC(vp9Codec)

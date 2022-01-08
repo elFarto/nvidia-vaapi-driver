@@ -86,7 +86,7 @@ typedef struct
     AppendableBuffer    buf;
     AppendableBuffer    sliceOffsets;
     CUVIDPICPARAMS      pPicParams;
-    struct _NVCodec     *codec;
+    const struct _NVCodec *codec;
 } NVContext;
 
 typedef struct
@@ -109,23 +109,20 @@ typedef struct _NVCodec
     ComputeCudaCodec    computeCudaCodec;
     HandlerFunc         handlers[VABufferTypeMax];
     int                 supportedProfileCount;
-    VAProfile           supportedProfiles[];
+    const VAProfile     *supportedProfiles;
 } NVCodec;
 
-typedef struct _NVCodecHolder
-{
-    NVCodec                 *codec;
-    struct _NVCodecHolder   *next;
-} NVCodecHolder;
-
-void appendBuffer(AppendableBuffer *ab, void *buf, uint64_t size);
+void appendBuffer(AppendableBuffer *ab, const void *buf, uint64_t size);
 int pictureIdxFromSurfaceId(NVDriver *ctx, VASurfaceID surf);
-void registerCodec(NVCodec *codec);
 void checkCudaErrors(CUresult err, const char *file, const char *function, const int line);
-void logger(const char *msg, const char *filename, const char *function, int line, ...);
-#define CHECK_CUDA_RESULT(err) checkCudaErrors(err, __FILE__, __FUNCTION__, __LINE__)
+void logger(const char *filename, const char *function, int line, const char *msg, ...);
+#define CHECK_CUDA_RESULT(err) checkCudaErrors(err, __FILE__, __func__, __LINE__)
 #define cudaVideoCodec_NONE ((cudaVideoCodec) -1)
-#define LOG(msg, ...) logger(msg, __FILE__, __FUNCTION__, __LINE__  __VA_OPT__(,) __VA_ARGS__);
-#define DEFINE_CODEC(c) __attribute__((constructor)) void reg_ ## c() { registerCodec(&c); }
+#define LOG(...) logger(__FILE__, __func__, __LINE__, __VA_ARGS__);
+#define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
+#define PTROFF(base, bytes) ((void *)((unsigned char *)(base) + (bytes)))
+#define DECLARE_CODEC(name) \
+    __attribute__((section("nvd_codecs"), used)) \
+    NVCodec name
 
 #endif // VABACKEND_H

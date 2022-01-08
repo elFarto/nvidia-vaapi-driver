@@ -23,16 +23,16 @@ EGLAPI EGLBoolean EGLAPIENTRY eglStreamReleaseImageNV (EGLDisplay dpy, EGLStream
 #endif
 #endif /* EGL_NV_stream_consumer_eglimage */
 
-PFNEGLQUERYSTREAMCONSUMEREVENTNVPROC eglQueryStreamConsumerEventNV;
-PFNEGLSTREAMRELEASEIMAGENVPROC eglStreamReleaseImageNV;
-PFNEGLSTREAMACQUIREIMAGENVPROC eglStreamAcquireImageNV;
-PFNEGLEXPORTDMABUFIMAGEMESAPROC eglExportDMABUFImageMESA;
-PFNEGLEXPORTDMABUFIMAGEQUERYMESAPROC eglExportDMABUFImageQueryMESA;
-PFNEGLCREATESTREAMKHRPROC eglCreateStreamKHR;
-PFNEGLDESTROYSTREAMKHRPROC eglDestroyStreamKHR;
-PFNEGLSTREAMIMAGECONSUMERCONNECTNVPROC eglStreamImageConsumerConnectNV;
+static PFNEGLQUERYSTREAMCONSUMEREVENTNVPROC eglQueryStreamConsumerEventNV;
+static PFNEGLSTREAMRELEASEIMAGENVPROC eglStreamReleaseImageNV;
+static PFNEGLSTREAMACQUIREIMAGENVPROC eglStreamAcquireImageNV;
+static PFNEGLEXPORTDMABUFIMAGEMESAPROC eglExportDMABUFImageMESA;
+static PFNEGLEXPORTDMABUFIMAGEQUERYMESAPROC eglExportDMABUFImageQueryMESA;
+static PFNEGLCREATESTREAMKHRPROC eglCreateStreamKHR;
+static PFNEGLDESTROYSTREAMKHRPROC eglDestroyStreamKHR;
+static PFNEGLSTREAMIMAGECONSUMERCONNECTNVPROC eglStreamImageConsumerConnectNV;
 
-void debug(EGLenum error,const char *command,EGLint messageType,EGLLabelKHR threadLabel,EGLLabelKHR objectLabel,const char* message) {
+static void debug(EGLenum error,const char *command,EGLint messageType,EGLLabelKHR threadLabel,EGLLabelKHR objectLabel,const char* message) {
     LOG("[EGL] %s: %s", command, message);
 }
 
@@ -53,7 +53,7 @@ void releaseExporter(NVDriver *drv) {
     }
 }
 
-void reconnect(NVDriver *drv) {
+static void reconnect(NVDriver *drv) {
     LOG("Reconnecting to stream");
     eglInitialize(drv->eglDisplay, NULL, NULL);
     if (drv->cuStreamConnection != NULL) {
@@ -75,7 +75,7 @@ void reconnect(NVDriver *drv) {
     drv->numFramesPresented = 0;
 }
 
-EGLDisplay findCudaDisplay() {
+static EGLDisplay findCudaDisplay() {
     PFNEGLQUERYDEVICESEXTPROC eglQueryDevicesEXT = (PFNEGLQUERYDEVICESEXTPROC) eglGetProcAddress("eglQueryDevicesEXT");
     PFNEGLQUERYDEVICEATTRIBEXTPROC eglQueryDeviceAttribEXT = (PFNEGLQUERYDEVICEATTRIBEXTPROC) eglGetProcAddress("eglQueryDeviceAttribEXT");
     if (eglQueryDevicesEXT == NULL || eglQueryDeviceAttribEXT == NULL) {
@@ -105,6 +105,8 @@ EGLDisplay findCudaDisplay() {
 }
 
 void initExporter(NVDriver *drv) {
+    static const EGLAttrib debugAttribs[] = {EGL_DEBUG_MSG_WARN_KHR, EGL_TRUE, EGL_DEBUG_MSG_INFO_KHR, EGL_TRUE, EGL_NONE};
+
     eglQueryStreamConsumerEventNV = (PFNEGLQUERYSTREAMCONSUMEREVENTNVPROC) eglGetProcAddress("eglQueryStreamConsumerEventNV");
     eglStreamReleaseImageNV = (PFNEGLSTREAMRELEASEIMAGENVPROC) eglGetProcAddress("eglStreamReleaseImageNV");
     eglStreamAcquireImageNV = (PFNEGLSTREAMACQUIREIMAGENVPROC) eglGetProcAddress("eglStreamAcquireImageNV");
@@ -115,7 +117,6 @@ void initExporter(NVDriver *drv) {
     eglStreamImageConsumerConnectNV = (PFNEGLSTREAMIMAGECONSUMERCONNECTNVPROC) eglGetProcAddress("eglStreamImageConsumerConnectNV");
 
     PFNEGLDEBUGMESSAGECONTROLKHRPROC eglDebugMessageControlKHR = (PFNEGLDEBUGMESSAGECONTROLKHRPROC) eglGetProcAddress("eglDebugMessageControlKHR");
-    EGLAttrib debugAttribs[] = {EGL_DEBUG_MSG_WARN_KHR, EGL_TRUE, EGL_DEBUG_MSG_INFO_KHR, EGL_TRUE, EGL_NONE};
 
     drv->eglDisplay = findCudaDisplay();
     if (drv->eglDisplay != NULL) {

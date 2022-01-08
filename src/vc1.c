@@ -1,6 +1,6 @@
 #include "vabackend.h"
 
-void copyVC1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams)
+static void copyVC1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams)
 {
     VAPictureParameterBufferVC1* buf = (VAPictureParameterBufferVC1*) buffer->ptr;
 
@@ -63,7 +63,7 @@ void copyVC1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams
     pps->rangeredfrm = buf->range_reduction_frame;
 }
 
-void copyVC1SliceParam(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
+static void copyVC1SliceParam(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
 {
     ctx->lastSliceParams = buf->ptr;
     ctx->lastSliceParamsCount = buf->elements;
@@ -71,24 +71,24 @@ void copyVC1SliceParam(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
     picParams->nNumSlices += buf->elements;
 }
 
-void copyVC1SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
+static void copyVC1SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
 {
     for (int i = 0; i < ctx->lastSliceParamsCount; i++)
     {
         VASliceParameterBufferVC1 *sliceParams = &((VASliceParameterBufferVC1*) ctx->lastSliceParams)[i];
         uint32_t offset = (uint32_t) ctx->buf.size;
         appendBuffer(&ctx->sliceOffsets, &offset, sizeof(offset));
-        appendBuffer(&ctx->buf, buf->ptr + sliceParams->slice_data_offset, sliceParams->slice_data_size);
+        appendBuffer(&ctx->buf, PTROFF(buf->ptr, sliceParams->slice_data_offset), sliceParams->slice_data_size);
         picParams->nBitstreamDataLen += sliceParams->slice_data_size;
     }
 }
 
-void copyVC1BitPlane(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
+static void copyVC1BitPlane(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
 {
     //not sure anything needs to be done here, but this method is here to suppress the unhandled type error
 
 }
-cudaVideoCodec computeVC1CudaCodec(VAProfile profile) {
+static cudaVideoCodec computeVC1CudaCodec(VAProfile profile) {
     if (profile == VAProfileVC1Advanced || profile == VAProfileVC1Main || profile == VAProfileVC1Simple) {
         return cudaVideoCodec_VC1;
     }
@@ -96,7 +96,13 @@ cudaVideoCodec computeVC1CudaCodec(VAProfile profile) {
     return cudaVideoCodec_NONE;
 }
 
-NVCodec vc1Codec = {
+static const VAProfile vc1SupportedProfiles[] = {
+    VAProfileVC1Simple,
+    VAProfileVC1Main,
+    VAProfileVC1Advanced,
+};
+
+static const DECLARE_CODEC(vc1Codec) = {
     .computeCudaCodec = computeVC1CudaCodec,
     .handlers = {
         [VAPictureParameterBufferType] = copyVC1PicParam,
@@ -104,7 +110,6 @@ NVCodec vc1Codec = {
         [VASliceDataBufferType] = copyVC1SliceData,
         [VABitPlaneBufferType] = copyVC1BitPlane,
     },
-    .supportedProfileCount = 3,
-    .supportedProfiles = {VAProfileVC1Simple, VAProfileVC1Main, VAProfileVC1Advanced}
+    .supportedProfileCount = ARRAY_SIZE(vc1SupportedProfiles),
+    .supportedProfiles = vc1SupportedProfiles,
 };
-DEFINE_CODEC(vc1Codec)

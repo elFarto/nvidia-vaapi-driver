@@ -2,13 +2,13 @@
 
 //TODO incomplete as no hardware to test with
 
-void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams)
+static void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams)
 {
-    VADecPictureParameterBufferAV1* buf = (VADecPictureParameterBufferAV1*) buffer->ptr;
+    static const int bit_depth_map[] = {0, 2, 4}; //8-bpc, 10-bpc, 12-bpc
 
+    VADecPictureParameterBufferAV1* buf = (VADecPictureParameterBufferAV1*) buffer->ptr;
     CUVIDAV1PICPARAMS *pps = &picParams->CodecSpecific.av1;
 
-    int bit_depth_map[] = {0, 2, 4}; //8-bpc, 10-bpc, 12-bpc
 
     picParams->PicWidthInMbs = (ctx->width + 15)/16;
     picParams->FrameHeightInMbs = (ctx->height + 15)/16;
@@ -223,7 +223,7 @@ void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams
     }
 }
 
-void copyAV1SliceParam(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
+static void copyAV1SliceParam(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
 {
     //TODO needs rework, will have multiple slice parameters buffers
     //will need to reconstruct them into a linear stream
@@ -233,36 +233,40 @@ void copyAV1SliceParam(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
     picParams->nNumSlices += buf->elements;
 }
 
-void copyAV1SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
+static void copyAV1SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
 {
     for (int i = 0; i < ctx->lastSliceParamsCount; i++)
     {
         VASliceParameterBufferVC1 *sliceParams = &((VASliceParameterBufferVC1*) ctx->lastSliceParams)[i];
         uint32_t offset = (uint32_t) ctx->buf.size;
         appendBuffer(&ctx->sliceOffsets, &offset, sizeof(offset));
-        appendBuffer(&ctx->buf, buf->ptr + sliceParams->slice_data_offset, sliceParams->slice_data_size);
+        appendBuffer(&ctx->buf, PTROFF(buf->ptr, sliceParams->slice_data_offset), sliceParams->slice_data_size);
         picParams->nBitstreamDataLen += sliceParams->slice_data_size;
     }
 }
 
-cudaVideoCodec computeAV1CudaCodec(VAProfile profile) {
+static cudaVideoCodec computeAV1CudaCodec(VAProfile profile) {
     switch (profile) {
         case VAProfileAV1Profile0:
         case VAProfileAV1Profile1:
             return cudaVideoCodec_AV1;
+        default:
+            return cudaVideoCodec_NONE;
     }
-
-    return cudaVideoCodec_NONE;
 }
 
-NVCodec av1Codec = {
+static const VAProfile av1SupportedProfiles[] =  {
+    VAProfileAV1Profile0,
+    VAProfileAV1Profile1,
+};
+
+static const DECLARE_CODEC(av1Codec) = {
     .computeCudaCodec = computeAV1CudaCodec,
     .handlers = {
         [VAPictureParameterBufferType] = copyAV1PicParam,
         [VASliceParameterBufferType] = copyAV1SliceParam,
         [VASliceDataBufferType] = copyAV1SliceData
     },
-    .supportedProfileCount = 2,
-    .supportedProfiles = {VAProfileAV1Profile0, VAProfileAV1Profile1}
+    .supportedProfileCount = ARRAY_SIZE(av1SupportedProfiles),
+    .supportedProfiles = av1SupportedProfiles,
 };
-DEFINE_CODEC(av1Codec)

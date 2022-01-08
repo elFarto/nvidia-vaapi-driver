@@ -4,21 +4,21 @@
 
 #include <stdlib.h>
 
-const uint8_t ff_hevc_diag_scan4x4_x[16] = {
+static const uint8_t ff_hevc_diag_scan4x4_x[16] = {
     0, 0, 1, 0,
     1, 2, 0, 1,
     2, 3, 1, 2,
     3, 2, 3, 3,
 };
 
-const uint8_t ff_hevc_diag_scan4x4_y[16] = {
+static const uint8_t ff_hevc_diag_scan4x4_y[16] = {
     0, 1, 0, 2,
     1, 0, 3, 2,
     1, 0, 3, 2,
     1, 3, 2, 3,
 };
 
-const uint8_t ff_hevc_diag_scan8x8_x[64] = {
+static const uint8_t ff_hevc_diag_scan8x8_x[64] = {
     0, 0, 1, 0,
     1, 2, 0, 1,
     2, 3, 0, 1,
@@ -37,7 +37,7 @@ const uint8_t ff_hevc_diag_scan8x8_x[64] = {
     7, 6, 7, 7,
 };
 
-const uint8_t ff_hevc_diag_scan8x8_y[64] = {
+static const uint8_t ff_hevc_diag_scan8x8_y[64] = {
     0, 1, 0, 2,
     1, 0, 3, 2,
     1, 0, 4, 3,
@@ -56,16 +56,16 @@ const uint8_t ff_hevc_diag_scan8x8_y[64] = {
     5, 7, 6, 7,
 };
 
-int sortFunc(const char *a, const char * b, int *POCV) {
+static int sortFunc(const char *a, const char * b, int *POCV) {
     return POCV[*a] < POCV[*b] ? -1 : 1;
 }
 
-int sortFuncRev(const char *a, const char * b, int *POCV) {
+static int sortFuncRev(const char *a, const char * b, int *POCV) {
     return POCV[*a] < POCV[*b] ? 1 : -1;
 }
 
 
-void copyHEVCPicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams)
+static void copyHEVCPicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams)
 {
     VAPictureParameterBufferHEVC* buf = (VAPictureParameterBufferHEVC*) buffer->ptr;
 
@@ -237,7 +237,7 @@ void copyHEVCPicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParam
     qsort_r(ppc->RefPicSetStCurrAfter, ppc->NumPocStCurrAfter, sizeof(unsigned char), (__compar_d_fn_t) sortFunc, ppc->PicOrderCntVal);
 }
 
-void copyHEVCSliceParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams)
+static void copyHEVCSliceParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams)
 {
     VASliceParameterBufferHEVC* buf = (VASliceParameterBufferHEVC*) buffer->ptr;
     CUVIDHEVCPICPARAMS* ppc = &picParams->CodecSpecific.hevc;
@@ -248,21 +248,22 @@ void copyHEVCSliceParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picPar
     picParams->nNumSlices += buffer->elements;
 }
 
-void copyHEVCSliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
+static void copyHEVCSliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
 {
     for (int i = 0; i < ctx->lastSliceParamsCount; i++)
     {
+        static const uint8_t header[] = { 0, 0, 1 }; //1 as a 24-bit Big Endian
+
         VASliceParameterBufferH264 *sliceParams = &((VASliceParameterBufferH264*) ctx->lastSliceParams)[i];
         uint32_t offset = (uint32_t) ctx->buf.size;
         appendBuffer(&ctx->sliceOffsets, &offset, sizeof(offset));
-        uint8_t header[] = { 0, 0, 1 }; //1 as a 24-bit Big Endian
-        appendBuffer(&ctx->buf, header, 3);
-        appendBuffer(&ctx->buf, buf->ptr + sliceParams->slice_data_offset, sliceParams->slice_data_size);
+        appendBuffer(&ctx->buf, header, sizeof(header));
+        appendBuffer(&ctx->buf, PTROFF(buf->ptr, sliceParams->slice_data_offset), sliceParams->slice_data_size);
         picParams->nBitstreamDataLen += sliceParams->slice_data_size + 3;
     }
 }
 
-void copyHEVCIQMatrix(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
+static void copyHEVCIQMatrix(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
 {
     VAIQMatrixBufferHEVC *iq = (VAIQMatrixBufferHEVC*) buf->ptr;
     CUVIDHEVCPICPARAMS* ppc = &picParams->CodecSpecific.hevc;
@@ -288,18 +289,24 @@ void copyHEVCIQMatrix(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
     }
 }
 
-cudaVideoCodec computeHEVCCudaCodec(VAProfile profile) {
+static cudaVideoCodec computeHEVCCudaCodec(VAProfile profile) {
     switch (profile) {
         case VAProfileHEVCMain:
         case VAProfileHEVCMain10:
         //case VAProfileHEVCMain12: //need to wait for ffmpeg to support this via VA-API
             return cudaVideoCodec_HEVC;
+        default:
+            return cudaVideoCodec_NONE;
     }
-
-    return cudaVideoCodec_NONE;
 }
 
-NVCodec hevcCodec = {
+static const VAProfile hevcSupportedProfiles[] = {
+    VAProfileHEVCMain,
+    VAProfileHEVCMain10,
+    // VAProfileHEVCMain12,
+};
+
+static const DECLARE_CODEC(hevcCodec) = {
     .computeCudaCodec = computeHEVCCudaCodec,
     .handlers = {
         [VAPictureParameterBufferType] = copyHEVCPicParam,
@@ -307,7 +314,6 @@ NVCodec hevcCodec = {
         [VASliceParameterBufferType] = copyHEVCSliceParam,
         [VASliceDataBufferType] = copyHEVCSliceData,
     },
-    .supportedProfileCount = 2,//3,
-    .supportedProfiles = { VAProfileHEVCMain, VAProfileHEVCMain10 /*, VAProfileHEVCMain12 */ }
+    .supportedProfileCount = ARRAY_SIZE(hevcSupportedProfiles),
+    .supportedProfiles = hevcSupportedProfiles,
 };
-DEFINE_CODEC(hevcCodec)
