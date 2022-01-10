@@ -16,24 +16,7 @@ cc = meson.get_compiler('c')
 m_dep = cc.find_library('m')
 egl_dep = cc.find_library('EGL')
 gst_codecs_deps = dependency('gstreamer-codecparsers-1.0')
-
-cuda_lib = cc.find_library('cuda')
-if not cc.has_function('cuInit', dependencies: cuda_lib)
-    error('cuInit() function not found')
-endif
-
-fs = import('fs')
-if fs.is_dir('/opt/cuda/include')
-    cuda_dep = declare_dependency(dependencies: cuda_lib, include_directories: [ '/opt/cuda/include' ])
-else
-    cuda_dep = declare_dependency(dependencies: cuda_lib, include_directories: [ '/usr/include/cuda' ])
-endif
-
-cuvid_lib = cc.find_library('nvcuvid')
-cuvid_dep = declare_dependency(dependencies: cuvid_lib, include_directories: [])
-if not cc.has_function('cuvidCtxLock', dependencies: cuvid_dep)
-    error('cuvidCtxLock() function not found')
-endif
+ffnvcodec_deps = dependency('ffnvcodec', version: '>= 11.1.5.1')
 
 shared_library(
     'nvidia_drv_video',
@@ -52,8 +35,7 @@ shared_library(
         'src/vp9.c',
     ],
     dependencies: [
-        cuda_dep,
-        cuvid_dep,
+        ffnvcodec_deps,
         gst_codecs_deps,
         egl_dep,
         m_dep,

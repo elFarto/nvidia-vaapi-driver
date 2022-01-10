@@ -1,10 +1,10 @@
 #ifndef VABACKEND_H
 #define VABACKEND_H
 
-#include "cuviddec.h"
+#include <ffnvcodec/dynlink_loader.h>
 #include <va/va_backend.h>
 #include <EGL/egl.h>
-#include <cudaEGL.h>
+#include <EGL/eglext.h>
 
 typedef struct {
     void        *buf;
@@ -60,6 +60,8 @@ typedef struct
 
 typedef struct
 {
+    CudaFunctions           *cu;
+    CuvidFunctions          *cv;
     CUcontext               cudaContext;
     Object                  objRoot;
     VAGenericID             nextObjId;

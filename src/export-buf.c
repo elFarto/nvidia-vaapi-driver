@@ -1,7 +1,6 @@
 #include "export-buf.h"
 #include <stdio.h>
-#include <cuda.h>
-#include <cudaEGL.h>
+#include <ffnvcodec/dynlink_loader.h>
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 
@@ -37,10 +36,10 @@ static void debug(EGLenum error,const char *command,EGLint messageType,EGLLabelK
 }
 
 void releaseExporter(NVDriver *drv) {
-    cuEGLStreamProducerDisconnect(&drv->cuStreamConnection);
+    drv->cu->cuEGLStreamProducerDisconnect(&drv->cuStreamConnection);
 
     if (drv->cuStreamConnection != NULL) {
-        cuEGLStreamConsumerDisconnect(&drv->cuStreamConnection);
+        drv->cu->cuEGLStreamConsumerDisconnect(&drv->cuStreamConnection);
     }
 
     if (drv->eglDisplay != EGL_NO_DISPLAY) {
@@ -57,7 +56,7 @@ static void reconnect(NVDriver *drv) {
     LOG("Reconnecting to stream");
     eglInitialize(drv->eglDisplay, NULL, NULL);
     if (drv->cuStreamConnection != NULL) {
-        cuEGLStreamConsumerDisconnect(&drv->cuStreamConnection);
+        drv->cu->cuEGLStreamConsumerDisconnect(&drv->cuStreamConnection);
     }
     if (drv->eglStream != EGL_NO_STREAM_KHR) {
         eglDestroyStreamKHR(drv->eglDisplay, drv->eglStream);
@@ -71,7 +70,7 @@ static void reconnect(NVDriver *drv) {
         LOG("Unable to connect EGLImage stream consumer");
         return;
     }
-    CHECK_CUDA_RESULT(cuEGLStreamProducerConnect(&drv->cuStreamConnection, drv->eglStream, 1024, 1024));
+    CHECK_CUDA_RESULT(drv->cu->cuEGLStreamProducerConnect(&drv->cuStreamConnection, drv->eglStream, 1024, 1024));
     drv->numFramesPresented = 0;
 }
 
@@ -156,7 +155,7 @@ int exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t p
     //TODO if we ever have more than 1 frame returned a frame, we'll leak that memory
     while (drv->numFramesPresented > 0) {
       //LOG("waiting for returned frame: %lx %d", drv->cuStreamConnection, drv->numFramesPresented);
-      CUresult cuStatus = cuEGLStreamProducerReturnFrame(&drv->cuStreamConnection, &eglframe, NULL);
+      CUresult cuStatus = drv->cu->cuEGLStreamProducerReturnFrame(&drv->cuStreamConnection, &eglframe, NULL);
       if (cuStatus == CUDA_ERROR_LAUNCH_TIMEOUT) {
         //LOG("timeout with %d outstanding", drv->numFramesPresented);
         break;
@@ -175,11 +174,11 @@ int exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t p
     //TODO figure out how to get the EGLimage freed aswell
     if (eglframe.width != width && eglframe.height != height) {
         if (eglframe.frame.pArray[0] != NULL) {
-            cuArrayDestroy(eglframe.frame.pArray[0]);
+            drv->cu->cuArrayDestroy(eglframe.frame.pArray[0]);
             eglframe.frame.pArray[0] = NULL;
         }
         if (eglframe.frame.pArray[1] != NULL) {
-            cuArrayDestroy(eglframe.frame.pArray[1]);
+            drv->cu->cuArrayDestroy(eglframe.frame.pArray[1]);
             eglframe.frame.pArray[1] = NULL;
         }
     }
@@ -230,7 +229,7 @@ int exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t p
             .Flags = 0,
             .Format = eglframe.cuFormat
         };
-        CHECK_CUDA_RESULT(cuArray3DCreate(&eglframe.frame.pArray[0], &arrDesc));
+        CHECK_CUDA_RESULT(drv->cu->cuArray3DCreate(&eglframe.frame.pArray[0], &arrDesc));
     }
     if (eglframe.frame.pArray[1] == NULL) {
         CUDA_ARRAY3D_DESCRIPTOR arr2Desc = {
@@ -241,7 +240,7 @@ int exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t p
             .Flags = 0,
             .Format = eglframe.cuFormat
         };
-        CHECK_CUDA_RESULT(cuArray3DCreate(&eglframe.frame.pArray[1], &arr2Desc));
+        CHECK_CUDA_RESULT(drv->cu->cuArray3DCreate(&eglframe.frame.pArray[1], &arr2Desc));
     }
     if (ptr != 0) {
         CUDA_MEMCPY2D cpy = {
@@ -253,7 +252,7 @@ int exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t p
             .Height = height,
             .WidthInBytes = width * bpp
         };
-        CHECK_CUDA_RESULT(cuMemcpy2D(&cpy));
+        CHECK_CUDA_RESULT(drv->cu->cuMemcpy2D(&cpy));
         CUDA_MEMCPY2D cpy2 = {
             .srcMemoryType = CU_MEMORYTYPE_DEVICE,
             .srcDevice = ptr,
@@ -264,13 +263,13 @@ int exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t p
             .Height = height >> 1,
             .WidthInBytes = width * bpp
         };
-        CHECK_CUDA_RESULT(cuMemcpy2D(&cpy2));
+        CHECK_CUDA_RESULT(drv->cu->cuMemcpy2D(&cpy2));
     }
 
-    CUresult ret = cuEGLStreamProducerPresentFrame( &drv->cuStreamConnection, eglframe, NULL );
+    CUresult ret = drv->cu->cuEGLStreamProducerPresentFrame( &drv->cuStreamConnection, eglframe, NULL );
     if (ret == CUDA_ERROR_UNKNOWN) {
         reconnect(drv);
-        CHECK_CUDA_RESULT(cuEGLStreamProducerPresentFrame( &drv->cuStreamConnection, eglframe, NULL ));
+        CHECK_CUDA_RESULT(drv->cu->cuEGLStreamProducerPresentFrame( &drv->cuStreamConnection, eglframe, NULL ));
     }
 
     drv->numFramesPresented++;

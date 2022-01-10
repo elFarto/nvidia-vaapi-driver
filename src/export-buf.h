@@ -2,7 +2,6 @@
 #define EXPORT_BUF_H
 
 #include "vabackend.h"
-#include <cuda.h>
 
 void initExporter(NVDriver *drv);
 void releaseExporter(NVDriver *drv);
