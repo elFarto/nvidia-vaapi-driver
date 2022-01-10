@@ -14,6 +14,7 @@ project(
 cc = meson.get_compiler('c')
 
 m_dep = cc.find_library('m')
+dl_dep = cc.find_library('dl')
 egl_dep = cc.find_library('EGL')
 gst_codecs_deps = dependency('gstreamer-codecparsers-1.0')
 ffnvcodec_deps = dependency('ffnvcodec', version: '>= 11.1.5.1')
@@ -39,6 +40,7 @@ shared_library(
         gst_codecs_deps,
         egl_dep,
         m_dep,
+        dl_dep,
     ],
     install: true,
     install_dir: get_option('libdir') / 'dri',
