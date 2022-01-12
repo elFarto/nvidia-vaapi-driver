@@ -14,7 +14,7 @@ project(
 cc = meson.get_compiler('c')
 
 m_dep = cc.find_library('m')
-dl_dep = cc.find_library('dl')
+dl_dep = cc.find_library('dl', required : false)
 egl_dep = cc.find_library('EGL')
 gst_codecs_deps = dependency('gstreamer-codecparsers-1.0')
 ffnvcodec_deps = dependency('ffnvcodec', version: '>= 11.1.5.1')

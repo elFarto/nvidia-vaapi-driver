@@ -49,6 +49,27 @@ static void init() {
             }
         }
     }
+
+    int ret;
+
+    ret = cuda_load_functions(&cu, NULL);
+    if (ret != 0) {
+        LOG("Failed to load CUDA functions");
+        return;
+    }
+    ret = cuvid_load_functions(&cv, NULL);
+    if (ret != 0) {
+        LOG("Failed to load NVDEC functions");
+        return;
+    }
+
+    CHECK_CUDA_RESULT(cu->cuInit(0));
+}
+
+__attribute__ ((destructor))
+static void cleanup() {
+    cuvid_free_functions(&cv);
+    cuda_free_functions(&cu);
 }
 
 void logger(const char *filename, const char *function, int line, const char *msg, ...) {
@@ -1537,8 +1558,6 @@ static VAStatus nvTerminate( VADriverContextP ctx )
     releaseExporter(drv);
 
     cu->cuCtxDestroy(drv->cudaContext);
-    cuvid_free_functions(&drv->cv);
-    cuda_free_functions(&drv->cu);
 
     return VA_STATUS_SUCCESS;
 }
@@ -1550,22 +1569,13 @@ VAStatus __vaDriverInit_1_0(VADriverContextP ctx)
     NVDriver *drv = (NVDriver*) calloc(1, sizeof(NVDriver));
     ctx->pDriverData = drv;
 
-    int ret;
+    if (cu == NULL || cv == NULL) {
+        return VA_STATUS_ERROR_OPERATION_FAILED;
+    }
 
-    ret = cuda_load_functions(&cu, NULL);
-    if (ret != 0) {
-        LOG("Failed to load CUDA functions");
-        return VA_STATUS_ERROR_OPERATION_FAILED;
-    }
-    ret = cuvid_load_functions(&cv, NULL);
-    if (ret != 0) {
-        LOG("Failed to load NVDEC functions");
-        return VA_STATUS_ERROR_OPERATION_FAILED;
-    }
     drv->cu = cu;
     drv->cv = cv;
 
-    CHECK_CUDA_RESULT(cu->cuInit(0));
     CHECK_CUDA_RESULT(cu->cuCtxCreate(&drv->cudaContext, CU_CTX_SCHED_BLOCKING_SYNC, 0));
 
     ctx->max_profiles = MAX_PROFILES;
