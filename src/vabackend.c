@@ -50,15 +50,16 @@ static void init() {
         }
     }
 
-    int ret;
-
-    ret = cuda_load_functions(&cu, NULL);
+    //initialise the CUDA and NVDEC functions
+    int ret = cuda_load_functions(&cu, NULL);
     if (ret != 0) {
+        cu = NULL;
         LOG("Failed to load CUDA functions");
         return;
     }
     ret = cuvid_load_functions(&cv, NULL);
     if (ret != 0) {
+        cv = NULL;
         LOG("Failed to load NVDEC functions");
         return;
     }
@@ -68,8 +69,12 @@ static void init() {
 
 __attribute__ ((destructor))
 static void cleanup() {
-    cuvid_free_functions(&cv);
-    cuda_free_functions(&cu);
+    if (cv != NULL) {
+        cuvid_free_functions(&cv);
+    }
+    if (cu != NULL) {
+        cuda_free_functions(&cu);
+    }
 }
 
 void logger(const char *filename, const char *function, int line, const char *msg, ...) {
@@ -1549,7 +1554,6 @@ static VAStatus nvExportSurfaceHandle(
     return VA_STATUS_SUCCESS;
 }
 
-
 static VAStatus nvTerminate( VADriverContextP ctx )
 {
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
@@ -1566,12 +1570,14 @@ __attribute__((visibility("default")))
 VAStatus __vaDriverInit_1_0(VADriverContextP ctx)
 {
     LOG("Initing NVIDIA VA-API Driver");
-    NVDriver *drv = (NVDriver*) calloc(1, sizeof(NVDriver));
-    ctx->pDriverData = drv;
 
+    //check to make sure we initialised the CUDA functions correctly
     if (cu == NULL || cv == NULL) {
         return VA_STATUS_ERROR_OPERATION_FAILED;
     }
+
+    NVDriver *drv = (NVDriver*) calloc(1, sizeof(NVDriver));
+    ctx->pDriverData = drv;
 
     drv->cu = cu;
     drv->cv = cv;
