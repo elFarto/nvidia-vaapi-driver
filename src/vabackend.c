@@ -26,9 +26,6 @@
 #include <sys/types.h>
 #include <stdarg.h>
 
-static CudaFunctions *cu;
-static CuvidFunctions *cv;
-
 extern const NVCodec __start_nvd_codecs[];
 extern const NVCodec __stop_nvd_codecs[];
 
@@ -66,12 +63,12 @@ void logger(const char *filename, const char *function, int line, const char *ms
     fprintf(LOG_OUTPUT, "[%d-%d] %s:%4d %24s %s\n", getpid(), gettid(), filename, line, function, formattedMessage);
 }
 
-void checkCudaErrors(CUresult err, const char *file, const char *function, const int line)
+void checkCudaErrors(NVDriver *drv, CUresult err, const char *file, const char *function, const int line)
 {
     if (CUDA_SUCCESS != err)
     {
         const char *errStr = NULL;
-        cu->cuGetErrorString(err, &errStr);
+        drv->cu->cuGetErrorString(err, &errStr);
         logger(file, function, line, "cuda error '%s' (%d)\n", errStr, err);
         exit(EXIT_FAILURE);
     }
@@ -213,7 +210,7 @@ static cudaVideoCodec vaToCuCodec(VAProfile profile)
     return cudaVideoCodec_NONE;
 }
 
-static int doesGPUSupportCodec(cudaVideoCodec codec, int bitDepth, cudaVideoChromaFormat chromaFormat, int *width, int *height)
+static int doesGPUSupportCodec(NVDriver *drv, cudaVideoCodec codec, int bitDepth, cudaVideoChromaFormat chromaFormat, int *width, int *height)
 {
     CUVIDDECODECAPS videoDecodeCaps;
     memset(&videoDecodeCaps, 0, sizeof(CUVIDDECODECAPS));
@@ -221,7 +218,7 @@ static int doesGPUSupportCodec(cudaVideoCodec codec, int bitDepth, cudaVideoChro
     videoDecodeCaps.eChromaFormat   = chromaFormat;
     videoDecodeCaps.nBitDepthMinus8 = bitDepth - 8;
 
-    CHECK_CUDA_RESULT(cv->cuvidGetDecoderCaps(&videoDecodeCaps));
+    CHECK_CUDA_RESULT(drv->cv->cuvidGetDecoderCaps(&videoDecodeCaps));
     if (width != NULL) {
         *width = videoDecodeCaps.nMaxWidth;
     }
@@ -239,81 +236,81 @@ static VAStatus nvQueryConfigProfiles(
     )
 {
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
-    cu->cuCtxPushCurrent(drv->cudaContext);
+    drv->cu->cuCtxPushCurrent(drv->cudaContext);
 
     int profiles = 0;
-    if (doesGPUSupportCodec(cudaVideoCodec_MPEG2, 8, cudaVideoChromaFormat_420, NULL, NULL)) {
+    if (doesGPUSupportCodec(drv, cudaVideoCodec_MPEG2, 8, cudaVideoChromaFormat_420, NULL, NULL)) {
         profile_list[profiles++] = VAProfileMPEG2Simple;
         profile_list[profiles++] = VAProfileMPEG2Main;
     }
-    if (doesGPUSupportCodec(cudaVideoCodec_MPEG4, 8, cudaVideoChromaFormat_420, NULL, NULL)) {
+    if (doesGPUSupportCodec(drv, cudaVideoCodec_MPEG4, 8, cudaVideoChromaFormat_420, NULL, NULL)) {
         profile_list[profiles++] = VAProfileMPEG4Simple;
         profile_list[profiles++] = VAProfileMPEG4AdvancedSimple;
         profile_list[profiles++] = VAProfileMPEG4Main;
     }
-    if (doesGPUSupportCodec(cudaVideoCodec_VC1, 8, cudaVideoChromaFormat_420, NULL, NULL)) {
+    if (doesGPUSupportCodec(drv, cudaVideoCodec_VC1, 8, cudaVideoChromaFormat_420, NULL, NULL)) {
         profile_list[profiles++] = VAProfileVC1Simple;
         profile_list[profiles++] = VAProfileVC1Main;
         profile_list[profiles++] = VAProfileVC1Advanced;
     }
-    if (doesGPUSupportCodec(cudaVideoCodec_H264, 8, cudaVideoChromaFormat_420, NULL, NULL)) {
+    if (doesGPUSupportCodec(drv, cudaVideoCodec_H264, 8, cudaVideoChromaFormat_420, NULL, NULL)) {
         profile_list[profiles++] = VAProfileH264Baseline;
         profile_list[profiles++] = VAProfileH264Main;
         profile_list[profiles++] = VAProfileH264High;
         profile_list[profiles++] = VAProfileH264ConstrainedBaseline;
     }
-    if (doesGPUSupportCodec(cudaVideoCodec_JPEG, 8, cudaVideoChromaFormat_420, NULL, NULL)) {
+    if (doesGPUSupportCodec(drv, cudaVideoCodec_JPEG, 8, cudaVideoChromaFormat_420, NULL, NULL)) {
         profile_list[profiles++] = VAProfileJPEGBaseline;
     }
-    if (doesGPUSupportCodec(cudaVideoCodec_H264_SVC, 8, cudaVideoChromaFormat_420, NULL, NULL)) {
+    if (doesGPUSupportCodec(drv, cudaVideoCodec_H264_SVC, 8, cudaVideoChromaFormat_420, NULL, NULL)) {
         profile_list[profiles++] = VAProfileH264StereoHigh;
     }
-    if (doesGPUSupportCodec(cudaVideoCodec_H264_MVC, 8, cudaVideoChromaFormat_420, NULL, NULL)) {
+    if (doesGPUSupportCodec(drv, cudaVideoCodec_H264_MVC, 8, cudaVideoChromaFormat_420, NULL, NULL)) {
         profile_list[profiles++] = VAProfileH264MultiviewHigh;
     }
-    if (doesGPUSupportCodec(cudaVideoCodec_HEVC, 8, cudaVideoChromaFormat_420, NULL, NULL)) {
+    if (doesGPUSupportCodec(drv, cudaVideoCodec_HEVC, 8, cudaVideoChromaFormat_420, NULL, NULL)) {
         profile_list[profiles++] = VAProfileHEVCMain;
     }
-//    if (doesGPUSupportCodec(cudaVideoCodec_HEVC, 10, cudaVideoChromaFormat_420, NULL, NULL)) {
+//    if (doesGPUSupportCodec(drv, cudaVideoCodec_HEVC, 10, cudaVideoChromaFormat_420, NULL, NULL)) {
 //        profile_list[profiles++] = VAProfileHEVCMain10;
 //    }
-//    if (doesGPUSupportCodec(cudaVideoCodec_HEVC, 10, cudaVideoChromaFormat_420, NULL, NULL)) {
+//    if (doesGPUSupportCodec(drv, cudaVideoCodec_HEVC, 10, cudaVideoChromaFormat_420, NULL, NULL)) {
 //        profile_list[profiles++] = VAProfileHEVCMain422_10;
 //    }
-//    if (doesGPUSupportCodec(cudaVideoCodec_HEVC, 12, cudaVideoChromaFormat_420, NULL, NULL)) {
+//    if (doesGPUSupportCodec(drv, cudaVideoCodec_HEVC, 12, cudaVideoChromaFormat_420, NULL, NULL)) {
 //        profile_list[profiles++] = VAProfileHEVCMain422_12;
 //    }
-//    if (doesGPUSupportCodec(cudaVideoCodec_HEVC, 8, cudaVideoChromaFormat_420, NULL, NULL)) {
+//    if (doesGPUSupportCodec(drv, cudaVideoCodec_HEVC, 8, cudaVideoChromaFormat_420, NULL, NULL)) {
 //        profile_list[profiles++] = VAProfileHEVCMain444;
 //    }
-//    if (doesGPUSupportCodec(cudaVideoCodec_HEVC, 10, cudaVideoChromaFormat_420, NULL, NULL)) {
+//    if (doesGPUSupportCodec(drv, cudaVideoCodec_HEVC, 10, cudaVideoChromaFormat_420, NULL, NULL)) {
 //        profile_list[profiles++] = VAProfileHEVCMain444_10;
 //    }
-//    if (doesGPUSupportCodec(cudaVideoCodec_HEVC, 12, cudaVideoChromaFormat_420, NULL, NULL)) {
+//    if (doesGPUSupportCodec(drv, cudaVideoCodec_HEVC, 12, cudaVideoChromaFormat_420, NULL, NULL)) {
 //        profile_list[profiles++] = VAProfileHEVCMain444_12;
 //    }
-//    if (doesGPUSupportCodec(cudaVideoCodec_HEVC, 12, cudaVideoChromaFormat_420, NULL, NULL)) {
+//    if (doesGPUSupportCodec(drv, cudaVideoCodec_HEVC, 12, cudaVideoChromaFormat_420, NULL, NULL)) {
 //        profile_list[profiles++] = VAProfileHEVCMain12;
 //    }
-    if (doesGPUSupportCodec(cudaVideoCodec_VP8, 8, cudaVideoChromaFormat_420, NULL, NULL)) {
+    if (doesGPUSupportCodec(drv, cudaVideoCodec_VP8, 8, cudaVideoChromaFormat_420, NULL, NULL)) {
         profile_list[profiles++] = VAProfileVP8Version0_3;
     }
-    if (doesGPUSupportCodec(cudaVideoCodec_VP9, 8, cudaVideoChromaFormat_420, NULL, NULL)) {
+    if (doesGPUSupportCodec(drv, cudaVideoCodec_VP9, 8, cudaVideoChromaFormat_420, NULL, NULL)) {
         profile_list[profiles++] = VAProfileVP9Profile0; //color depth: 8 bit, 4:2:0
     }
-    if (doesGPUSupportCodec(cudaVideoCodec_VP9, 8, cudaVideoChromaFormat_444, NULL, NULL)) {
+    if (doesGPUSupportCodec(drv, cudaVideoCodec_VP9, 8, cudaVideoChromaFormat_444, NULL, NULL)) {
         profile_list[profiles++] = VAProfileVP9Profile1; //color depth: 8 bit, 4:2:2, 4:4:0, 4:4:4
     }
-//    if (doesGPUSupportCodec(cudaVideoCodec_VP9, 10, cudaVideoChromaFormat_420, NULL, NULL)) {
+//    if (doesGPUSupportCodec(drv, cudaVideoCodec_VP9, 10, cudaVideoChromaFormat_420, NULL, NULL)) {
 //        profile_list[profiles++] = VAProfileVP9Profile2; //color depth: 10–12 bit, 4:2:0
 //    }
-//    if (doesGPUSupportCodec(cudaVideoCodec_VP9, 10, cudaVideoChromaFormat_444, NULL, NULL)) {
+//    if (doesGPUSupportCodec(drv, cudaVideoCodec_VP9, 10, cudaVideoChromaFormat_444, NULL, NULL)) {
 //        profile_list[profiles++] = VAProfileVP9Profile3; //color depth: 10–12 bit, 4:2:2, 4:4:0, 4:4:4
 //    }
-//    if (doesGPUSupportCodec(cudaVideoCodec_AV1, 8, cudaVideoChromaFormat_420, NULL, NULL)) {
+//    if (doesGPUSupportCodec(drv, cudaVideoCodec_AV1, 8, cudaVideoChromaFormat_420, NULL, NULL)) {
 //        profile_list[profiles++] = VAProfileAV1Profile0;
 //    }
-//    if (doesGPUSupportCodec(cudaVideoCodec_AV1, 8, cudaVideoChromaFormat_444, NULL, NULL)) {
+//    if (doesGPUSupportCodec(drv, cudaVideoCodec_AV1, 8, cudaVideoChromaFormat_444, NULL, NULL)) {
 //        profile_list[profiles++] = VAProfileAV1Profile1;
 //    }
 
@@ -331,7 +328,7 @@ static VAStatus nvQueryConfigProfiles(
 
     *num_profiles = profiles;
 
-    cu->cuCtxPopCurrent(NULL);
+    drv->cu->cuCtxPopCurrent(NULL);
 
     return VA_STATUS_SUCCESS;
 }
@@ -357,6 +354,8 @@ static VAStatus nvGetConfigAttributes(
         int num_attribs
     )
 {
+    NVDriver *drv = (NVDriver*) ctx->pDriverData;
+
     if (vaToCuCodec(profile) == cudaVideoCodec_NONE) {
         return VA_STATUS_ERROR_UNSUPPORTED_PROFILE;
     }
@@ -373,11 +372,11 @@ static VAStatus nvGetConfigAttributes(
         }
         else if (attrib_list[i].type == VAConfigAttribMaxPictureWidth)
         {
-            doesGPUSupportCodec(vaToCuCodec(profile), 8, cudaVideoChromaFormat_420, &attrib_list[i].value, NULL);
+            doesGPUSupportCodec(drv, vaToCuCodec(profile), 8, cudaVideoChromaFormat_420, &attrib_list[i].value, NULL);
         }
         else if (attrib_list[i].type == VAConfigAttribMaxPictureHeight)
         {
-            doesGPUSupportCodec(vaToCuCodec(profile), 8, cudaVideoChromaFormat_420, NULL, &attrib_list[i].value);
+            doesGPUSupportCodec(drv, vaToCuCodec(profile), 8, cudaVideoChromaFormat_420, NULL, &attrib_list[i].value);
         }
         else
         {
@@ -579,9 +578,9 @@ static VAStatus nvCreateContext(
     vdci.ulTargetHeight = picture_height;
     vdci.ulNumOutputSurfaces = num_render_targets;
 
-    cv->cuvidCtxLockCreate(&vdci.vidLock, drv->cudaContext);
+    drv->cv->cuvidCtxLockCreate(&vdci.vidLock, drv->cudaContext);
 
-    CUresult result = cv->cuvidCreateDecoder(&decoder, &vdci);
+    CUresult result = drv->cv->cuvidCreateDecoder(&decoder, &vdci);
 
     if (result != CUDA_SUCCESS)
     {
@@ -648,7 +647,7 @@ static VAStatus nvDestroyContext(
 
       if (decoder != NULL)
       {
-        CUresult result = cv->cuvidDestroyDecoder(decoder);
+        CUresult result = drv->cv->cuvidDestroyDecoder(decoder);
         if (result != CUDA_SUCCESS)
         {
             LOG("cuvidDestroyDecoder failed: %d", result);
@@ -808,7 +807,7 @@ static VAStatus nvEndPicture(
 
     picParams->CurrPicIdx = nvCtx->renderTargets->pictureIdx;
 
-    CUresult result = cv->cuvidDecodePicture(nvCtx->decoder, picParams);
+    CUresult result = drv->cv->cuvidDecodePicture(nvCtx->decoder, picParams);
 
     if (result != CUDA_SUCCESS)
     {
@@ -1050,7 +1049,7 @@ static VAStatus nvGetImage(
     CUdeviceptr deviceMemory = (CUdeviceptr) NULL;
     unsigned int pitch;
 
-    CUresult result = cv->cuvidMapVideoFrame(context->decoder, surfaceObj->pictureIdx, &deviceMemory, &pitch, &procParams);
+    CUresult result = drv->cv->cuvidMapVideoFrame(context->decoder, surfaceObj->pictureIdx, &deviceMemory, &pitch, &procParams);
     LOG("got address %X for surface %d", deviceMemory, getObject(drv, surface)->id);
 
     if (result != CUDA_SUCCESS)
@@ -1074,14 +1073,14 @@ static VAStatus nvGetImage(
       .Height = height + (height>>1) //luma and chroma
     };
 
-    result = cu->cuMemcpy2D(&memcpy2d);
+    result = drv->cu->cuMemcpy2D(&memcpy2d);
     if (result != CUDA_SUCCESS)
     {
             LOG("cuMemcpy2D failed: %d", result);
             return VA_STATUS_ERROR_DECODING_ERROR;
     }
 
-    cv->cuvidUnmapVideoFrame(context->decoder, deviceMemory);
+    drv->cv->cuvidUnmapVideoFrame(context->decoder, deviceMemory);
 
 //    static int counter = 0;
 //    char filename[64];
@@ -1265,9 +1264,9 @@ static VAStatus nvQuerySurfaceAttributes(
             .nBitDepthMinus8 = cfg->bitDepth - 8
         };
 
-        CHECK_CUDA_RESULT(cu->cuCtxPushCurrent(drv->cudaContext));
-        CUresult result = cv->cuvidGetDecoderCaps(&videoDecodeCaps);
-        cu->cuCtxPopCurrent(NULL);
+        CHECK_CUDA_RESULT(drv->cu->cuCtxPushCurrent(drv->cudaContext));
+        CUresult result = drv->cv->cuvidGetDecoderCaps(&videoDecodeCaps);
+        drv->cu->cuCtxPopCurrent(NULL);
         if (result != CUDA_SUCCESS) {
             CHECK_CUDA_RESULT(result);
             return VA_STATUS_ERROR_OPERATION_FAILED;
@@ -1461,7 +1460,7 @@ static VAStatus nvExportSurfaceHandle(
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
     LOG("got %p", drv);
 
-    cu->cuCtxPushCurrent(drv->cudaContext);
+    drv->cu->cuCtxPushCurrent(drv->cudaContext);
 
     NVSurface *surfaceObj = (NVSurface*) getObjectPtr(drv, surface_id);
     //This will be NULL for surfaces that haven't been end
@@ -1480,7 +1479,7 @@ static VAStatus nvExportSurfaceHandle(
         procParams.top_field_first = surfaceObj->topFieldFirst;
         procParams.second_field = surfaceObj->secondField;
 
-        CHECK_CUDA_RESULT(cv->cuvidMapVideoFrame(context->decoder, surfaceObj->pictureIdx, &deviceMemory, &pitch, &procParams));
+        CHECK_CUDA_RESULT(drv->cv->cuvidMapVideoFrame(context->decoder, surfaceObj->pictureIdx, &deviceMemory, &pitch, &procParams));
         LOG("got address %llX (%d) for surface %d (picIdx: %d)", deviceMemory, pitch, surface_id, surfaceObj->pictureIdx);
     } else {
         pitch = surfaceObj->width;
@@ -1492,7 +1491,7 @@ static VAStatus nvExportSurfaceHandle(
 
     //since we have to make a copy of the data anyway, we can unmap here
     if (surfaceObj->pictureIdx != -1) {
-        cv->cuvidUnmapVideoFrame(context->decoder, deviceMemory);
+        drv->cv->cuvidUnmapVideoFrame(context->decoder, deviceMemory);
     }
 
     //TODO only support 420 images (either NV12, P010 or P012)
@@ -1523,7 +1522,7 @@ static VAStatus nvExportSurfaceHandle(
     ptr->layers[1].offset[0] = offsets[1];
     ptr->layers[1].pitch[0] = strides[1];
 
-    cu->cuCtxPopCurrent(NULL);
+    drv->cu->cuCtxPopCurrent(NULL);
 
     return VA_STATUS_SUCCESS;
 }
@@ -1536,7 +1535,7 @@ static VAStatus nvTerminate( VADriverContextP ctx )
 
     releaseExporter(drv);
 
-    cu->cuCtxDestroy(drv->cudaContext);
+    drv->cu->cuCtxDestroy(drv->cudaContext);
     cuvid_free_functions(&drv->cv);
     cuda_free_functions(&drv->cu);
 
@@ -1552,21 +1551,19 @@ VAStatus __vaDriverInit_1_0(VADriverContextP ctx)
 
     int ret;
 
-    ret = cuda_load_functions(&cu, NULL);
+    ret = cuda_load_functions(&drv->cu, NULL);
     if (ret != 0) {
         LOG("Failed to load CUDA functions");
         return VA_STATUS_ERROR_OPERATION_FAILED;
     }
-    ret = cuvid_load_functions(&cv, NULL);
+    ret = cuvid_load_functions(&drv->cv, NULL);
     if (ret != 0) {
         LOG("Failed to load NVDEC functions");
         return VA_STATUS_ERROR_OPERATION_FAILED;
     }
-    drv->cu = cu;
-    drv->cv = cv;
 
-    CHECK_CUDA_RESULT(cu->cuInit(0));
-    CHECK_CUDA_RESULT(cu->cuCtxCreate(&drv->cudaContext, CU_CTX_SCHED_BLOCKING_SYNC, 0));
+    CHECK_CUDA_RESULT(drv->cu->cuInit(0));
+    CHECK_CUDA_RESULT(drv->cu->cuCtxCreate(&drv->cudaContext, CU_CTX_SCHED_BLOCKING_SYNC, 0));
 
     ctx->max_profiles = MAX_PROFILES;
     ctx->max_entrypoints = 1;
