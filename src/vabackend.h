@@ -5,6 +5,7 @@
 #include <va/va_backend.h>
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
+#include <stdbool.h>
 
 typedef struct {
     void        *buf;
@@ -70,6 +71,7 @@ typedef struct
     EGLStreamKHR            eglStream;
     CUeglStreamConnection   cuStreamConnection;
     int                     numFramesPresented;
+    bool                    useCorrectNV12Format;
 } NVDriver;
 
 struct _NVCodec;

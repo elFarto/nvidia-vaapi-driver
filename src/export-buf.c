@@ -192,7 +192,8 @@ int exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t p
 
     int bpp = 1;
     if (surface->format == cudaVideoSurfaceFormat_NV12) {
-        eglframe.eglColorFormat = CU_EGL_COLOR_FORMAT_YVU420_SEMIPLANAR;
+        eglframe.eglColorFormat = drv->useCorrectNV12Format ? CU_EGL_COLOR_FORMAT_YUV420_SEMIPLANAR :
+                                                              CU_EGL_COLOR_FORMAT_YVU420_SEMIPLANAR;
         eglframe.cuFormat = CU_AD_FORMAT_UNSIGNED_INT8;
     } else if (surface->format == cudaVideoSurfaceFormat_P016) {
         //TODO not working, produces this error in mpv:
@@ -306,9 +307,10 @@ int exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t p
                 LOG("Unable to export image");
                 return 0;
             }
-            LOG("eglExportDMABUFImageMESA: %d %d %d %d %d", r, fds[0], fds[1], fds[2], fds[3]);
-            LOG("strides: %d %d %d %d", strides[0], strides[1], strides[2], strides[3]);
-            LOG("offsets: %d %d %d %d", offsets[0], offsets[1], offsets[2], offsets[3]);
+            LOG("eglExportDMABUFImageMESA: %d %d %d %d, strides: %d %d %d %d, offsets: %d %d %d %d",
+                    fds[0], fds[1], fds[2], fds[3],
+                    strides[0], strides[1], strides[2], strides[3],
+                    offsets[0], offsets[1], offsets[2], offsets[3]);
 
             r = eglStreamReleaseImageNV(drv->eglDisplay, drv->eglStream, img, EGL_NO_SYNC_NV);
             if (!r) {

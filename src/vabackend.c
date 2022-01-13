@@ -1515,6 +1515,18 @@ static VAStatus nvExportSurfaceHandle(
     int fourcc, bpp, fds[4] = {0, 0, 0, 0}, strides[4] = {0, 0, 0, 0}, offsets[4] = {0, 0, 0, 0};
     uint64_t mods[4] = {0, 0, 0, 0};
     exportCudaPtr(drv, deviceMemory, surfaceObj, pitch, &fourcc, fds, offsets, strides, mods, &bpp);
+    if (fourcc == DRM_FORMAT_NV21) {
+        LOG("Detected NV12/NV21 NVIDIA driver bug, attempting to work around")
+        //this is a caused by a bug in old versions the driver that was fixed in the 510 series
+        drv->useCorrectNV12Format = true;
+        //re-export the frame in the correct format
+        exportCudaPtr(drv, deviceMemory, surfaceObj, pitch, &fourcc, fds, offsets, strides, mods, &bpp);
+        if (fourcc != DRM_FORMAT_NV12) {
+            LOG("Work around didn't work");
+        } else {
+            LOG("Work around worked!");
+        }
+    }
 
     //since we have to make a copy of the data anyway, we can unmap here
     if (surfaceObj->pictureIdx != -1) {
