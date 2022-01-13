@@ -172,7 +172,7 @@ int exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t p
 
     //check if the frame size if different and release the arrays
     //TODO figure out how to get the EGLimage freed aswell
-    if (eglframe.width != width && eglframe.height != height) {
+    if (eglframe.width != width || eglframe.height != height) {
         if (eglframe.frame.pArray[0] != NULL) {
             drv->cu->cuArrayDestroy(eglframe.frame.pArray[0]);
             eglframe.frame.pArray[0] = NULL;
