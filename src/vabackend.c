@@ -424,7 +424,13 @@ static VAStatus nvCreateConfig(
     )
 {
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
-    LOG("In %s with profile: %d with %d attributes", __func__, profile, num_attribs);
+    LOG("got profile: %d with %d attributes", profile, num_attribs);
+    cudaVideoCodec cudaCodec = vaToCuCodec(profile);
+
+    if (cudaCodec == cudaVideoCodec_NONE) {
+        //we don't support this yet
+        return VA_STATUS_ERROR_UNSUPPORTED_PROFILE;
+    }
 
     Object obj = allocateObject(drv, OBJECT_TYPE_CONFIG, sizeof(NVConfig));
     NVConfig *cfg = (NVConfig*) obj->obj;
@@ -438,7 +444,7 @@ static VAStatus nvCreateConfig(
       LOG("got config attrib: %d %d %d", i, attrib_list[i].type, attrib_list[i].value);
     }
 
-    cfg->cudaCodec = vaToCuCodec(cfg->profile);
+    cfg->cudaCodec = cudaCodec;
 
     if (profile == VAProfileHEVCMain10) {
         cfg->surfaceFormat = cudaVideoSurfaceFormat_P016;
@@ -800,12 +806,14 @@ static VAStatus nvRenderPicture(
 
     NVContext *nvCtx = (NVContext*) getObject(drv, context)->obj;
     CUVIDPICPARAMS *picParams = &nvCtx->pPicParams;
-    VAProfile prof = nvCtx->profile;
-    cudaVideoCodec codec = vaToCuCodec(prof);
 
     for (int i = 0; i < num_buffers; i++)
     {
         NVBuffer *buf = (NVBuffer*) getObject(drv, buffers[i])->obj;
+        if (buf->ptr == NULL) {
+            LOG("Invalid buffer detected, skipping: %d", buffers[i]);
+            continue;
+        }
         VABufferType bt = buf->bufferType;
         HandlerFunc func = nvCtx->codec->handlers[bt];
         if (func != NULL) {
