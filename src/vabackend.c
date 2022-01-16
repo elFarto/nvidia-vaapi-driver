@@ -1524,7 +1524,13 @@ static VAStatus nvExportSurfaceHandle(
     uint64_t mods[4] = {0, 0, 0, 0};
     exportCudaPtr(drv, deviceMemory, surfaceObj, pitch, &fourcc, fds, offsets, strides, mods, &bpp);
     if (fourcc == DRM_FORMAT_NV21) {
-        LOG("Detected NV12/NV21 NVIDIA driver bug, attempting to work around")
+        LOG("Detected NV12/NV21 NVIDIA driver bug, attempting to work around");
+        //close the old fds to prevent leaking them
+        for (int i = 0; i < 4; i++) {
+            if (fds[0] != 0) {
+                close(fds[0]);
+            }
+        }
         //this is a caused by a bug in old versions the driver that was fixed in the 510 series
         drv->useCorrectNV12Format = true;
         //re-export the frame in the correct format
