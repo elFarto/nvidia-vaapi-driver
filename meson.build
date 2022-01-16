@@ -19,6 +19,10 @@ egl_dep = cc.find_library('EGL')
 gst_codecs_deps = dependency('gstreamer-codecparsers-1.0')
 ffnvcodec_deps = dependency('ffnvcodec', version: '>= 11.1.5.1')
 
+if get_option('av1')
+    add_global_arguments('-DWITH_AV1', language : 'c')
+endif
+
 shared_library(
     'nvidia_drv_video',
     name_prefix: '',
