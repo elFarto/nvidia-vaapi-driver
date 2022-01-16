@@ -9,24 +9,21 @@ static void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *pi
     VADecPictureParameterBufferAV1* buf = (VADecPictureParameterBufferAV1*) buffer->ptr;
     CUVIDAV1PICPARAMS *pps = &picParams->CodecSpecific.av1;
 
-
     picParams->PicWidthInMbs = (ctx->width + 15)/16;
     picParams->FrameHeightInMbs = (ctx->height + 15)/16;
 
-    //picParams->field_pic_flag    = buf->sequence_fields.bits.interlace && interlaced;
-    //picParams->bottom_field_flag = field_mode && !(buf->picture_fields.bits.top_field_first ^ !buf->picture_fields.bits.is_first_field);
-
-//    picParams->second_field      = !buf->picture_fields.bits.is_first_field;
     picParams->intra_pic_flag    = buf->pic_info_fields.bits.frame_type == 0 || //Key
                                    buf->pic_info_fields.bits.frame_type == 2; //Intra-Only
-//    picParams->ref_pic_flag      = buf->picture_fields.bits.picture_type == 0 || //Intra
-//                                   buf->picture_fields.bits.picture_type == 2; //Predicted
+
+    //TODO if it's not a key or switch frame type, it still *might* be a ref_pic
+    picParams->ref_pic_flag      = buf->pic_info_fields.bits.frame_type == 0 ||
+                                  (buf->pic_info_fields.bits.frame_type == 3 && buf->pic_info_fields.bits.show_frame);
 
     pps->width = ctx->width;
     pps->height = ctx->height;
 
     pps->frame_offset = buf->order_hint;
-    pps->decodePicIdx = ctx->renderTargets->pictureIdx; //TODO not sure about this
+    pps->decodePicIdx = picParams->CurrPicIdx; //TODO not sure about this
 
     pps->profile = buf->profile;
     pps->use_128x128_superblock = buf->seq_info_fields.fields.use_128x128_superblock;
@@ -42,9 +39,11 @@ static void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *pi
     pps->enable_order_hint = buf->seq_info_fields.fields.enable_order_hint;
     pps->order_hint_bits_minus1 = buf->order_hint_bits_minus_1;
     pps->enable_jnt_comp = buf->seq_info_fields.fields.enable_jnt_comp;
-    pps->enable_superres = buf->pic_info_fields.bits.use_superres; //TODO not quite correct, this can be 0, and enable can be 1
+    //TODO not quite correct, this can be 0, and enable can be 1
+    pps->enable_superres = buf->pic_info_fields.bits.use_superres;
     pps->enable_cdef = buf->seq_info_fields.fields.enable_cdef;
-//    pps->enable_restoration = buf->seq_info_fields.fields.; //TODO this flag just seems to be missing from libva
+    //TODO this flag just seems to be missing from libva
+    //pps->enable_restoration = buf->seq_info_fields.fields.;
     pps->enable_fgs = buf->seq_info_fields.fields.film_grain_params_present;
 
     pps->frame_type = buf->pic_info_fields.bits.frame_type;
@@ -81,6 +80,7 @@ static void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *pi
 
     if (pps->skip_mode) {
         //TODO compute SkipModeFrame0 and SkipModeFrame1
+        LOG("AV1 frame requires SkipModeFrame0 and SkipModeFrame1 values");
     }
 
     pps->base_qindex = buf->base_qindex;
@@ -111,14 +111,15 @@ static void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *pi
     pps->delta_lf_res = buf->mode_control_fields.bits.log2_delta_lf_res;
     pps->delta_lf_multi = buf->mode_control_fields.bits.delta_lf_multi;
 
-    pps->lr_type[0] = buf->loop_restoration_fields.bits.yframe_restoration_type;//TODO check remap
+    pps->lr_type[0] = buf->loop_restoration_fields.bits.yframe_restoration_type;
     pps->lr_type[1] = buf->loop_restoration_fields.bits.cbframe_restoration_type;
     pps->lr_type[2] = buf->loop_restoration_fields.bits.crframe_restoration_type;
     pps->lr_unit_size[0] = 1 + buf->loop_restoration_fields.bits.lr_unit_shift;
     pps->lr_unit_size[1] = 1 + buf->loop_restoration_fields.bits.lr_unit_shift - buf->loop_restoration_fields.bits.lr_uv_shift;
     pps->lr_unit_size[2] = pps->lr_unit_size[1];
 
-    //pps->temporal_layer_id = buf->;//TODO looks like these need to be derived from the frame itself? They're part of an extension, might just be able to set them to 0
+    //TODO looks like these need to be derived from the frame itself? They're part of an extension, might just be able to set them to 0
+    //pps->temporal_layer_id = buf->;
     //pps->spatial_layer_id = buf->;
 
     pps->apply_grain = buf->film_grain_info.film_grain_info_fields.bits.apply_grain;
@@ -148,15 +149,17 @@ static void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *pi
     }
 
     for (int i = 0; i < (1<<pps->cdef_bits); i++) {
-        //TODO double check this
-        pps->cdef_y_strength[i] = ((buf->cdef_y_strengths[i] >> 2) & 0x0f) | ((buf->cdef_y_strengths[i] & 0x03) << 4);
-        pps->cdef_uv_strength[i] = ((buf->cdef_uv_strengths[i] >> 2) & 0x0f) | ((buf->cdef_uv_strengths[i] & 0x03) << 4);
+        pps->cdef_y_strength[i] = ((buf->cdef_y_strengths[i] >> 2) & 0x0f) |
+                                  ((buf->cdef_y_strengths[i] & 0x03) << 4);
+        pps->cdef_uv_strength[i] = ((buf->cdef_uv_strengths[i] >> 2) & 0x0f) |
+                                   ((buf->cdef_uv_strengths[i] & 0x03) << 4);
     }
 
     //TODO replace with memcpy?
     for (int i = 0; i < 8; i++) { //MAX_SEGMENTS
+        pps->segmentation_feature_mask[i] = buf->seg_info.feature_mask[i];
         for (int j = 0; j < 8; j++) { //MAX_SEGMENT_LEVEL
-            pps->segmentation_feature_mask[i] = buf->seg_info.feature_mask[i];
+            //TODO these values are clipped when supplied via ffmpeg
             pps->segmentation_feature_data[i][j] = buf->seg_info.feature_data[i][j];
         }
     }
@@ -168,7 +171,7 @@ static void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *pi
     } else {
         for (int i = 0; i < 8; i++) {
             if (((pps->segmentation_feature_mask[i] & 1) != 0
-                 && (pps->base_qindex + pps->segmentation_feature_data[i][0] != 0))
+                && (pps->base_qindex + pps->segmentation_feature_data[i][0] != 0))
                 || pps->base_qindex != 0) {
                 pps->coded_lossless = 0;
                 break;
@@ -192,9 +195,10 @@ static void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *pi
         int ref_idx = buf->ref_frame_idx[i];
         pps->ref_frame[i].index = pps->ref_frame_map[ref_idx];
         //TODO can maybe pull these from the surface itself?
-//        pps->ref_frame[i].width = pps->ref_frame_map[ref_idx];
-//        pps->ref_frame[i].height = pps->ref_frame_map[ref_idx];
+        //pps->ref_frame[i].width = pps->ref_frame_map[ref_idx];
+        //pps->ref_frame[i].height = pps->ref_frame_map[ref_idx];
 
+        //TODO not sure on this one
         pps->global_motion[i].invalid = buf->wm[i].invalid;
         pps->global_motion[i].wmtype = buf->wm[i].wmtype;
         for (int j = 0; j < 6; j++) {
@@ -213,9 +217,11 @@ static void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *pi
             pps->scaling_points_cr[i][0] = buf->film_grain_info.point_cr_value[i];
             pps->scaling_points_cr[i][1] = buf->film_grain_info.point_cr_scaling[i];
         }
+        //TODO memcpy?
         for (int i = 0; i < 24; i++) {
             pps->ar_coeffs_y[i] = buf->film_grain_info.ar_coeffs_y[i];
         }
+        //TODO memcpy?
         for (int i = 0; i < 25; i++) {
             pps->ar_coeffs_cb[i] = buf->film_grain_info.ar_coeffs_cb[i];
             pps->ar_coeffs_cr[i] = buf->film_grain_info.ar_coeffs_cr[i];

@@ -793,6 +793,7 @@ static VAStatus nvBeginPicture(
     NVContext *nvCtx = (NVContext*) getObject(drv, context)->obj;
     memset(&nvCtx->pPicParams, 0, sizeof(CUVIDPICPARAMS));
     nvCtx->renderTargets = (NVSurface*) getObject(drv, render_target)->obj;
+    nvCtx->pPicParams.CurrPicIdx = nvCtx->renderTargets->pictureIdx;
 
     return VA_STATUS_SUCCESS;
 }
@@ -841,8 +842,6 @@ static VAStatus nvEndPicture(
     picParams->pSliceDataOffsets = nvCtx->sliceOffsets.buf;
     nvCtx->buf.size = 0;
     nvCtx->sliceOffsets.size = 0;
-
-    picParams->CurrPicIdx = nvCtx->renderTargets->pictureIdx;
 
     CUresult result = cv->cuvidDecodePicture(nvCtx->decoder, picParams);
 
