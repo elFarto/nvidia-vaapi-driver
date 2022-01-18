@@ -1,5 +1,7 @@
 #include "vabackend.h"
 
+#define GST_USE_UNSTABLE_API
+#include <gst/codecparsers/gstvp8parser.h>
 
 static void copyVP8PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams)
 {
@@ -34,6 +36,25 @@ static void copyVP8SliceParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *
     picParams->nNumSlices += buffer->elements;
 }
 
+GstVp8Parser vp8Parser;
+bool vp8ParserInited = false;
+
+static void parseExtraInfo(void *buf, uint32_t size, CUVIDPICPARAMS *picParams) {
+    //TODO a bit of a hack as we don't have per decoder init/deinit functions atm
+    if (!vp8ParserInited) {
+        gst_vp8_parser_init(&vp8Parser);
+        vp8ParserInited = true;
+    }
+
+    GstVp8FrameHdr hdr;
+    GstVp8ParserResult res = gst_vp8_parser_parse_frame_header(&vp8Parser, &hdr, buf, size);
+    if (res == GST_VP8_PARSER_OK) {
+        picParams->CodecSpecific.vp8.vp8_frame_tag.show_frame = hdr.show_frame;
+    } else {
+        LOG("Failed to decode VP8 frame successfully: %d", res);
+    }
+}
+
 static void copyVP8SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
 {
     for (int i = 0; i < ctx->lastSliceParamsCount; i++)
@@ -43,6 +64,9 @@ static void copyVP8SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picP
         appendBuffer(&ctx->sliceOffsets, &offset, sizeof(offset));
         appendBuffer(&ctx->buf, PTROFF(buf->ptr, sliceParams->slice_data_offset), sliceParams->slice_data_size);
         picParams->nBitstreamDataLen += sliceParams->slice_data_size;
+
+
+        parseExtraInfo(PTROFF(buf->ptr, sliceParams->slice_data_offset), sliceParams->slice_data_size, picParams);
     }
 }
 
