@@ -45,6 +45,8 @@ static void copyVP8SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picP
 
         //manually pull out the show_frame field, no need to get the full bitstream parser involved
         picParams->CodecSpecific.vp8.vp8_frame_tag.show_frame = (((uint8_t*) PTROFF(buf->ptr, sliceParams->slice_data_offset))[0] & 0x10) != 0;
+        //we need to adjust the first partition size, as it was computed with a smaller buffer (one missing the headers)
+        picParams->CodecSpecific.vp8.first_partition_size += buf->offset;
     }
 }
 

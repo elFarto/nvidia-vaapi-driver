@@ -707,10 +707,11 @@ static VAStatus nvCreateBuffer(
     //LOG("got buffer %p, type %x, size %u, elements %u", data, type, size, num_elements);
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
 
+    int offset = 0;
     NVContext *nvCtx = (NVContext*) getObjectPtr(drv, context);
     if (nvCtx->profile == VAProfileVP8Version0_3 && type == VASliceDataBufferType) {
         //HACK HACK HACK
-        int offset = (int) (((uintptr_t) data) & 0xf);
+        offset = (int) (((uintptr_t) data) & 0xf);
         data -= offset;
         size += offset;
     }
@@ -724,6 +725,7 @@ static VAStatus nvCreateBuffer(
     buf->elements = num_elements;
     buf->size = num_elements * size;
     buf->ptr = memalign(16, buf->size);
+    buf->offset = offset;
 
     if (buf->ptr == NULL) {
         LOG("Unable to allocate buffer of %d bytes", buf->size);

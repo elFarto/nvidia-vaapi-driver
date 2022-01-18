@@ -36,6 +36,7 @@ typedef struct
     int             size;
     VABufferType    bufferType;
     void            *ptr;
+    int             offset;
 } NVBuffer;
 
 typedef struct
