@@ -1528,8 +1528,8 @@ static VAStatus nvExportSurfaceHandle(
         LOG("Detected NV12/NV21 NVIDIA driver bug, attempting to work around");
         //close the old fds to prevent leaking them
         for (int i = 0; i < 4; i++) {
-            if (fds[0] != 0) {
-                close(fds[0]);
+            if (fds[i] != 0) {
+                close(fds[i]);
             }
         }
         //this is a caused by a bug in old versions the driver that was fixed in the 510 series
