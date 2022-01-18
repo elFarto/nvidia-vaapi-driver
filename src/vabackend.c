@@ -587,7 +587,7 @@ static VAStatus nvCreateContext(
         VAContextID *context		/* out */
     )
 {
-    LOG("with %d render targets", num_render_targets);
+    LOG("with %d render targets, at %dx%d", num_render_targets, picture_width, picture_height);
 
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
     NVConfig *cfg = (NVConfig*) getObject(drv, config_id)->obj;
@@ -704,7 +704,16 @@ static VAStatus nvCreateBuffer(
         VABufferID *buf_id
     )
 {
+    //LOG("got buffer %p, type %x, size %u, elements %u", data, type, size, num_elements);
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
+
+    NVContext *nvCtx = (NVContext*) getObjectPtr(drv, context);
+    if (nvCtx->profile == VAProfileVP8Version0_3 && type == VASliceDataBufferType) {
+        //HACK HACK HACK
+        int offset = (int) (((uintptr_t) data) & 0xf);
+        data -= offset;
+        size += offset;
+    }
 
     //TODO should pool these as most of the time these should be the same size
     Object bufferObject = allocateObject(drv, OBJECT_TYPE_BUFFER, sizeof(NVBuffer));
