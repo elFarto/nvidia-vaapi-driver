@@ -2,8 +2,7 @@
 
 //TODO incomplete as no hardware to test with
 
-static void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams)
-{
+static void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams) {
     static const int bit_depth_map[] = {0, 2, 4}; //8-bpc, 10-bpc, 12-bpc
 
     VADecPictureParameterBufferAV1* buf = (VADecPictureParameterBufferAV1*) buffer->ptr;
@@ -229,26 +228,24 @@ static void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *pi
     }
 }
 
-static void copyAV1SliceParam(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
-{
-    //TODO needs rework, will have multiple slice parameters buffers
-    //will need to reconstruct them into a linear stream
+static void copyAV1SliceParam(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams) {
     ctx->lastSliceParams = buf->ptr;
     ctx->lastSliceParamsCount = buf->elements;
 
     picParams->nNumSlices += buf->elements;
 }
 
-static void copyAV1SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
-{
-    for (int i = 0; i < ctx->lastSliceParamsCount; i++)
-    {
-        VASliceParameterBufferAV1 *sliceParams = &((VASliceParameterBufferAV1*) ctx->lastSliceParams)[i];
-        uint32_t offset = (uint32_t) ctx->buf.size;
-        appendBuffer(&ctx->sliceOffsets, &offset, sizeof(offset));
-        appendBuffer(&ctx->buf, PTROFF(buf->ptr, sliceParams->slice_data_offset), sliceParams->slice_data_size);
+static void copyAV1SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams) {
+    uint32_t offset = (uint32_t) ctx->buf.size;
+    appendBuffer(&ctx->buf, buf->ptr, buf->size);
+    picParams->nBitstreamDataLen += buf->size;
 
-        picParams->nBitstreamDataLen += sliceParams->slice_data_size;
+    for (int i = 0; i < ctx->lastSliceParamsCount; i++) {
+        VASliceParameterBufferAV1 *sliceParams = &((VASliceParameterBufferAV1*) ctx->lastSliceParams)[i];
+        offset += sliceParams->slice_data_offset;
+        appendBuffer(&ctx->sliceOffsets, &offset, sizeof(offset));
+        offset += sliceParams->slice_data_size;
+        appendBuffer(&ctx->sliceOffsets, &offset, sizeof(offset));
     }
 }
 
