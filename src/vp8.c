@@ -35,18 +35,16 @@ static void copyVP8SliceParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *
 
 static void copyVP8SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
 {
+    //manually pull out the show_frame field, no need to get the full bitstream parser involved
+    picParams->CodecSpecific.vp8.vp8_frame_tag.show_frame = (((uint8_t*) buf->ptr)[0] & 0x10) != 0;
+
     for (int i = 0; i < ctx->lastSliceParamsCount; i++)
     {
         VASliceParameterBufferVP8 *sliceParams = &((VASliceParameterBufferVP8*) ctx->lastSliceParams)[i];
         uint32_t offset = (uint32_t) ctx->buf.size;
         appendBuffer(&ctx->sliceOffsets, &offset, sizeof(offset));
-        appendBuffer(&ctx->buf, PTROFF(buf->ptr, sliceParams->slice_data_offset), sliceParams->slice_data_size);
-        picParams->nBitstreamDataLen += sliceParams->slice_data_size;
-
-        //manually pull out the show_frame field, no need to get the full bitstream parser involved
-        picParams->CodecSpecific.vp8.vp8_frame_tag.show_frame = (((uint8_t*) PTROFF(buf->ptr, sliceParams->slice_data_offset))[0] & 0x10) != 0;
-        //we need to adjust the first partition size, as it was computed with a smaller buffer (one missing the headers)
-        picParams->CodecSpecific.vp8.first_partition_size += buf->offset;
+        appendBuffer(&ctx->buf, PTROFF(buf->ptr, sliceParams->slice_data_offset), sliceParams->slice_data_size + buf->offset);
+        picParams->nBitstreamDataLen += sliceParams->slice_data_size + buf->offset;
     }
 }
 
