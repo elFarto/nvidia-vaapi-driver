@@ -243,10 +243,11 @@ static void copyAV1SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picP
 {
     for (int i = 0; i < ctx->lastSliceParamsCount; i++)
     {
-        VASliceParameterBufferVC1 *sliceParams = &((VASliceParameterBufferVC1*) ctx->lastSliceParams)[i];
+        VASliceParameterBufferAV1 *sliceParams = &((VASliceParameterBufferAV1*) ctx->lastSliceParams)[i];
         uint32_t offset = (uint32_t) ctx->buf.size;
         appendBuffer(&ctx->sliceOffsets, &offset, sizeof(offset));
         appendBuffer(&ctx->buf, PTROFF(buf->ptr, sliceParams->slice_data_offset), sliceParams->slice_data_size);
+
         picParams->nBitstreamDataLen += sliceParams->slice_data_size;
     }
 }
