@@ -8,6 +8,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <malloc.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 
 #include <va/va_backend.h>
 #include <va/va_drmcommon.h>
@@ -48,6 +50,21 @@ static void init() {
                 LOG_OUTPUT = stdout;
             }
         }
+    }
+
+    //try to detect the Firefox sandbox and skip loading CUDA if detected
+    int fd = open("/proc/version", O_RDONLY);
+    if (fd < 0) {
+        LOG("ERROR: Potential Firefox sandbox detected, failing to init!");
+        LOG("If running in Firefox, set env var MOZ_DISABLE_RDD_SANDBOX=1 to disable sandbox.");
+        //exit here so we don't init CUDA, unless an env var has been set to force us to init even though we've detected a sandbox
+        if (getenv("NVD_FORCE_INIT") == NULL) {
+            return;
+        }
+    } else {
+        //we're not in a sandbox
+        //continue as normal
+        close(fd);
     }
 
     //initialise the CUDA and NVDEC functions
