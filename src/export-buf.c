@@ -3,6 +3,20 @@
 #include <ffnvcodec/dynlink_loader.h>
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
+#include <sys/stat.h>
+#include <sys/ioctl.h>
+#include <fcntl.h>
+#include <unistd.h>
+
+#ifdef __has_include
+#  if __has_include(<libdrm/drm.h>)
+#    include <libdrm/drm.h>
+#  else
+#    include <drm/drm.h>
+#  endif
+#else
+#  include <drm/drm.h>
+#endif
 
 #ifndef EGL_NV_stream_consumer_eglimage
 #define EGL_NV_stream_consumer_eglimage 1
@@ -30,13 +44,16 @@ static PFNEGLEXPORTDMABUFIMAGEQUERYMESAPROC eglExportDMABUFImageQueryMESA;
 static PFNEGLCREATESTREAMKHRPROC eglCreateStreamKHR;
 static PFNEGLDESTROYSTREAMKHRPROC eglDestroyStreamKHR;
 static PFNEGLSTREAMIMAGECONSUMERCONNECTNVPROC eglStreamImageConsumerConnectNV;
+static PFNEGLQUERYDEVICESTRINGEXTPROC eglQueryDeviceStringEXT;
 
 static void debug(EGLenum error,const char *command,EGLint messageType,EGLLabelKHR threadLabel,EGLLabelKHR objectLabel,const char* message) {
     LOG("[EGL] %s: %s", command, message);
 }
 
 void releaseExporter(NVDriver *drv) {
-    drv->cu->cuEGLStreamProducerDisconnect(&drv->cuStreamConnection);
+    if (drv->cuStreamConnection != NULL) {
+        drv->cu->cuEGLStreamProducerDisconnect(&drv->cuStreamConnection);
+    }
 
     if (drv->cuStreamConnection != NULL) {
         drv->cu->cuEGLStreamConsumerDisconnect(&drv->cuStreamConnection);
@@ -74,17 +91,20 @@ static void reconnect(NVDriver *drv) {
     drv->numFramesPresented = 0;
 }
 
-static EGLDisplay findCudaDisplay() {
+static int findCudaDisplay(EGLDisplay *eglDisplay) {
     PFNEGLQUERYDEVICESEXTPROC eglQueryDevicesEXT = (PFNEGLQUERYDEVICESEXTPROC) eglGetProcAddress("eglQueryDevicesEXT");
     PFNEGLQUERYDEVICEATTRIBEXTPROC eglQueryDeviceAttribEXT = (PFNEGLQUERYDEVICEATTRIBEXTPROC) eglGetProcAddress("eglQueryDeviceAttribEXT");
+
+    *eglDisplay = EGL_NO_DISPLAY;
+
     if (eglQueryDevicesEXT == NULL || eglQueryDeviceAttribEXT == NULL) {
-        return EGL_NO_DISPLAY;
+        return 0;
     }
 
     EGLDeviceEXT devices[8];
     EGLint num_devices;
     if(!eglQueryDevicesEXT(8, devices, &num_devices)) {
-        return EGL_NO_DISPLAY;
+        return 0;
     }
 
     LOG("Found %d EGL devices", num_devices);
@@ -95,15 +115,39 @@ static EGLDisplay findCudaDisplay() {
             //TODO: currently we're hardcoding the CUDA device to 0, so only create the display on that device
             if (attr == 0) {
                 //attr contains the cuda device id
-                return eglGetPlatformDisplay(EGL_PLATFORM_DEVICE_EXT, devices[i], NULL);
+                //we need to check to see if modeset=1 has been passed to the nvidia_drm driver
+                //since you need to be root to read the parameter out of /sys, we'll have to find the
+                //DRM device file, open it and issue an ioctl to see if the ASYNC_PAGE_FLIP cap is set
+                const char* drmDeviceFile = eglQueryDeviceStringEXT(devices[i], EGL_DRM_DEVICE_FILE_EXT);
+                LOG("Checking device file: %s", drmDeviceFile);
+                if (drmDeviceFile != NULL) {
+                    int fd = open(drmDeviceFile, O_RDONLY);
+                    if (fd > 0) {
+                        struct drm_get_cap caps = { .capability = DRM_CAP_ASYNC_PAGE_FLIP };
+                        int ret = ioctl(fd, DRM_IOCTL_GET_CAP, &caps);
+                        close(fd);
+                        if (ret == 0 && caps.value) {
+                            //the modeset parameter is set to 0
+                            LOG("ERROR: This driver requires the nvidia_drm.modeset kernel module parameter set to 1");
+                            return -1;
+                        }
+                    } else {
+                        LOG("Unable to check nvidia_drm modeset setting");
+                    }
+                } else {
+                    LOG("Unable to retrieve DRM device file");
+                }
+
+                *eglDisplay = eglGetPlatformDisplay(EGL_PLATFORM_DEVICE_EXT, devices[i], NULL);
+                return 1;
             }
         }
     }
 
-    return EGL_NO_DISPLAY;
+    return 0;
 }
 
-void initExporter(NVDriver *drv) {
+bool initExporter(NVDriver *drv) {
     static const EGLAttrib debugAttribs[] = {EGL_DEBUG_MSG_WARN_KHR, EGL_TRUE, EGL_DEBUG_MSG_INFO_KHR, EGL_TRUE, EGL_NONE};
 
     eglQueryStreamConsumerEventNV = (PFNEGLQUERYSTREAMCONSUMEREVENTNVPROC) eglGetProcAddress("eglQueryStreamConsumerEventNV");
@@ -114,19 +158,22 @@ void initExporter(NVDriver *drv) {
     eglCreateStreamKHR = (PFNEGLCREATESTREAMKHRPROC) eglGetProcAddress("eglCreateStreamKHR");
     eglDestroyStreamKHR = (PFNEGLDESTROYSTREAMKHRPROC) eglGetProcAddress("eglDestroyStreamKHR");
     eglStreamImageConsumerConnectNV = (PFNEGLSTREAMIMAGECONSUMERCONNECTNVPROC) eglGetProcAddress("eglStreamImageConsumerConnectNV");
+    eglQueryDeviceStringEXT = (PFNEGLQUERYDEVICESTRINGEXTPROC) eglGetProcAddress("eglQueryDeviceStringEXT");
 
     PFNEGLDEBUGMESSAGECONTROLKHRPROC eglDebugMessageControlKHR = (PFNEGLDEBUGMESSAGECONTROLKHRPROC) eglGetProcAddress("eglDebugMessageControlKHR");
 
-    drv->eglDisplay = findCudaDisplay();
-    if (drv->eglDisplay != NULL) {
+    int ret = findCudaDisplay(&drv->eglDisplay);
+    if (ret == 1) {
         LOG("Got EGLDisplay from CUDA device");
-    } else {
+    } else if (ret == 0) {
         LOG("Falling back to using default EGLDisplay");
         drv->eglDisplay = eglGetDisplay(NULL);
+    } else if (ret == -1) {
+        return false;
     }
     if (!eglInitialize(drv->eglDisplay, NULL, NULL)) {
         LOG("Unable to initialise EGL for display: %p", drv->eglDisplay);
-        return;
+        return false;
     }
     //setup debug logging
     eglDebugMessageControlKHR(debug, debugAttribs);
@@ -135,6 +182,7 @@ void initExporter(NVDriver *drv) {
 //    eglMakeCurrent(drv->eglDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, drv->eglContext);
     reconnect(drv);
 
+    return true;
 }
 
 int exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t pitch, int *fourcc, int *fds, int *offsets, int *strides, uint64_t *mods, int *bppOut) {

@@ -1624,7 +1624,7 @@ static VAStatus nvTerminate( VADriverContextP ctx )
 __attribute__((visibility("default")))
 VAStatus __vaDriverInit_1_0(VADriverContextP ctx)
 {
-    LOG("Initing NVIDIA VA-API Driver");
+    LOG("Initialising NVIDIA VA-API Driver");
 
     //check to make sure we initialised the CUDA functions correctly
     if (cu == NULL || cv == NULL) {
@@ -1648,7 +1648,11 @@ VAStatus __vaDriverInit_1_0(VADriverContextP ctx)
 
     ctx->str_vendor = "VA-API NVDEC driver";
 
-    initExporter(drv);
+    if (!initExporter(drv)) {
+        cu->cuCtxDestroy(drv->cudaContext);
+        free(drv);
+        return VA_STATUS_ERROR_OPERATION_FAILED;
+    }
 
 #define VTABLE(ctx, func) ctx->vtable->va ## func = nv ## func
 
