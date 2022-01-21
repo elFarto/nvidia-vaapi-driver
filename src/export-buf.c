@@ -123,10 +123,12 @@ static int findCudaDisplay(EGLDisplay *eglDisplay) {
                 if (drmDeviceFile != NULL) {
                     int fd = open(drmDeviceFile, O_RDONLY);
                     if (fd > 0) {
-                        struct drm_get_cap caps = { .capability = DRM_CAP_ASYNC_PAGE_FLIP };
+                        //this ioctl should fail if modeset=0
+                        struct drm_get_cap caps = { .capability = DRM_CAP_DUMB_BUFFER };
                         int ret = ioctl(fd, DRM_IOCTL_GET_CAP, &caps);
+                        LOG("Got DRM_IOCTL_GET_CAP ioctl response: %d %d", ret, caps.value);
                         close(fd);
-                        if (ret == 0 && caps.value) {
+                        if (ret != 0) {
                             //the modeset parameter is set to 0
                             LOG("ERROR: This driver requires the nvidia_drm.modeset kernel module parameter set to 1");
                             return -1;
