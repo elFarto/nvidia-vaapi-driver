@@ -23,6 +23,7 @@ Only decoding video is currently supported.
 |JPEG|:x:|This is unlikely to ever work, the two APIs are too different|
 
 Currently, 10-bit videos are not supported due to the NVIDIA driver not allowing R16 and RG1616 surfaces to be imported.
+To view which codecs your card is capable of decoding you can use the `vainfo` command with this driver installed, or visit the NVIDIA website [here](https://developer.nvidia.com/video-encode-and-decode-gpu-support-matrix-new#geforce).
 
 # Building
 
