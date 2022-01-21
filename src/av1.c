@@ -80,6 +80,55 @@ static void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *pi
     if (pps->skip_mode) {
         //TODO compute SkipModeFrame0 and SkipModeFrame1
         LOG("AV1 frame requires SkipModeFrame0 and SkipModeFrame1 values");
+
+//        int forwardIdx = -1;
+//        int backwardIdx = -1;
+//        int forwardHint = 0;
+//        int backwardHint = 0;
+//        int RefOrderHint[8];
+//        for (int i = 0; i < 8; i++) {
+//            //TODO can't generate RefOrderHint as refresh_frame_flags isn't passed in
+//        }
+//        for (int i = 0; i < 7; i++ ) {
+//            int refHint = RefOrderHint[ buf->ref_frame_idx[ i ] ];
+//            if ( get_relative_dist( refHint, OrderHint ) < 0 ) {
+//                if ( forwardIdx < 0 || get_relative_dist( refHint, forwardHint) > 0 ) {
+//                    forwardIdx = i;
+//                    forwardHint = refHint;
+//                }
+//            } else if ( get_relative_dist( refHint, OrderHint) > 0 ) {
+//                if ( backwardIdx < 0 || get_relative_dist( refHint, backwardHint) < 0 ) {
+//                    backwardIdx = i;
+//                    backwardHint = refHint;
+//                }
+//            }
+//        }
+//        if ( forwardIdx < 0 ) {
+//            //skipModeAllowed = 0
+//        } else if ( backwardIdx >= 0 ) {
+//            //skipModeAllowed = 1
+//            pps->SkipModeFrame0 = LAST_FRAME + Min(forwardIdx, backwardIdx);
+//            pps->SkipModeFrame1 = LAST_FRAME + Max(forwardIdx, backwardIdx);
+//        } else {
+//            int secondForwardIdx = -1;
+//            int secondForwardHint = 0;
+//            for (int i = 0; i < 7; i++ ) {
+//                int refHint = RefOrderHint[ buf->ref_frame_idx[ i ] ];
+//                if ( get_relative_dist( refHint, forwardHint ) < 0 ) {
+//                    if ( secondForwardIdx < 0 || get_relative_dist( refHint, secondForwardHint ) > 0 ) {
+//                        secondForwardIdx = i;
+//                        secondForwardHint = refHint;
+//                    }
+//                }
+//            }
+//            if ( secondForwardIdx < 0 ) {
+//                //skipModeAllowed = 0
+//            } else {
+//                //skipModeAllowed = 1
+//                pps->SkipModeFrame0 = LAST_FRAME + Min(forwardIdx, secondForwardIdx);
+//                pps->SkipModeFrame1 = LAST_FRAME + Max(forwardIdx, secondForwardIdx);
+//            }
+//        }
     }
 
     pps->base_qindex = buf->base_qindex;
