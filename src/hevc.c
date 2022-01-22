@@ -1,7 +1,6 @@
 #define _GNU_SOURCE
 
 #include "vabackend.h"
-
 #include <stdlib.h>
 
 static const uint8_t ff_hevc_diag_scan4x4_x[16] = {

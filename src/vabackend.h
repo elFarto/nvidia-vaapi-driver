@@ -79,7 +79,7 @@ typedef struct
     int                     numFramesPresented;
     bool                    useCorrectNV12Format;
     NVEGLImage              *allocatedEGLImages;
-
+    int                     currentSurfaceIdx;
 } NVDriver;
 
 struct _NVCodec;
@@ -105,8 +105,6 @@ typedef struct
 {
     VAProfile               profile;
     VAEntrypoint            entrypoint;
-    VAConfigAttrib          *attributes;
-    int                     numAttribs;
     cudaVideoSurfaceFormat  surfaceFormat;
     cudaVideoChromaFormat   chromaFormat;
     int                     bitDepth;
@@ -116,6 +114,8 @@ typedef struct
 typedef void (*HandlerFunc)(NVContext*, NVBuffer* , CUVIDPICPARAMS*);
 typedef cudaVideoCodec (*ComputeCudaCodec)(VAProfile);
 
+//padding/alignment is very important to this structure as it's placed in it's own section
+//in the executable.
 typedef struct _NVCodec
 {
     ComputeCudaCodec    computeCudaCodec;

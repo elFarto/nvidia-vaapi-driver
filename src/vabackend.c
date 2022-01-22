@@ -10,6 +10,7 @@
 #include <malloc.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <sys/param.h>
 
 #include <va/va_backend.h>
 #include <va/va_drmcommon.h>
@@ -107,6 +108,7 @@ void logger(const char *filename, const char *function, int line, const char *ms
     va_end(argList);
 
     fprintf(LOG_OUTPUT, "[%d-%d] %s:%4d %24s %s\n", getpid(), gettid(), filename, line, function, formattedMessage);
+    fflush(LOG_OUTPUT);
 }
 
 void checkCudaErrors(CUresult err, const char *file, const char *function, const int line)
@@ -243,8 +245,7 @@ int pictureIdxFromSurfaceId(NVDriver *drv, VASurfaceID surf) {
     return -1;
 }
 
-static cudaVideoCodec vaToCuCodec(VAProfile profile)
-{
+static cudaVideoCodec vaToCuCodec(VAProfile profile) {
     for (const NVCodec *c = __start_nvd_codecs; c < __stop_nvd_codecs; c++) {
         cudaVideoCodec cvc = c->computeCudaCodec(profile);
         if (cvc != cudaVideoCodec_NONE) {
@@ -252,7 +253,6 @@ static cudaVideoCodec vaToCuCodec(VAProfile profile)
         }
     }
 
-    //LOG("vaToCuCodec: Unknown codec: %d", profile);
     return cudaVideoCodec_NONE;
 }
 
@@ -451,20 +451,23 @@ static VAStatus nvCreateConfig(
         return VA_STATUS_ERROR_UNSUPPORTED_PROFILE;
     }
 
+    if (entrypoint != VAEntrypointVLD) {
+        return VA_STATUS_ERROR_UNSUPPORTED_ENTRYPOINT;
+    }
+
     Object obj = allocateObject(drv, OBJECT_TYPE_CONFIG, sizeof(NVConfig));
     NVConfig *cfg = (NVConfig*) obj->obj;
     cfg->profile = profile;
     cfg->entrypoint = entrypoint;
-    cfg->attributes = attrib_list; //TODO might need to make a copy of this
-    cfg->numAttribs = num_attribs;
 
-    for (int i = 0; i < num_attribs; i++)
-    {
+    //this will contain all the attributes the client cares about
+    for (int i = 0; i < num_attribs; i++) {
       LOG("got config attrib: %d %d %d", i, attrib_list[i].type, attrib_list[i].value);
     }
 
     cfg->cudaCodec = cudaCodec;
 
+    //these should be set from the attributes, or a default if the user doesn't care
     if (profile == VAProfileHEVCMain10) {
         cfg->surfaceFormat = cudaVideoSurfaceFormat_P016;
         cfg->chromaFormat = cudaVideoChromaFormat_420;
@@ -502,16 +505,19 @@ static VAStatus nvQueryConfigAttributes(
     )
 {
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
+    NVConfig *cfg = (NVConfig*) getObjectPtr(drv, config_id);
 
-    Object obj = getObject(drv, config_id);
-
-    if (obj != NULL)
-    {
-        NVConfig *cfg = (NVConfig*) obj->obj;
+    if (cfg != NULL) {
         *profile = cfg->profile;
         *entrypoint = cfg->entrypoint;
-        //*attrib_list = cfg->attrib_list; //TODO is that the right thing/type?
-        *num_attribs = cfg->numAttribs;
+        int i = 0;
+        attrib_list[i].type = VAConfigAttribRTFormat;
+        attrib_list[i].value = VA_RT_FORMAT_YUV420;
+        if (cfg->profile == VAProfileHEVCMain10) {
+            attrib_list[i].value |= VA_RT_FORMAT_YUV420_10;
+        }
+        i++;
+        *num_attribs = i;
         return VA_STATUS_SUCCESS;
     }
 
@@ -549,16 +555,16 @@ static VAStatus nvCreateSurfaces2(
         return VA_STATUS_ERROR_UNSUPPORTED_RT_FORMAT;
     }
 
-    for (int i = 0; i < num_surfaces; i++)
-    {
+    for (uint32_t i = 0; i < num_surfaces; i++) {
         Object surfaceObject = allocateObject(drv, OBJECT_TYPE_SURFACE, sizeof(NVSurface));
         surfaces[i] = surfaceObject->id;
         NVSurface *suf = (NVSurface*) surfaceObject->obj;
         suf->width = width;
         suf->height = height;
         suf->format = nvFormat;
-        suf->pictureIdx = -1;
+        suf->pictureIdx = drv->currentSurfaceIdx++;
         suf->bitDepth = bitdepth;
+        suf->contextId = 0;
     }
 
     return VA_STATUS_SUCCESS;
@@ -607,35 +613,49 @@ static VAStatus nvCreateContext(
     LOG("with %d render targets, at %dx%d", num_render_targets, picture_width, picture_height);
 
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
-    NVConfig *cfg = (NVConfig*) getObject(drv, config_id)->obj;
+    NVConfig *cfg = (NVConfig*) getObjectPtr(drv, config_id);
 
-    CUvideodecoder decoder;
+    //find the codec they've selected
+    const NVCodec *selectedCodec = NULL;
+    for (const NVCodec *c = __start_nvd_codecs; c < __stop_nvd_codecs; c++) {
+        for (int i = 0; i < c->supportedProfileCount; i++) {
+            if (c->supportedProfiles[i] == cfg->profile) {
+                selectedCodec = c;
+                break;
+            }
+        }
+    }
+    if (selectedCodec == NULL) {
+        LOG("Unable to find codec for profile: %d", cfg->profile);
+        return VA_STATUS_ERROR_UNSUPPORTED_PROFILE; //TODO not sure this is the correct error
+    }
+
     CUVIDDECODECREATEINFO vdci;
     memset(&vdci, 0, sizeof(CUVIDDECODECREATEINFO));
-    vdci.ulWidth = picture_width;
-    vdci.ulHeight = picture_height;
-    vdci.ulNumDecodeSurfaces = num_render_targets; //TODO is this correct? probably not, but the amount of decode surfaces needed is determined by codec, i think
+    vdci.ulWidth  = vdci.ulMaxWidth  = vdci.ulTargetWidth  = picture_width;
+    vdci.ulHeight = vdci.ulMaxHeight = vdci.ulTargetHeight = picture_height;
     vdci.CodecType = cfg->cudaCodec;
     vdci.ulCreationFlags = cudaVideoCreate_PreferCUVID;
     vdci.ulIntraDecodeOnly = 0; //TODO (flag & VA_PROGRESSIVE) != 0
     vdci.display_area.right = picture_width;
     vdci.display_area.bottom = picture_height;
-
     vdci.ChromaFormat = cfg->chromaFormat;
     vdci.OutputFormat = cfg->surfaceFormat;
     vdci.bitDepthMinus8 = cfg->bitDepth - 8;
 
     vdci.DeinterlaceMode = cudaVideoDeinterlaceMode_Weave;
-    vdci.ulTargetWidth = picture_width;
-    vdci.ulTargetHeight = picture_height;
-    vdci.ulNumOutputSurfaces = num_render_targets;
+    //we only ever map one frame at a time, so we can set this to 1
+    //it isn't particually efficient to do this, but it is simple
+    vdci.ulNumOutputSurfaces = 1;
+    //just allocate as many surfaces as have been created since we can never have as much information as the decode to guess correctly
+    vdci.ulNumDecodeSurfaces = drv->currentSurfaceIdx;
 
     cv->cuvidCtxLockCreate(&vdci.vidLock, drv->cudaContext);
 
+    CUvideodecoder decoder;
     CUresult result = cv->cuvidCreateDecoder(&decoder, &vdci);
 
-    if (result != CUDA_SUCCESS)
-    {
+    if (result != CUDA_SUCCESS) {
         LOG("cuvidCreateDecoder failed: %d", result);
         return VA_STATUS_ERROR_ALLOCATION_FAILED;
     }
@@ -650,29 +670,7 @@ static VAStatus nvCreateContext(
     nvCtx->entrypoint = cfg->entrypoint;
     nvCtx->width = picture_width;
     nvCtx->height = picture_height;
-
-    for (const NVCodec *c = __start_nvd_codecs; c < __stop_nvd_codecs; c++) {
-        for (int i = 0; i < c->supportedProfileCount; i++) {
-            if (c->supportedProfiles[i] == cfg->profile) {
-                nvCtx->codec = c;
-                break;
-            }
-        }
-    }
-
-    if (nvCtx->codec == NULL) {
-        LOG("Unable to find codec for profile: %d", cfg->profile);
-        return VA_STATUS_ERROR_UNSUPPORTED_PROFILE; //TODO not sure this is the correct error
-    }
-
-    //assign all the render targets unique ids up-front
-    //this seems to be a simplier way to manage them
-    for (int i = 0; i < num_render_targets; i++) {
-        Object obj = getObject(drv, render_targets[i]);
-        NVSurface *suf = obj->obj;
-        //LOG("assigning surface id %d to picture index %d", obj->id, i);
-        suf->pictureIdx = i;
-    }
+    nvCtx->codec = selectedCodec;
 
     return VA_STATUS_SUCCESS;
 }
@@ -819,10 +817,11 @@ static VAStatus nvBeginPicture(
     )
 {
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
+    NVContext *nvCtx = (NVContext*) getObjectPtr(drv, context);
+    NVSurface *surf = (NVSurface*) getObjectPtr(drv, render_target);
 
-    NVContext *nvCtx = (NVContext*) getObject(drv, context)->obj;
     memset(&nvCtx->pPicParams, 0, sizeof(CUVIDPICPARAMS));
-    nvCtx->renderTargets = (NVSurface*) getObject(drv, render_target)->obj;
+    nvCtx->renderTargets = surf;
     nvCtx->pPicParams.CurrPicIdx = nvCtx->renderTargets->pictureIdx;
 
     return VA_STATUS_SUCCESS;
@@ -1095,12 +1094,11 @@ static VAStatus nvGetImage(
 
     NVSurface *surfaceObj = (NVSurface*) getObject(drv, surface)->obj;
     NVImage *imageObj = (NVImage*) getObject(drv, image)->obj;
+    NVContext *context = (NVContext*) getObjectPtr(drv, surfaceObj->contextId);
 
-    if (getObject(drv, surfaceObj->contextId) == NULL) {
+    if (context == NULL) {
         return VA_STATUS_ERROR_INVALID_CONTEXT;
     }
-
-    NVContext *context = (NVContext*) getObject(drv, surfaceObj->contextId)->obj;
 
     int bytesPerPixel = 1;
     if (imageObj->format == VA_FOURCC_P010 || imageObj->format == VA_FOURCC_P012) {
@@ -1529,17 +1527,13 @@ static VAStatus nvExportSurfaceHandle(
     cu->cuCtxPushCurrent(drv->cudaContext);
 
     NVSurface *surfaceObj = (NVSurface*) getObjectPtr(drv, surface_id);
-    //This will be NULL for surfaces that haven't been end
+    //This will be NULL for surfaces that haven't been decoded to
     NVContext *context = (NVContext*) getObjectPtr(drv, surfaceObj->contextId);
-
-    if (surfaceObj->pictureIdx != -1 && context == NULL) {
-        return VA_STATUS_ERROR_INVALID_CONTEXT;
-    }
 
     CUdeviceptr deviceMemory = (CUdeviceptr) NULL;
     unsigned int pitch = 0;
 
-    if (surfaceObj->pictureIdx != -1) {
+    if (surfaceObj->contextId != 0) {
         CUVIDPROCPARAMS procParams = {0};
         procParams.progressive_frame = surfaceObj->progressiveFrame;
         procParams.top_field_first = surfaceObj->topFieldFirst;
@@ -1574,7 +1568,7 @@ static VAStatus nvExportSurfaceHandle(
     }
 
     //since we have to make a copy of the data anyway, we can unmap here
-    if (surfaceObj->pictureIdx != -1) {
+    if (deviceMemory != 0) {
         cv->cuvidUnmapVideoFrame(context->decoder, deviceMemory);
     }
 
