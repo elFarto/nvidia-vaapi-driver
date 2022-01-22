@@ -688,6 +688,7 @@ static VAStatus nvDestroyContext(
 
     if (nvCtx != NULL)
     {
+      cu->cuCtxPushCurrent(drv->cudaContext);
       CUvideodecoder decoder = nvCtx->decoder;
       nvCtx->decoder = NULL;
       freeBuffer(&nvCtx->sliceOffsets);
@@ -700,6 +701,7 @@ static VAStatus nvDestroyContext(
       if (decoder != NULL)
       {
         CUresult result = cv->cuvidDestroyDecoder(decoder);
+        cu->cuCtxPopCurrent(NULL);
         if (result != CUDA_SUCCESS)
         {
             LOG("cuvidDestroyDecoder failed: %d", result);
@@ -1613,6 +1615,8 @@ static VAStatus nvTerminate( VADriverContextP ctx )
 {
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
     LOG("In %s", __func__);
+
+    cu->cuCtxPushCurrent(drv->cudaContext);
 
     releaseExporter(drv);
 

@@ -51,6 +51,35 @@ static void debug(EGLenum error,const char *command,EGLint messageType,EGLLabelK
 }
 
 void releaseExporter(NVDriver *drv) {
+    LOG("Releasing exporter, %d outstanding frames", drv->numFramesPresented);
+    while (drv->numFramesPresented > 0) {
+      CUeglFrame eglframe;
+      CUresult cuStatus = drv->cu->cuEGLStreamProducerReturnFrame(&drv->cuStreamConnection, &eglframe, NULL);
+      if (cuStatus == CUDA_SUCCESS) {
+        drv->numFramesPresented--;
+        for (int i = 0; i < 3; i++) {
+            if (eglframe.frame.pArray[i] != NULL) {
+                LOG("Cleaning up CUDA array %p", eglframe.frame.pArray[i]);
+                drv->cu->cuArrayDestroy(eglframe.frame.pArray[i]);
+                eglframe.frame.pArray[i] = NULL;
+            }
+        }
+      } else {
+          break;
+      }
+    }
+    LOG("Done releasing frames");
+
+    NVEGLImage *img = drv->allocatedEGLImages;
+    while (img != NULL) {
+        LOG("Destroying EGLImage: %p", img->image);
+        eglDestroyImage(drv->eglDisplay, img->image);
+        NVEGLImage *oldImg = img;
+        img = img->next;
+        free(oldImg);
+    }
+    LOG("Done releasing EGLImages");
+
     if (drv->cuStreamConnection != NULL) {
         drv->cu->cuEGLStreamProducerDisconnect(&drv->cuStreamConnection);
     }
@@ -334,7 +363,11 @@ int exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t p
         }
 
         if (event == EGL_STREAM_IMAGE_ADD_NV) {
-            eglCreateImage(drv->eglDisplay, EGL_NO_CONTEXT, EGL_STREAM_CONSUMER_IMAGE_NV, drv->eglStream, NULL);
+            EGLImage image = eglCreateImage(drv->eglDisplay, EGL_NO_CONTEXT, EGL_STREAM_CONSUMER_IMAGE_NV, drv->eglStream, NULL);
+            NVEGLImage* nvEglImage = (NVEGLImage*) calloc(1, sizeof(NVEGLImage));
+            nvEglImage->image = image;
+            nvEglImage->next = drv->allocatedEGLImages;
+            drv->allocatedEGLImages = nvEglImage;
         } else if (event == EGL_STREAM_IMAGE_AVAILABLE_NV) {
             EGLImage img;
             //somehow we get here with the previous frame, not the next one

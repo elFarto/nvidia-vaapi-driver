@@ -60,6 +60,11 @@ typedef struct
     NVBuffer    *imageBuffer;
 } NVImage;
 
+typedef struct _NVEGLImage {
+    EGLImage image;
+    struct _NVEGLImage *next;
+} NVEGLImage;
+
 typedef struct
 {
     CudaFunctions           *cu;
@@ -73,6 +78,8 @@ typedef struct
     CUeglStreamConnection   cuStreamConnection;
     int                     numFramesPresented;
     bool                    useCorrectNV12Format;
+    NVEGLImage              *allocatedEGLImages;
+
 } NVDriver;
 
 struct _NVCodec;
