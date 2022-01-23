@@ -562,10 +562,12 @@ static VAStatus nvCreateSurfaces2(
         suf->width = width;
         suf->height = height;
         suf->format = nvFormat;
-        suf->pictureIdx = drv->currentSurfaceIdx++;
+        suf->pictureIdx = -1;
         suf->bitDepth = bitdepth;
         suf->contextId = 0;
     }
+
+    drv->surfaceCount += num_surfaces;
 
     return VA_STATUS_SUCCESS;
 }
@@ -591,10 +593,11 @@ static VAStatus nvDestroySurfaces(
 {
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
 
-    for (int i = 0; i < num_surfaces; i++)
-    {
+    for (int i = 0; i < num_surfaces; i++) {
         deleteObject(drv, surface_list[i]);
     }
+
+    drv->surfaceCount -= num_surfaces;
 
     return VA_STATUS_SUCCESS;
 }
@@ -610,10 +613,10 @@ static VAStatus nvCreateContext(
         VAContextID *context		/* out */
     )
 {
-    LOG("with %d render targets, at %dx%d", num_render_targets, picture_width, picture_height);
-
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
     NVConfig *cfg = (NVConfig*) getObjectPtr(drv, config_id);
+
+    LOG("with %d render targets, %d surfaces, at %dx%d", num_render_targets, drv->surfaceCount, picture_width, picture_height);
 
     //find the codec they've selected
     const NVCodec *selectedCodec = NULL;
@@ -648,7 +651,7 @@ static VAStatus nvCreateContext(
     //it isn't particually efficient to do this, but it is simple
     vdci.ulNumOutputSurfaces = 1;
     //just allocate as many surfaces as have been created since we can never have as much information as the decode to guess correctly
-    vdci.ulNumDecodeSurfaces = drv->currentSurfaceIdx;
+    vdci.ulNumDecodeSurfaces = drv->surfaceCount;
 
     cv->cuvidCtxLockCreate(&vdci.vidLock, drv->cudaContext);
 
@@ -819,6 +822,10 @@ static VAStatus nvBeginPicture(
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
     NVContext *nvCtx = (NVContext*) getObjectPtr(drv, context);
     NVSurface *surf = (NVSurface*) getObjectPtr(drv, render_target);
+
+    if (surf->pictureIdx == -1) {
+        surf->pictureIdx = nvCtx->currentPictureId++;
+    }
 
     memset(&nvCtx->pPicParams, 0, sizeof(CUVIDPICPARAMS));
     nvCtx->renderTargets = surf;

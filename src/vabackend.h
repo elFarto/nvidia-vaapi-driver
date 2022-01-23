@@ -79,7 +79,7 @@ typedef struct
     int                     numFramesPresented;
     bool                    useCorrectNV12Format;
     NVEGLImage              *allocatedEGLImages;
-    int                     currentSurfaceIdx;
+    int                     surfaceCount;
 } NVDriver;
 
 struct _NVCodec;
@@ -99,6 +99,7 @@ typedef struct
     AppendableBuffer    sliceOffsets;
     CUVIDPICPARAMS      pPicParams;
     const struct _NVCodec *codec;
+    int                 currentPictureId;
 } NVContext;
 
 typedef struct
