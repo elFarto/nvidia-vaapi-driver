@@ -147,7 +147,11 @@ static int findCudaDisplay(EGLDisplay *eglDisplay) {
                 //we need to check to see if modeset=1 has been passed to the nvidia_drm driver
                 //since you need to be root to read the parameter out of /sys, we'll have to find the
                 //DRM device file, open it and issue an ioctl to see if the ASYNC_PAGE_FLIP cap is set
-                const char* drmDeviceFile = eglQueryDeviceStringEXT(devices[i], EGL_DRM_DEVICE_FILE_EXT);
+                const char* drmDeviceFile = eglQueryDeviceStringEXT(devices[i], EGL_DRM_RENDER_NODE_FILE_EXT);
+                if (drmDeviceFile == NULL) {
+                    LOG("Unable to retrieve render node, falling back to device node");
+                    drmDeviceFile = eglQueryDeviceStringEXT(devices[i], EGL_DRM_DEVICE_FILE_EXT);
+                }
                 LOG("Checking device file: %s", drmDeviceFile);
                 if (drmDeviceFile != NULL) {
                     int fd = open(drmDeviceFile, O_RDONLY);
