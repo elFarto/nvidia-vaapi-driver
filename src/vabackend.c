@@ -652,6 +652,9 @@ static VAStatus nvCreateContext(
     vdci.ulNumOutputSurfaces = 1;
     //just allocate as many surfaces as have been created since we can never have as much information as the decode to guess correctly
     vdci.ulNumDecodeSurfaces = drv->surfaceCount;
+    //reset this to 0 as there are some cases where the context will be destroyed but not terminated, meaning if it's initialised again
+    //we'll have even more surfaces
+    drv->surfaceCount = 0;
 
     cv->cuvidCtxLockCreate(&vdci.vidLock, drv->cudaContext);
 
