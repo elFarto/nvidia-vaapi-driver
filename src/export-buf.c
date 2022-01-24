@@ -107,6 +107,8 @@ static void reconnect(NVDriver *drv) {
     if (drv->eglStream != EGL_NO_STREAM_KHR) {
         eglDestroyStreamKHR(drv->eglDisplay, drv->eglStream);
     }
+//    EGLint streamAttribs[] = { EGL_STREAM_FIFO_LENGTH_KHR, 4, EGL_NONE };
+//    drv->eglStream = eglCreateStreamKHR(drv->eglDisplay, streamAttribs);
     drv->eglStream = eglCreateStreamKHR(drv->eglDisplay, NULL);
     if (drv->eglStream == EGL_NO_STREAM_KHR) {
         LOG("Unable to create EGLStream");
@@ -245,7 +247,7 @@ int exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t p
       } else if (cuStatus != CUDA_SUCCESS) {
         CHECK_CUDA_RESULT(cuStatus);
       } else {
-        //LOG("returned frame %dx%d %p %p", eglframe.width, eglframe.height, eglframe.frame.pArray[0], eglframe.frame.pArray[1]);
+        LOG("returned frame %dx%d %p %p", eglframe.width, eglframe.height, eglframe.frame.pArray[0], eglframe.frame.pArray[1]);
         drv->numFramesPresented--;
       }
     }
@@ -350,6 +352,7 @@ int exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t p
         CHECK_CUDA_RESULT(drv->cu->cuMemcpy2D(&cpy2));
     }
 
+    LOG("presenting frame %dx%d %p %p", eglframe.width, eglframe.height, eglframe.frame.pArray[0], eglframe.frame.pArray[1]);
     CUresult ret = drv->cu->cuEGLStreamProducerPresentFrame( &drv->cuStreamConnection, eglframe, NULL );
     if (ret == CUDA_ERROR_UNKNOWN) {
         reconnect(drv);
@@ -369,6 +372,7 @@ int exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t p
         if (event == EGL_STREAM_IMAGE_ADD_NV) {
             EGLImage image = eglCreateImage(drv->eglDisplay, EGL_NO_CONTEXT, EGL_STREAM_CONSUMER_IMAGE_NV, drv->eglStream, NULL);
             NVEGLImage* nvEglImage = (NVEGLImage*) calloc(1, sizeof(NVEGLImage));
+            LOG("Adding frame from EGLStream: %p", image);
             nvEglImage->image = image;
             nvEglImage->next = drv->allocatedEGLImages;
             drv->allocatedEGLImages = nvEglImage;
@@ -380,13 +384,15 @@ int exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t p
                 return 0;
             }
 
+            LOG("Acquired image from EGLStream: %p", img);
+
             int planes = 0;
             if (!eglExportDMABUFImageQueryMESA(drv->eglDisplay, img, fourcc, &planes, mods)) {
                 LOG("eglExportDMABUFImageQueryMESA failed");
                 return 0;
             }
 
-            LOG("eglExportDMABUFImageQueryMESA: %p %.4s (%x) planes:%d mods:%lx %lx", img, (char*)fourcc, *fourcc, planes, mods[0], mods[1]);
+            //LOG("eglExportDMABUFImageQueryMESA: %p %.4s (%x) planes:%d mods:%lx %lx", img, (char*)fourcc, *fourcc, planes, mods[0], mods[1]);
 
             EGLBoolean r = eglExportDMABUFImageMESA(drv->eglDisplay, img, fds, strides, offsets);
 
@@ -394,10 +400,10 @@ int exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t p
                 LOG("Unable to export image");
                 return 0;
             }
-            LOG("eglExportDMABUFImageMESA: %d %d %d %d, strides: %d %d %d %d, offsets: %d %d %d %d",
-                    fds[0], fds[1], fds[2], fds[3],
-                    strides[0], strides[1], strides[2], strides[3],
-                    offsets[0], offsets[1], offsets[2], offsets[3]);
+            //LOG("eglExportDMABUFImageMESA: %d %d %d %d, strides: %d %d %d %d, offsets: %d %d %d %d",
+            //        fds[0], fds[1], fds[2], fds[3],
+            //        strides[0], strides[1], strides[2], strides[3],
+            //        offsets[0], offsets[1], offsets[2], offsets[3]);
 
             r = eglStreamReleaseImageNV(drv->eglDisplay, drv->eglStream, img, EGL_NO_SYNC_NV);
             if (!r) {
