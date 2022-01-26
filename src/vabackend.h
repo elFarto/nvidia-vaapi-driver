@@ -50,6 +50,13 @@ typedef struct
     int                     progressiveFrame;
     int                     topFieldFirst;
     int                     secondField;
+    CUarray                 cuImages[2];
+    EGLImage                eglImage;
+    int fourcc;
+    int fds[4];
+    int offsets[4];
+    int strides[4];
+    uint64_t mods[4];
 } NVSurface;
 
 typedef struct

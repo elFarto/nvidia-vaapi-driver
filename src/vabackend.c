@@ -15,12 +15,8 @@
 #include <va/va_backend.h>
 #include <va/va_drmcommon.h>
 
-#ifdef __has_include
-#  if __has_include(<libdrm/drm_fourcc.h>)
-#    include <libdrm/drm_fourcc.h>
-#  else
-#    include <drm/drm_fourcc.h>
-#  endif
+#if defined __has_include && __has_include(<libdrm/drm.h>)
+#  include <libdrm/drm_fourcc.h>
 #else
 #  include <drm/drm_fourcc.h>
 #endif
@@ -594,10 +590,13 @@ static VAStatus nvDestroySurfaces(
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
 
     for (int i = 0; i < num_surfaces; i++) {
+        NVSurface *surface = (NVSurface*) getObjectPtr(drv, surface_list[i]);
+        freeSurface(drv, surface);
+
         deleteObject(drv, surface_list[i]);
     }
 
-    drv->surfaceCount -= num_surfaces;
+    drv->surfaceCount = MAX(drv->surfaceCount - num_surfaces, 0);
 
     return VA_STATUS_SUCCESS;
 }
@@ -1532,7 +1531,6 @@ static VAStatus nvExportSurfaceHandle(
     //TODO deal with flags
 
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
-    LOG("got %p", drv);
 
     cu->cuCtxPushCurrent(drv->cudaContext);
 
@@ -1558,24 +1556,6 @@ static VAStatus nvExportSurfaceHandle(
     int fourcc, bpp, fds[4] = {0, 0, 0, 0}, strides[4] = {0, 0, 0, 0}, offsets[4] = {0, 0, 0, 0};
     uint64_t mods[4] = {0, 0, 0, 0};
     exportCudaPtr(drv, deviceMemory, surfaceObj, pitch, &fourcc, fds, offsets, strides, mods, &bpp);
-    if (fourcc == DRM_FORMAT_NV21) {
-        LOG("Detected NV12/NV21 NVIDIA driver bug, attempting to work around");
-        //close the old fds to prevent leaking them
-        for (int i = 0; i < 4; i++) {
-            if (fds[i] != 0) {
-                close(fds[i]);
-            }
-        }
-        //this is a caused by a bug in old versions the driver that was fixed in the 510 series
-        drv->useCorrectNV12Format = true;
-        //re-export the frame in the correct format
-        exportCudaPtr(drv, deviceMemory, surfaceObj, pitch, &fourcc, fds, offsets, strides, mods, &bpp);
-        if (fourcc != DRM_FORMAT_NV12) {
-            LOG("Work around didn't work");
-        } else {
-            LOG("Work around worked!");
-        }
-    }
 
     //since we have to make a copy of the data anyway, we can unmap here
     if (deviceMemory != 0) {
@@ -1615,14 +1595,24 @@ static VAStatus nvExportSurfaceHandle(
     return VA_STATUS_SUCCESS;
 }
 
+void freeAllSurfaces(NVDriver *drv) {
+    for (Object obj = drv->objRoot; obj != NULL; obj = obj->next) {
+        if (obj->type == OBJECT_TYPE_SURFACE) {
+            freeSurface(drv, (NVSurface*) obj->obj);
+        }
+    }
+}
+
 static VAStatus nvTerminate( VADriverContextP ctx )
 {
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
-    LOG("In %s", __func__);
+    LOG("Terminating %p", ctx);
 
     cu->cuCtxPushCurrent(drv->cudaContext);
 
     releaseExporter(drv);
+
+    freeAllSurfaces(drv);
 
     cu->cuCtxDestroy(drv->cudaContext);
 
@@ -1632,7 +1622,7 @@ static VAStatus nvTerminate( VADriverContextP ctx )
 __attribute__((visibility("default")))
 VAStatus __vaDriverInit_1_0(VADriverContextP ctx)
 {
-    LOG("Initialising NVIDIA VA-API Driver");
+    LOG("Initialising NVIDIA VA-API Driver: %p", ctx);
 
     //check to make sure we initialised the CUDA functions correctly
     if (cu == NULL || cv == NULL) {
