@@ -34,7 +34,11 @@ EGLAPI EGLint EGLAPIENTRY eglQueryStreamConsumerEventNV (EGLDisplay dpy, EGLStre
 EGLAPI EGLBoolean EGLAPIENTRY eglStreamAcquireImageNV (EGLDisplay dpy, EGLStreamKHR stream, EGLImage *pImage, EGLSync sync);
 EGLAPI EGLBoolean EGLAPIENTRY eglStreamReleaseImageNV (EGLDisplay dpy, EGLStreamKHR stream, EGLImage image, EGLSync sync);
 #endif
-#endif /* EGL_NV_stream_consumer_eglimage */
+#endif
+
+#ifndef EGL_EXT_device_drm_render_node
+#define EGL_DRM_RENDER_NODE_FILE_EXT      0x3377
+#endif
 
 static PFNEGLQUERYSTREAMCONSUMEREVENTNVPROC eglQueryStreamConsumerEventNV;
 static PFNEGLSTREAMRELEASEIMAGENVPROC eglStreamReleaseImageNV;
