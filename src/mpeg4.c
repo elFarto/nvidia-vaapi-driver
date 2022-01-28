@@ -16,6 +16,7 @@ static void copyMPEG4PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *
     picParams->PicWidthInMbs = (int) (buf->vop_width + 15) / 16; //int
     picParams->FrameHeightInMbs = (int) (buf->vop_height + 15) / 16; //int
 
+    ctx->renderTargets->progressiveFrame  = !buf->vol_fields.bits.interlaced;
     picParams->field_pic_flag    = buf->vol_fields.bits.interlaced;
     picParams->bottom_field_flag = buf->vop_fields.bits.top_field_first;
     picParams->second_field      = 0;

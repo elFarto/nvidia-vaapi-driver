@@ -104,7 +104,7 @@ void logger(const char *filename, const char *function, int line, const char *ms
     va_end(argList);
 
     fprintf(LOG_OUTPUT, "[%d-%d] %s:%4d %24s %s\n", getpid(), gettid(), filename, line, function, formattedMessage);
-    fflush(LOG_OUTPUT);
+    //fflush(LOG_OUTPUT);
 }
 
 void checkCudaErrors(CUresult err, const char *file, const char *function, const int line)
@@ -444,10 +444,12 @@ static VAStatus nvCreateConfig(
 
     if (cudaCodec == cudaVideoCodec_NONE) {
         //we don't support this yet
+        LOG("Profile not supported: %d", profile);
         return VA_STATUS_ERROR_UNSUPPORTED_PROFILE;
     }
 
     if (entrypoint != VAEntrypointVLD) {
+        LOG("Entrypoint not supported: %d", entrypoint);
         return VA_STATUS_ERROR_UNSUPPORTED_ENTRYPOINT;
     }
 
@@ -645,7 +647,7 @@ static VAStatus nvCreateContext(
     vdci.OutputFormat = cfg->surfaceFormat;
     vdci.bitDepthMinus8 = cfg->bitDepth - 8;
 
-    vdci.DeinterlaceMode = cudaVideoDeinterlaceMode_Weave;
+    vdci.DeinterlaceMode = cudaVideoDeinterlaceMode_Adaptive;
     //we only ever map one frame at a time, so we can set this to 1
     //it isn't particually efficient to do this, but it is simple
     vdci.ulNumOutputSurfaces = 1;
@@ -831,6 +833,7 @@ static VAStatus nvBeginPicture(
 
     memset(&nvCtx->pPicParams, 0, sizeof(CUVIDPICPARAMS));
     nvCtx->renderTargets = surf;
+    nvCtx->renderTargets->progressiveFrame = true; //assume we're producing progressive frame unless the codec says otherwise
     nvCtx->pPicParams.CurrPicIdx = nvCtx->renderTargets->pictureIdx;
 
     return VA_STATUS_SUCCESS;
@@ -890,7 +893,6 @@ static VAStatus nvEndPicture(
     }
     LOG("cuvid decoded successful to idx: %d", picParams->CurrPicIdx);
     nvCtx->renderTargets->contextId = context;
-    nvCtx->renderTargets->progressiveFrame = !picParams->field_pic_flag;
     nvCtx->renderTargets->topFieldFirst = !picParams->bottom_field_flag;
     nvCtx->renderTargets->secondField = picParams->second_field;
 

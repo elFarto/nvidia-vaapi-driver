@@ -10,6 +10,7 @@ static void copyVC1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *pi
     int interlaced = buf->picture_fields.bits.frame_coding_mode == 2;
     int field_mode = buf->sequence_fields.bits.interlace && interlaced;
 
+    ctx->renderTargets->progressiveFrame = !interlaced;
     picParams->field_pic_flag    = buf->sequence_fields.bits.interlace && interlaced;
     picParams->bottom_field_flag = field_mode && !(buf->picture_fields.bits.top_field_first ^ !buf->picture_fields.bits.is_first_field);
 

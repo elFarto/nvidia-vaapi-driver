@@ -75,6 +75,8 @@ static void copyHEVCPicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *p
     picParams->bottom_field_flag = !!(buf->CurrPic.flags & VA_PICTURE_HEVC_BOTTOM_FIELD);
     picParams->second_field      = 0;
 
+    ctx->renderTargets->progressiveFrame = !picParams->field_pic_flag;
+
     picParams->ref_pic_flag      = 1;
     picParams->intra_pic_flag    = buf->slice_parsing_fields.bits.IntraPicFlag;
 

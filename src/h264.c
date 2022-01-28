@@ -8,6 +8,7 @@ static void copyH264PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *p
     picParams->PicWidthInMbs    = buf->picture_width_in_mbs_minus1 + 1; //int
     picParams->FrameHeightInMbs = buf->picture_height_in_mbs_minus1 + 1; //int
 
+    ctx->renderTargets->progressiveFrame = !buf->pic_fields.bits.field_pic_flag;
     picParams->field_pic_flag    = buf->pic_fields.bits.field_pic_flag;
     picParams->bottom_field_flag = (buf->CurrPic.flags & VA_PICTURE_H264_BOTTOM_FIELD) != 0;
     picParams->second_field      = (buf->CurrPic.flags & VA_PICTURE_H264_TOP_FIELD) != 0 && (buf->CurrPic.flags & VA_PICTURE_H264_BOTTOM_FIELD) != 0;
