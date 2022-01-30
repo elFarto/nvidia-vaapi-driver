@@ -398,6 +398,7 @@ static VAStatus nvGetConfigAttributes(
         int num_attribs
     )
 {
+    NVDriver *drv = (NVDriver*) ctx->pDriverData;
     if (vaToCuCodec(profile) == cudaVideoCodec_NONE) {
         return VA_STATUS_ERROR_UNSUPPORTED_PROFILE;
     }
@@ -408,7 +409,7 @@ static VAStatus nvGetConfigAttributes(
         {
             attrib_list[i].value = VA_RT_FORMAT_YUV420;
 
-            if (profile == VAProfileHEVCMain10) {
+            if (drv->supports16BitSurface && profile == VAProfileHEVCMain10) {
                 attrib_list[i].value |= VA_RT_FORMAT_YUV420_10;
             }
         }
@@ -466,7 +467,7 @@ static VAStatus nvCreateConfig(
     cfg->cudaCodec = cudaCodec;
 
     //these should be set from the attributes, or a default if the user doesn't care
-    if (profile == VAProfileHEVCMain10) {
+    if (drv->supports16BitSurface && profile == VAProfileHEVCMain10) {
         cfg->surfaceFormat = cudaVideoSurfaceFormat_P016;
         cfg->chromaFormat = cudaVideoChromaFormat_420;
         cfg->bitDepth = 10;
@@ -511,7 +512,7 @@ static VAStatus nvQueryConfigAttributes(
         int i = 0;
         attrib_list[i].type = VAConfigAttribRTFormat;
         attrib_list[i].value = VA_RT_FORMAT_YUV420;
-        if (cfg->profile == VAProfileHEVCMain10) {
+        if (drv->supports16BitSurface && cfg->profile == VAProfileHEVCMain10) {
             attrib_list[i].value |= VA_RT_FORMAT_YUV420_10;
         }
         i++;
@@ -1352,9 +1353,9 @@ static VAStatus nvQuerySurfaceAttributes(
         attrib_list[0].value.type = VAGenericValueTypeInteger;
 
         if (cfg->chromaFormat == cudaVideoChromaFormat_420) {
-            if (cfg->bitDepth == 10 && (videoDecodeCaps.nOutputFormatMask & 2)) {
+            if (drv->supports16BitSurface && cfg->bitDepth == 10 && (videoDecodeCaps.nOutputFormatMask & 2)) {
                 attrib_list[0].value.value.i = VA_FOURCC_P010;
-            } else if (cfg->bitDepth == 12 && (videoDecodeCaps.nOutputFormatMask & 2)) {
+            } else if (drv->supports16BitSurface && cfg->bitDepth == 12 && (videoDecodeCaps.nOutputFormatMask & 2)) {
                 attrib_list[0].value.value.i = VA_FOURCC_P012;
             } else if (videoDecodeCaps.nOutputFormatMask & 1) {
                 attrib_list[0].value.value.i = VA_FOURCC_NV12;

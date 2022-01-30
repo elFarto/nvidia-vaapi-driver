@@ -152,7 +152,6 @@ static int findCudaDisplay(EGLDisplay *eglDisplay) {
                         //this ioctl should fail if modeset=0
                         struct drm_get_cap caps = { .capability = DRM_CAP_DUMB_BUFFER };
                         int ret = ioctl(fd, DRM_IOCTL_GET_CAP, &caps);
-                        LOG("Got DRM_IOCTL_GET_CAP ioctl response: %d %d", ret, caps.value);
                         close(fd);
                         if (ret != 0) {
                             //the modeset parameter is set to 0
@@ -188,6 +187,7 @@ bool initExporter(NVDriver *drv) {
     eglStreamImageConsumerConnectNV = (PFNEGLSTREAMIMAGECONSUMERCONNECTNVPROC) eglGetProcAddress("eglStreamImageConsumerConnectNV");
     eglQueryDeviceStringEXT = (PFNEGLQUERYDEVICESTRINGEXTPROC) eglGetProcAddress("eglQueryDeviceStringEXT");
 
+    PFNEGLQUERYDMABUFFORMATSEXTPROC eglQueryDmaBufFormatsEXT = (PFNEGLQUERYDMABUFFORMATSEXTPROC) eglGetProcAddress("eglQueryDmaBufFormatsEXT");
     PFNEGLDEBUGMESSAGECONTROLKHRPROC eglDebugMessageControlKHR = (PFNEGLDEBUGMESSAGECONTROLKHRPROC) eglGetProcAddress("eglDebugMessageControlKHR");
 
     int ret = findCudaDisplay(&drv->eglDisplay);
@@ -205,6 +205,26 @@ bool initExporter(NVDriver *drv) {
     }
     //setup debug logging
     eglDebugMessageControlKHR(debug, debugAttribs);
+
+    //see if the driver supports 16-bit exports
+    EGLint formats[64];
+    EGLint formatCount;
+    if (eglQueryDmaBufFormatsEXT(drv->eglDisplay, 64, formats, &formatCount)) {
+        bool r16 = false, rg1616 = false;
+        for (int i = 0; i < formatCount; i++) {
+            if (formats[i] == DRM_FORMAT_R16) {
+                r16 = true;
+            } else if (formats[i] == DRM_FORMAT_RG1616) {
+                rg1616 = true;
+            }
+        }
+        drv->supports16BitSurface = r16 & rg1616;
+        if (drv->supports16BitSurface) {
+            LOG("Driver supports 16-bit surfaces");
+        } else {
+            LOG("Driver doesn't support 16-bit surfaces");
+        }
+    }
 
     reconnect(drv);
 

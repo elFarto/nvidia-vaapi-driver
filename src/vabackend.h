@@ -85,6 +85,7 @@ typedef struct
     CUeglStreamConnection   cuStreamConnection;
     int                     numFramesPresented;
     bool                    useCorrectNV12Format;
+    bool                    supports16BitSurface;
     NVEGLImage              *allocatedEGLImages;
     int                     surfaceCount;
 } NVDriver;
