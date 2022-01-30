@@ -53,38 +53,6 @@ static void copyMPEG4PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *
     ppc->trb[0] = buf->TRB;
     //ppc->trb[1] = 4; //not correct
     ppc->gmc_enabled = buf->vop_fields.bits.vop_coding_type == 3 && buf->vol_fields.bits.sprite_enable;
-
-//    printf("=================================\n");
-//    printf("PicWidthInMbs: %d\n", picParams->PicWidthInMbs);
-//    printf("FrameHeightInMbs: %d\n", picParams->FrameHeightInMbs);
-//    printf("field_pic_flag: %d\n", picParams->field_pic_flag);
-//    printf("bottom_field_flag: %d\n", picParams->bottom_field_flag);
-//    printf("second_field: %d\n", picParams->second_field);
-//    printf("intra_pic_flag: %d\n", picParams->intra_pic_flag);
-//    printf("ref_pic_flag: %d\n", picParams->ref_pic_flag);
-//    printf("ForwardRefIdx: %d (%d)\n", ppc->ForwardRefIdx, buf->forward_reference_picture);
-//    printf("BackwardRefIdx: %d (%d)\n", ppc->BackwardRefIdx, buf->backward_reference_picture);
-//    printf("video_object_layer_width: %d\n", ppc->video_object_layer_width);
-//    printf("video_object_layer_height: %d\n", ppc->video_object_layer_height);
-//    printf("vop_time_increment_bitcount: %d\n", ppc->vop_time_increment_bitcount);
-//    printf("top_field_first: %d\n", ppc->top_field_first);
-//    printf("resync_marker_disable: %d\n", ppc->resync_marker_disable);
-//    printf("quant_type: %d\n", ppc->quant_type);
-//    printf("quarter_sample: %d\n", ppc->quarter_sample );
-//    printf("short_video_header: %d\n", ppc->short_video_header );
-//    printf("divx_flags: %d\n", ppc->divx_flags );
-//    printf("vop_coding_type: %d\n", ppc->vop_coding_type );
-//    printf("vop_coded %d\n", ppc->vop_coded  );//?
-//    printf("vop_rounding_type: %d\n", ppc->vop_rounding_type );
-//    printf("alternate_vertical_scan_flag: %d\n", ppc->alternate_vertical_scan_flag );
-//    printf("interlaced: %d\n", ppc->interlaced );
-//    printf("vop_fcode_forward: %d\n", ppc->vop_fcode_forward );
-//    printf("vop_fcode_backward: %d\n", ppc->vop_fcode_backward );
-//    printf("trd[0]: %d\n", ppc->trd[0] );
-//    printf("trd[1]: %d\n",  ppc->trd[1] );
-//    printf("trb[0]: %d\n", ppc->trb[0] );
-//    printf("trb[1]: %d\n", ppc->trb[1] );
-//    printf("gmc_enabled: %d\n", ppc->gmc_enabled );
 }
 
 static void copyMPEG4SliceParam(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
@@ -100,6 +68,7 @@ static void copyMPEG4SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *pi
     for (int i = 0; i < ctx->lastSliceParamsCount; i++)
     {
         VASliceParameterBufferMPEG4 *sliceParams = &((VASliceParameterBufferMPEG4*) ctx->lastSliceParams)[i];
+        LOG("here: %d", sliceParams->macroblock_offset);
         uint32_t offset = (uint32_t) ctx->buf.size;
         appendBuffer(&ctx->sliceOffsets, &offset, sizeof(offset));
         appendBuffer(&ctx->buf, PTROFF(buf->ptr, sliceParams->slice_data_offset), sliceParams->slice_data_size);
@@ -153,4 +122,19 @@ static const DECLARE_CODEC(mpeg4Codec) = {
     .supportedProfileCount = ARRAY_SIZE(mpeg4SupportProfiles),
     .supportedProfiles = mpeg4SupportProfiles,
 };
+*/
+
+/*
+This code needs to go in nvCreateBuffer, to realign the buffer to capture everything that's needed by NVDEC. However this hack is specific to ffmpeg
+and is likely to break anything that doesn't pass in a pointer into the full data. Also, I'm not sure the values (69 and 8) are valid for all videos.
+    else if ((nvCtx->profile == VAProfileMPEG4AdvancedSimple || nvCtx->profile == VAProfileMPEG4Main || nvCtx->profile == VAProfileMPEG4Simple)
+             && type == VASliceDataBufferType) {
+        //HACK HACK HACK
+        offset = 69;
+        if ((((uintptr_t) data - 8) & 0xf) == 0) {
+            offset = 8;
+        }
+        data -= offset;
+        size += offset;
+    }
 */
