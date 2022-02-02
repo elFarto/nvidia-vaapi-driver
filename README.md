@@ -42,20 +42,20 @@ The `NVD_LOG` environment variable can be used to control logging, `NVD_LOG=1` w
 # Firefox
 
 To use the driver with firefox you will need at least Firefox 96 (currently in beta), the following config options need to be set in the about:config page:
-| Option | Value | Reason |
-|---|---|---|
-| media.ffmpeg.vaapi.enabled | true | Required, enables the use of VA-API.|
-| media.rdd-ffmpeg.enabled | true | Required, default on FF97. Forces ffmpeg usage into the RDD process, rather than the content process.|
-| media.av1.enabled | false | Optional, disables AV1. The driver doesn't support AV1 playback yet. This will prevent sites attempting to use it and falling back to software decoding |
-| (X.Org & Firefox < 94)  <br/> gfx.x11-egl.force-enabled | true | This driver requires that Firefox use the EGL backend (default since Firefox 94). If it isn't selecting it by default, it'll need to be forced on using this option or by setting the `MOZ_X11_EGL` environment variable to `1`. It's recommended you try the environment variable method first to test it. Note: we don't need this for Wayland|
-| (NVIDIA driver < 495.x)  <br/> widget.dmabuf.force-enabled | true | Required for NVIDIA 470 series drivers, not required at all on 495+. This option has been shown to help getting decoding working on the 470 driver series. However it should be noted that Firefox isn't coded to allow DMA-BUF support without GBM support, so it may not function completely correctly when it's forced on. |
+| Option | Value | Affected Setups | Reason | 
+|---|---|---|---|
+| media.ffmpeg.vaapi.enabled | true | All | Required, enables the use of VA-API.|
+| media.rdd-ffmpeg.enabled | true | FF < 97 | Forces ffmpeg usage into the RDD process, rather than the content process.|
+| media.av1.enabled | false | All | Optional, disables AV1. The driver doesn't support AV1 playback yet. This will prevent sites attempting to use it and falling back to software decoding |
+| gfx.x11-egl.force-enabled | true | (X.Org & FF < 98) **OR** <br/> (XWayland & FF < 94) |  This driver requires that Firefox use the EGL backend. If it isn't selecting it by default, it'll need to be forced on using this option or by setting the `MOZ_X11_EGL` environment variable to `1`. It's recommended you try the environment variable method first to test it. Note: we don't need this for Wayland |
+| widget.dmabuf.force-enabled | true | NVIDIA driver < 470.98 | This option has been shown to help getting decoding working on the 470 driver series prior to 470.98. However it should be noted that Firefox isn't coded to allow DMA-BUF support without GBM support, so it may not function completely correctly when it's forced on. |
 
 In addition the following environment variables need to be set:
 | Variable | Value | Reason |
 |---|---|---|
 |LIBVA_DRIVER_NAME|nvidia|This forces libva to load the `nvidia` backend, as the current version doesn't know which driver to load for the nvidia-drm driver.|
 |MOZ_DISABLE_RDD_SANDBOX|1|This disables the sandbox for the RDD process that the decoder runs in.|
-|(Wayland) <br/> MOZ_ENABLE_WAYLAND|1|Enable Wayland mode on Firefox|
+|(Wayland) <br/> MOZ_ENABLE_WAYLAND|1|Enable Wayland mode on Firefox, [some distros already shipped FF with this option by default](https://github.com/elFarto/nvidia-vaapi-driver/pull/50#issuecomment-1028051123) |
 
 # MPV
 
