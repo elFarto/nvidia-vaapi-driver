@@ -232,11 +232,19 @@ static void deleteObject(NVDriver *drv, VAGenericID id) {
     }
 }
 
-int pictureIdxFromSurfaceId(NVDriver *drv, VASurfaceID surf) {
+NVSurface* nvSurfaceFromSurfaceId(NVDriver *drv, VASurfaceID surf) {
     Object obj = getObject(drv, surf);
     if (obj != NULL && obj->type == OBJECT_TYPE_SURFACE) {
         NVSurface *suf = (NVSurface*) obj->obj;
-        return suf->pictureIdx;
+        return suf;
+    }
+    return NULL;
+}
+
+int pictureIdxFromSurfaceId(NVDriver *drv, VASurfaceID surfId) {
+    NVSurface *surf = nvSurfaceFromSurfaceId(drv, surfId);
+    if (surf != NULL) {
+        return surf->pictureIdx;
     }
     return -1;
 }

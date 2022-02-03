@@ -52,11 +52,12 @@ typedef struct
     int                     secondField;
     CUarray                 cuImages[2];
     EGLImage                eglImage;
-    int fourcc;
-    int fds[4];
-    int offsets[4];
-    int strides[4];
-    uint64_t mods[4];
+    int                     fourcc;
+    int                     fds[4];
+    int                     offsets[4];
+    int                     strides[4];
+    uint64_t                mods[4];
+    int                     order_hint; //needed for av1?
 } NVSurface;
 
 typedef struct
@@ -135,6 +136,7 @@ typedef struct _NVCodec
 
 void appendBuffer(AppendableBuffer *ab, const void *buf, uint64_t size);
 int pictureIdxFromSurfaceId(NVDriver *ctx, VASurfaceID surf);
+NVSurface* nvSurfaceFromSurfaceId(NVDriver *drv, VASurfaceID surf);
 void checkCudaErrors(CUresult err, const char *file, const char *function, const int line);
 void logger(const char *filename, const char *function, int line, const char *msg, ...);
 #define CHECK_CUDA_RESULT(err) checkCudaErrors(err, __FILE__, __func__, __LINE__)

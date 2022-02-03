@@ -1,6 +1,16 @@
 #include "vabackend.h"
+#include <sys/param.h>
 
 //TODO incomplete as no hardware to test with
+int get_relative_dist(CUVIDAV1PICPARAMS *pps, int ref_hint, int order_hint) {
+    if (!pps->enable_order_hint) {
+        return 0;
+    }
+    int diff = ref_hint - order_hint;
+    int m = 1 << pps->order_hint_bits_minus1;
+    return (diff & (m - 1)) - (diff & m);
+}
+
 
 static void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams) {
     static const int bit_depth_map[] = {0, 2, 4}; //8-bpc, 10-bpc, 12-bpc
@@ -77,59 +87,72 @@ static void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *pi
     pps->SkipModeFrame0 = 0;
     pps->SkipModeFrame1 = 0;
 
-    if (pps->skip_mode) {
-        //TODO compute SkipModeFrame0 and SkipModeFrame1
-        LOG("AV1 frame requires SkipModeFrame0 and SkipModeFrame1 values");
+    //we'll need this value in a future frame
+    ctx->renderTargets->order_hint = pps->frame_offset;
 
-//        int forwardIdx = -1;
-//        int backwardIdx = -1;
-//        int forwardHint = 0;
-//        int backwardHint = 0;
-//        int RefOrderHint[8];
-//        for (int i = 0; i < 8; i++) {
-//            //TODO can't generate RefOrderHint as refresh_frame_flags isn't passed in
-//        }
-//        for (int i = 0; i < 7; i++ ) {
-//            int refHint = RefOrderHint[ buf->ref_frame_idx[ i ] ];
-//            if ( get_relative_dist( refHint, OrderHint ) < 0 ) {
-//                if ( forwardIdx < 0 || get_relative_dist( refHint, forwardHint) > 0 ) {
-//                    forwardIdx = i;
-//                    forwardHint = refHint;
-//                }
-//            } else if ( get_relative_dist( refHint, OrderHint) > 0 ) {
-//                if ( backwardIdx < 0 || get_relative_dist( refHint, backwardHint) < 0 ) {
-//                    backwardIdx = i;
-//                    backwardHint = refHint;
-//                }
-//            }
-//        }
-//        if ( forwardIdx < 0 ) {
-//            //skipModeAllowed = 0
-//        } else if ( backwardIdx >= 0 ) {
-//            //skipModeAllowed = 1
-//            pps->SkipModeFrame0 = LAST_FRAME + Min(forwardIdx, backwardIdx);
-//            pps->SkipModeFrame1 = LAST_FRAME + Max(forwardIdx, backwardIdx);
-//        } else {
-//            int secondForwardIdx = -1;
-//            int secondForwardHint = 0;
-//            for (int i = 0; i < 7; i++ ) {
-//                int refHint = RefOrderHint[ buf->ref_frame_idx[ i ] ];
-//                if ( get_relative_dist( refHint, forwardHint ) < 0 ) {
-//                    if ( secondForwardIdx < 0 || get_relative_dist( refHint, secondForwardHint ) > 0 ) {
-//                        secondForwardIdx = i;
-//                        secondForwardHint = refHint;
-//                    }
-//                }
-//            }
-//            if ( secondForwardIdx < 0 ) {
-//                //skipModeAllowed = 0
-//            } else {
-//                //skipModeAllowed = 1
-//                pps->SkipModeFrame0 = LAST_FRAME + Min(forwardIdx, secondForwardIdx);
-//                pps->SkipModeFrame1 = LAST_FRAME + Max(forwardIdx, secondForwardIdx);
-//            }
-//        }
+    if (pps->skip_mode) {
+        int forwardIdx = -1;
+        int backwardIdx = -1;
+        int forwardHint = 0;
+        int backwardHint = 0;
+        int RefOrderHint[8] = {0};
+        for (int i = 0; i < 8; i++) {
+            NVSurface *surf = nvSurfaceFromSurfaceId(ctx->drv, buf->ref_frame_map[i]);
+            if (surf != NULL && surf->pictureIdx != -1) {
+                RefOrderHint[i] = surf->order_hint;
+            }
+        }
+
+        for (int i = 0; i < 7; i++ ) {
+            int refHint = RefOrderHint[ buf->ref_frame_idx[ i ] ];
+            if ( get_relative_dist( pps, refHint, buf->order_hint ) < 0 ) {
+                if ( forwardIdx < 0 || get_relative_dist( pps, refHint, forwardHint) > 0 ) {
+                    forwardIdx = i;
+                    forwardHint = refHint;
+                }
+            } else if ( get_relative_dist( pps, refHint, buf->order_hint) > 0 ) {
+                if ( backwardIdx < 0 || get_relative_dist( pps, refHint, backwardHint) < 0 ) {
+                    backwardIdx = i;
+                    backwardHint = refHint;
+                }
+            }
+        }
+        if ( forwardIdx < 0 ) {
+            //skipModeAllowed = 0
+        } else if ( backwardIdx >= 0 ) {
+            //skipModeAllowed = 1
+            pps->SkipModeFrame0 = MIN(forwardIdx, backwardIdx) + 1;
+            pps->SkipModeFrame1 = MAX(forwardIdx, backwardIdx) + 1;
+        } else {
+            int secondForwardIdx = -1;
+            int secondForwardHint = 0;
+            for (int i = 0; i < 7; i++ ) {
+                int refHint = RefOrderHint[ buf->ref_frame_idx[ i ] ];
+                if ( get_relative_dist( pps, refHint, forwardHint ) < 0 ) {
+                    if ( secondForwardIdx < 0 || get_relative_dist( pps, refHint, secondForwardHint ) > 0 ) {
+                        secondForwardIdx = i;
+                        secondForwardHint = refHint;
+                    }
+                }
+            }
+            if ( secondForwardIdx < 0 ) {
+                //skipModeAllowed = 0
+            } else {
+                //skipModeAllowed = 1
+                pps->SkipModeFrame0 = MIN(forwardIdx, secondForwardIdx) + 1;
+                pps->SkipModeFrame1 = MAX(forwardIdx, secondForwardIdx) + 1;
+            }
+        }
+        //LOG("ffmpeg: SkipModeFrame0 == %u, SkipModeFrame1 == %u", buf->va_reserved[1], buf->va_reserved[2]);
+        LOG("out:    SkipModeFrame0 == %u, SkipModeFrame1 == %u", pps->SkipModeFrame0, pps->SkipModeFrame1);
+
     }
+
+    for (int i = 0; i < 8; i++) { //MAX_REF_FRAMES
+        pps->loop_filter_ref_deltas[i] = buf->ref_deltas[i];
+        pps->ref_frame_map[i] = pictureIdxFromSurfaceId(ctx->drv, buf->ref_frame_map[i]);
+    }
+
 
     pps->base_qindex = buf->base_qindex;
     pps->qp_y_dc_delta_q = buf->y_dc_delta_q;
@@ -227,11 +250,6 @@ static void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *pi
         }
     }
 
-    for (int i = 0; i < 8; i++) { //MAX_REF_FRAMES
-        pps->loop_filter_ref_deltas[i] = buf->ref_deltas[i];
-        pps->ref_frame_map[i] = pictureIdxFromSurfaceId(ctx->drv, buf->ref_frame_map[i]);
-    }
-
     if (buf->primary_ref_frame == 7) { //PRIMARY_REF_NONE
         pps->primary_ref_frame = -1;
     } else {
@@ -242,9 +260,10 @@ static void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *pi
     for (int i = 0; i < 7; i++) { //REFS_PER_FRAME
         int ref_idx = buf->ref_frame_idx[i];
         pps->ref_frame[i].index = pps->ref_frame_map[ref_idx];
-        //TODO can maybe pull these from the surface itself?
-        //pps->ref_frame[i].width = pps->ref_frame_map[ref_idx];
-        //pps->ref_frame[i].height = pps->ref_frame_map[ref_idx];
+        //pull these from the surface itself
+        NVSurface *surf = nvSurfaceFromSurfaceId(ctx->drv, buf->ref_frame_map[i]);
+        pps->ref_frame[i].width = surf->width;
+        pps->ref_frame[i].height = surf->height;
 
         //TODO not sure on this one
         pps->global_motion[i].invalid = buf->wm[i].invalid;
