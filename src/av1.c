@@ -262,8 +262,10 @@ static void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *pi
         pps->ref_frame[i].index = pps->ref_frame_map[ref_idx];
         //pull these from the surface itself
         NVSurface *surf = nvSurfaceFromSurfaceId(ctx->drv, buf->ref_frame_map[i]);
-        pps->ref_frame[i].width = surf->width;
-        pps->ref_frame[i].height = surf->height;
+        if (surf != NULL) {
+            pps->ref_frame[i].width = surf->width;
+            pps->ref_frame[i].height = surf->height;
+        }
 
         //TODO not sure on this one
         pps->global_motion[i].invalid = buf->wm[i].invalid;
