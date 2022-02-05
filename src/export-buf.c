@@ -113,6 +113,45 @@ static void reconnect(NVDriver *drv) {
     drv->numFramesPresented = 0;
 }
 
+static bool checkModesetParameter(EGLDeviceEXT device) {
+    //we need to check to see if modeset=1 has been passed to the nvidia_drm driver
+    //since you need to be root to read the parameter out of /sys, we'll have to find the
+    //DRM device file, open it and issue an ioctl to see if the ASYNC_PAGE_FLIP cap is set
+    const char* drmDeviceFile = eglQueryDeviceStringEXT(device, EGL_DRM_RENDER_NODE_FILE_EXT);
+    char tmpDeviceName[20]; // /dev/dri/renderD128
+    if (drmDeviceFile == NULL) {
+        LOG("Unable to retrieve render node, deriving render node from master node");
+        drmDeviceFile = eglQueryDeviceStringEXT(device, EGL_DRM_DEVICE_FILE_EXT);
+        //compute the render node device path. opening the master node logs an error to syslog
+        //which we shouldn't really do.
+        if (drmDeviceFile != NULL) {
+            // /dev/dri/card == 12
+            const char* cardIdxStr = drmDeviceFile + 12;
+            int cardIdx = atoi(cardIdxStr);
+            snprintf(tmpDeviceName, 20, "/dev/dri/renderD%u", cardIdx + 128);
+            drmDeviceFile = tmpDeviceName;
+        }
+    }
+    LOG("Checking device file: %s", drmDeviceFile);
+    if (drmDeviceFile != NULL) {
+        int fd = open(drmDeviceFile, O_RDONLY);
+        if (fd > 0) {
+            //this ioctl should fail if modeset=0
+            struct drm_get_cap caps = { .capability = DRM_CAP_DUMB_BUFFER };
+            int ret = ioctl(fd, DRM_IOCTL_GET_CAP, &caps);
+            close(fd);
+            if (ret != 0) {
+                //the modeset parameter is set to 0
+                LOG("ERROR: This driver requires the nvidia_drm.modeset kernel module parameter set to 1");
+                return false;
+            }
+        } else {
+            LOG("Unable to check nvidia_drm modeset setting");
+        }
+    }
+    return true;
+}
+
 static int findCudaDisplay(EGLDisplay *eglDisplay) {
     PFNEGLQUERYDEVICESEXTPROC eglQueryDevicesEXT = (PFNEGLQUERYDEVICESEXTPROC) eglGetProcAddress("eglQueryDevicesEXT");
     PFNEGLQUERYDEVICEATTRIBEXTPROC eglQueryDeviceAttribEXT = (PFNEGLQUERYDEVICEATTRIBEXTPROC) eglGetProcAddress("eglQueryDeviceAttribEXT");
@@ -137,32 +176,8 @@ static int findCudaDisplay(EGLDisplay *eglDisplay) {
             //TODO: currently we're hardcoding the CUDA device to 0, so only create the display on that device
             if (attr == 0) {
                 //attr contains the cuda device id
-                //we need to check to see if modeset=1 has been passed to the nvidia_drm driver
-                //since you need to be root to read the parameter out of /sys, we'll have to find the
-                //DRM device file, open it and issue an ioctl to see if the ASYNC_PAGE_FLIP cap is set
-                const char* drmDeviceFile = eglQueryDeviceStringEXT(devices[i], EGL_DRM_RENDER_NODE_FILE_EXT);
-                if (drmDeviceFile == NULL) {
-                    LOG("Unable to retrieve render node, falling back to device node");
-                    drmDeviceFile = eglQueryDeviceStringEXT(devices[i], EGL_DRM_DEVICE_FILE_EXT);
-                }
-                LOG("Checking device file: %s", drmDeviceFile);
-                if (drmDeviceFile != NULL) {
-                    int fd = open(drmDeviceFile, O_RDONLY);
-                    if (fd > 0) {
-                        //this ioctl should fail if modeset=0
-                        struct drm_get_cap caps = { .capability = DRM_CAP_DUMB_BUFFER };
-                        int ret = ioctl(fd, DRM_IOCTL_GET_CAP, &caps);
-                        close(fd);
-                        if (ret != 0) {
-                            //the modeset parameter is set to 0
-                            LOG("ERROR: This driver requires the nvidia_drm.modeset kernel module parameter set to 1");
-                            return -1;
-                        }
-                    } else {
-                        LOG("Unable to check nvidia_drm modeset setting");
-                    }
-                } else {
-                    LOG("Unable to retrieve DRM device file");
+                if (!checkModesetParameter(devices[i])) {
+                    return -1;
                 }
 
                 *eglDisplay = eglGetPlatformDisplay(EGL_PLATFORM_DEVICE_EXT, devices[i], NULL);
