@@ -12,6 +12,176 @@ int get_relative_dist(CUVIDAV1PICPARAMS *pps, int ref_hint, int order_hint) {
 }
 
 
+
+void printCUVIDPICPARAMS(CUVIDPICPARAMS *p) {
+    #define P(f) fprintf(stderr, #f ": %d\n", p->f)
+//    P(PicWidthInMbs);
+//    P(FrameHeightInMbs);
+//    P(CurrPicIdx);
+//    P(field_pic_flag);
+//    P(bottom_field_flag);
+//    P(second_field);
+    P(ref_pic_flag);
+//    P(intra_pic_flag);
+    #undef P
+    #define P(f) fprintf(stderr, "av1." #f ": %d\n", p->CodecSpecific.av1.f)
+    #define PA(f, m) for (int i = 0; i < m; i++) { fprintf(stderr, "av1." #f "[%d]: %d\n", i, p->CodecSpecific.av1.f[i]); }
+
+//    P(width);
+//    P(height);
+//    P(frame_offset);
+//    P(decodePicIdx);
+//    P(profile);
+//    P(use_128x128_superblock);
+//    P(subsampling_x);
+//    P(subsampling_y);
+//    P(mono_chrome);
+//    P(bit_depth_minus8);
+//    P(enable_filter_intra);
+//    P(enable_intra_edge_filter);
+//    P(enable_interintra_compound);
+//    P(enable_masked_compound);
+
+//    P(enable_dual_filter);
+//    P(enable_order_hint);
+//    P(order_hint_bits_minus1);
+//    P(enable_jnt_comp);
+//    P(enable_superres);
+//    P(enable_cdef );
+//    P(enable_restoration);
+//    P(enable_fgs);
+//    P(reserved0_7bits);
+
+//    P(frame_type);
+//    P(show_frame);
+//    P(disable_cdf_update);
+//    P(allow_screen_content_tools);
+//    P(force_integer_mv);
+//    P(coded_denom);
+//    P(allow_intrabc);
+//    P(allow_high_precision_mv);
+//    P(interp_filter);
+//    P(switchable_motion_mode);
+//    P(use_ref_frame_mvs);
+//    P(disable_frame_end_update_cdf);
+//    P(delta_q_present);
+//    P(delta_q_res);
+//    P(using_qmatrix);
+//    P(coded_lossless);
+//    P(use_superres);
+//    P(tx_mode);
+//    P(reference_mode);
+//    P(allow_warped_motion);
+//    P(reduced_tx_set);
+//    P(skip_mode);
+//    P(reserved1_3bits);
+
+//    P(num_tile_cols);
+//    P(num_tile_rows);
+//    P(context_update_tile_id);
+//    PA(tile_widths, 64);
+//    PA(tile_heights, 64);
+
+//    P(cdef_damping_minus_3);
+//    P(cdef_bits);
+//    P(reserved2_4bits);
+//    PA(cdef_y_strength, 8);
+//    PA(cdef_uv_strength, 8);
+
+//    P(SkipModeFrame0);
+//    P(SkipModeFrame1);
+
+//    P(base_qindex);
+//    P(qp_y_dc_delta_q);
+//    P(qp_u_dc_delta_q);
+//    P(qp_v_dc_delta_q);
+//    P(qp_u_ac_delta_q);
+//    P(qp_v_ac_delta_q);
+//    P(qm_y);
+//    P(qm_u);
+//    P(qm_v);
+
+
+//    P(segmentation_enabled);
+//    P(segmentation_update_map);
+//    P(segmentation_update_data);
+//    P(segmentation_temporal_update);
+//    P(reserved3_4bits);
+//    PA(segmentation_feature_data[0], 8);
+//    PA(segmentation_feature_data[1], 8);
+//    PA(segmentation_feature_data[2], 8);
+//    PA(segmentation_feature_data[3], 8);
+//    PA(segmentation_feature_data[4], 8);
+//    PA(segmentation_feature_data[5], 8);
+//    PA(segmentation_feature_data[6], 8);
+//    PA(segmentation_feature_data[7], 8);
+//    PA(segmentation_feature_mask, 8);
+
+//    PA(loop_filter_level, 2);
+//    P(loop_filter_level_u);
+//    P(loop_filter_level_v);
+//    P(loop_filter_sharpness);
+//    PA(loop_filter_ref_deltas, 8);
+//    PA(loop_filter_mode_deltas, 2);
+//    P(loop_filter_delta_enabled);
+//    P(loop_filter_delta_update);
+
+//    P(delta_lf_present);
+//    P(delta_lf_res);
+//    P(delta_lf_multi);
+//    P(reserved4_2bits);
+
+//    PA(lr_unit_size, 3);
+//    PA(lr_type, 3);
+
+//    P(primary_ref_frame);
+//    PA(ref_frame_map, 8);
+
+//    P(temporal_layer_id);
+//    P(spatial_layer_id);
+
+#define PAX(f, f2, m) for (int i = 0; i < m; i++) { fprintf(stderr, "av1." #f "[%d]." #f2 ": %d\n", i, p->CodecSpecific.av1.f[i].f2); }
+//    PAX(ref_frame, width, 7);
+//    PAX(ref_frame, height, 7);
+//    PAX(ref_frame, index, 7);
+
+
+//    PAX(global_motion, invalid, 7);
+//    PAX(global_motion, wmtype, 7);
+//    PAX(global_motion, wmmat[0], 7);
+//    PAX(global_motion, wmmat[1], 7);
+//    PAX(global_motion, wmmat[2], 7);
+//    PAX(global_motion, wmmat[3], 7);
+//    PAX(global_motion, wmmat[4], 7);
+//    PAX(global_motion, wmmat[5], 7);
+
+#define PA2(f, m, n) for (int i = 0; i < m; i++) {for (int j = 0; j < n; j++) { fprintf(stderr, "av1." #f "[%d][%d]: %d\n", i, j, p->CodecSpecific.av1.f[i][j]); }}
+//   P(apply_grain);
+//   P(overlap_flag);
+//   P(scaling_shift_minus8);
+//   P(chroma_scaling_from_luma);
+//   P(ar_coeff_lag);
+//   P(ar_coeff_shift_minus6);
+//   P(grain_scale_shift);
+//   P(clip_to_restricted_range);
+//   P(num_y_points);
+//   PA2(scaling_points_y, 14, 2);
+//   P(num_cb_points);
+//   PA2(scaling_points_cb, 10, 2);
+//   P(num_cr_points);
+//   PA2(scaling_points_cr, 10, 2);
+//   P(random_seed);
+//   PA(ar_coeffs_y , 24);
+//   PA(ar_coeffs_cb, 25);
+//   PA(ar_coeffs_cr, 25);
+//   P(cb_mult);
+//   P(cb_luma_mult);
+//   P(cb_offset);
+//   P(cr_mult);
+//   P(cr_luma_mult);
+//   P(cr_offset);
+}
+
 static void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams) {
     static const int bit_depth_map[] = {0, 2, 4}; //8-bpc, 10-bpc, 12-bpc
 
@@ -48,7 +218,7 @@ static void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *pi
     pps->enable_order_hint = buf->seq_info_fields.fields.enable_order_hint;
     pps->order_hint_bits_minus1 = buf->order_hint_bits_minus_1;
     pps->enable_jnt_comp = buf->seq_info_fields.fields.enable_jnt_comp;
-    //TODO not quite correct, this can be 0, and enable can be 1
+    //TODO not quite correct, use can be 0, and enable can be 1
     pps->enable_superres = buf->pic_info_fields.bits.use_superres;
     pps->enable_cdef = buf->seq_info_fields.fields.enable_cdef;
     //TODO this flag just seems to be missing from libva
@@ -59,7 +229,7 @@ static void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *pi
     pps->show_frame = buf->pic_info_fields.bits.show_frame;
     pps->disable_cdf_update = buf->pic_info_fields.bits.disable_cdf_update;
     pps->allow_screen_content_tools = buf->pic_info_fields.bits.allow_screen_content_tools;
-    pps->force_integer_mv = buf->pic_info_fields.bits.force_integer_mv;
+    pps->force_integer_mv = buf->pic_info_fields.bits.force_integer_mv || picParams->intra_pic_flag;
     pps->coded_denom = buf->superres_scale_denominator;
     pps->allow_intrabc = buf->pic_info_fields.bits.allow_intrabc;
     pps->allow_high_precision_mv = buf->pic_info_fields.bits.allow_high_precision_mv;
@@ -81,6 +251,7 @@ static void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *pi
     pps->num_tile_cols = buf->tile_cols;
     pps->num_tile_rows = buf->tile_rows;
     pps->context_update_tile_id = buf->context_update_tile_id;
+    picParams->nNumSlices = pps->num_tile_cols * pps->num_tile_rows;
 
     pps->cdef_damping_minus_3 = buf->cdef_damping_minus_3;
     pps->cdef_bits = buf->cdef_bits;
@@ -144,7 +315,7 @@ static void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *pi
             }
         }
         //LOG("ffmpeg: SkipModeFrame0 == %u, SkipModeFrame1 == %u", buf->va_reserved[1], buf->va_reserved[2]);
-        LOG("out:    SkipModeFrame0 == %u, SkipModeFrame1 == %u", pps->SkipModeFrame0, pps->SkipModeFrame1);
+        //LOG("out:    SkipModeFrame0 == %u, SkipModeFrame1 == %u", pps->SkipModeFrame0, pps->SkipModeFrame1);
 
     }
 
@@ -268,7 +439,7 @@ static void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *pi
         }
 
         //TODO not sure on this one
-        pps->global_motion[i].invalid = buf->wm[i].invalid;
+        pps->global_motion[i].invalid = (buf->wm[i].wmtype == 0);
         pps->global_motion[i].wmtype = buf->wm[i].wmtype;
         for (int j = 0; j < 6; j++) {
             pps->global_motion[i].wmmat[j] = buf->wm[i].wmmat[j];
@@ -296,27 +467,30 @@ static void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *pi
             pps->ar_coeffs_cr[i] = buf->film_grain_info.ar_coeffs_cr[i];
         }
     }
+
+    //printCUVIDPICPARAMS(picParams);
 }
 
 static void copyAV1SliceParam(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams) {
     ctx->lastSliceParams = buf->ptr;
     ctx->lastSliceParamsCount = buf->elements;
-
-    picParams->nNumSlices += buf->elements;
 }
 
 static void copyAV1SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams) {
     uint32_t offset = (uint32_t) ctx->buf.size;
-    appendBuffer(&ctx->buf, buf->ptr, buf->size);
-    picParams->nBitstreamDataLen += buf->size;
-
     for (int i = 0; i < ctx->lastSliceParamsCount; i++) {
         VASliceParameterBufferAV1 *sliceParams = &((VASliceParameterBufferAV1*) ctx->lastSliceParams)[i];
-        offset += sliceParams->slice_data_offset;
+
+        //copy just the slice we're looking at
+        appendBuffer(&ctx->buf, PTROFF(buf->ptr, sliceParams->slice_data_offset), sliceParams->slice_data_size);
+
+        //now append the offset and size of the slice we just copied
         appendBuffer(&ctx->sliceOffsets, &offset, sizeof(offset));
         offset += sliceParams->slice_data_size;
         appendBuffer(&ctx->sliceOffsets, &offset, sizeof(offset));
     }
+
+    picParams->nBitstreamDataLen = ctx->buf.size;
 }
 
 static cudaVideoCodec computeAV1CudaCodec(VAProfile profile) {
