@@ -12,17 +12,17 @@ Only decoding video is currently supported.
 
 | Codec | Supported | Comments |
 |---|---|---|
+|AV1|:o:|Experimental support|
 |H.264|:heavy_check_mark:||
 |HEVC|:heavy_check_mark:||
 |VP8|:heavy_check_mark:||
 |VP9|:heavy_check_mark:||
-|AV1|:x:|Not completed, my 1060 doesn't support decoding it|
 |MPEG-2|:heavy_check_mark:||
-|MPEG-4|:x:|Not sure if this can be made work. NVDEC seems to require more information than VA-API supplies|
 |VC-1|:heavy_check_mark:||
+|MPEG-4|:x:|VA-API does not supply enough of the original bitstream to allow NVDEC to decode it.|
 |JPEG|:x:|This is unlikely to ever work, the two APIs are too different|
 
-Currently, 10-bit videos are not supported due to the NVIDIA driver not allowing R16 and RG1616 surfaces to be imported.
+Currently, 10-bit and 12-bit videos are not supported due to the NVIDIA driver not allowing R16 and RG1616 surfaces to be imported.
 To view which codecs your card is capable of decoding you can use the `vainfo` command with this driver installed, or visit the NVIDIA website [here](https://developer.nvidia.com/video-encode-and-decode-gpu-support-matrix-new#geforce).
 
 # Building

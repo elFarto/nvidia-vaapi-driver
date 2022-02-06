@@ -357,14 +357,12 @@ static VAStatus nvQueryConfigProfiles(
 //    if (doesGPUSupportCodec(cudaVideoCodec_VP9, 10, cudaVideoChromaFormat_444, NULL, NULL)) {
 //        profile_list[profiles++] = VAProfileVP9Profile3; //color depth: 10–12 bit, 4:2:2, 4:4:0, 4:4:4
 //    }
-#ifdef WITH_AV1
     if (doesGPUSupportCodec(cudaVideoCodec_AV1, 8, cudaVideoChromaFormat_420, NULL, NULL)) {
         profile_list[profiles++] = VAProfileAV1Profile0;
     }
     if (doesGPUSupportCodec(cudaVideoCodec_AV1, 8, cudaVideoChromaFormat_444, NULL, NULL)) {
         profile_list[profiles++] = VAProfileAV1Profile1;
     }
-#endif
 
     //now filter out the codecs we don't support
     for (int i = 0; i < profiles; i++) {
