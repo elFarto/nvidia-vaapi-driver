@@ -39,7 +39,7 @@ The `NVD_LOG` environment variable can be used to control logging, `NVD_LOG=1` w
 
 # Firefox
 
-To use the driver with firefox you will need at least Firefox 96 (currently in beta), the following config options need to be set in the about:config page:
+To use the driver with firefox you will need at least Firefox 96, the following config options need to be set in the about:config page:
 | Option | Value | Reason |
 |---|---|---|
 | media.ffmpeg.vaapi.enabled | true | Required, enables the use of VA-API.|
