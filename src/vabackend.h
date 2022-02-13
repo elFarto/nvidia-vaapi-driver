@@ -7,6 +7,12 @@
 #include <EGL/eglext.h>
 #include <stdbool.h>
 
+#include <pthread.h>
+#include "list.h"
+
+#define SURFACE_QUEUE_SIZE 16
+#define MAX_IMAGE_COUNT 64
+
 typedef struct {
     void        *buf;
     uint64_t    size;
@@ -27,7 +33,6 @@ typedef struct Object_t
     ObjectType      type;
     VAGenericID     id;
     void            *obj;
-    struct Object_t *next;
 } *Object;
 
 typedef struct
@@ -39,25 +44,26 @@ typedef struct
     int             offset;
 } NVBuffer;
 
+struct _NVContext;
+struct _BackingImage;
+
 typedef struct
 {
-    int                     width;
-    int                     height;
+    uint32_t                width;
+    uint32_t                height;
     cudaVideoSurfaceFormat  format;
     int                     bitDepth;
     int                     pictureIdx;
-    VAContextID             contextId;
+    struct _NVContext       *context;
     int                     progressiveFrame;
     int                     topFieldFirst;
     int                     secondField;
-    CUarray                 cuImages[2];
-    EGLImage                eglImage;
-    int                     fourcc;
-    int                     fds[4];
-    int                     offsets[4];
-    int                     strides[4];
-    uint64_t                mods[4];
-    int                     order_hint; //needed for av1?
+    int                     order_hint; //needed for AV1
+    struct _BackingImage    *backingImage;
+    CUevent                 event;
+    int                     resolving;
+    pthread_mutex_t         mutex;
+    pthread_cond_t          cond;
 } NVSurface;
 
 typedef struct
@@ -68,17 +74,26 @@ typedef struct
     NVBuffer    *imageBuffer;
 } NVImage;
 
-typedef struct _NVEGLImage {
-    EGLImage image;
-    struct _NVEGLImage *next;
-} NVEGLImage;
+typedef struct _BackingImage {
+    NVSurface   *surface;
+    EGLImage    image;
+    CUarray     arrays[2];
+    uint32_t    width;
+    uint32_t    height;
+    int         fourcc;
+    int         fds[4];
+    int         offsets[4];
+    int         strides[4];
+    uint64_t    mods[4];
+} BackingImage;
 
 typedef struct
 {
     CudaFunctions           *cu;
     CuvidFunctions          *cv;
     CUcontext               cudaContext;
-    Object                  objRoot;
+    Array/*<Object>*/       objects;
+    pthread_mutex_t         objectCreationMutex;
     VAGenericID             nextObjId;
     EGLDisplay              eglDisplay;
     EGLContext              eglContext;
@@ -87,13 +102,15 @@ typedef struct
     int                     numFramesPresented;
     bool                    useCorrectNV12Format;
     bool                    supports16BitSurface;
-    NVEGLImage              *allocatedEGLImages;
     int                     surfaceCount;
+    pthread_mutex_t         exportMutex;
+    pthread_mutex_t         imagesMutex;
+    Array/*<NVEGLImage>*/   images;
 } NVDriver;
 
 struct _NVCodec;
 
-typedef struct
+typedef struct _NVContext
 {
     NVDriver            *drv;
     VAProfile           profile;
@@ -109,6 +126,14 @@ typedef struct
     CUVIDPICPARAMS      pPicParams;
     const struct _NVCodec *codec;
     int                 currentPictureId;
+    pthread_t           resolveThread;
+    pthread_mutex_t     resolveMutex;
+    pthread_cond_t      resolveCondition;
+    NVSurface*          surfaceQueue[SURFACE_QUEUE_SIZE];
+    int                 surfaceQueueReadIdx;
+    int                 surfaceQueueWriteIdx;
+    bool                exiting;
+    pthread_mutex_t     surfaceCreationMutex;
 } NVContext;
 
 typedef struct
@@ -126,8 +151,7 @@ typedef cudaVideoCodec (*ComputeCudaCodec)(VAProfile);
 
 //padding/alignment is very important to this structure as it's placed in it's own section
 //in the executable.
-struct _NVCodec
-{
+struct _NVCodec {
     ComputeCudaCodec    computeCudaCodec;
     HandlerFunc         handlers[VABufferTypeMax];
     int                 supportedProfileCount;

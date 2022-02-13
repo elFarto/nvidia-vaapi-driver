@@ -63,14 +63,14 @@ static void debug(EGLenum error,const char *command,EGLint messageType,EGLLabelK
 void releaseExporter(NVDriver *drv) {
     //TODO not sure if this is still needed as we don't return anything now
     LOG("Releasing exporter, %d outstanding frames", drv->numFramesPresented);
-    while (drv->numFramesPresented > 0) {
+    while (true) {
       CUeglFrame eglframe;
       CUresult cuStatus = drv->cu->cuEGLStreamProducerReturnFrame(&drv->cuStreamConnection, &eglframe, NULL);
       if (cuStatus == CUDA_SUCCESS) {
         drv->numFramesPresented--;
         for (int i = 0; i < 3; i++) {
             if (eglframe.frame.pArray[i] != NULL) {
-                LOG("Cleaning up CUDA array %p", eglframe.frame.pArray[i]);
+                LOG("Cleaning up CUDA array %p (%d outstanding)", eglframe.frame.pArray[i], drv->numFramesPresented);
                 drv->cu->cuArrayDestroy(eglframe.frame.pArray[i]);
                 eglframe.frame.pArray[i] = NULL;
             }
@@ -83,10 +83,6 @@ void releaseExporter(NVDriver *drv) {
 
     if (drv->cuStreamConnection != NULL) {
         drv->cu->cuEGLStreamProducerDisconnect(&drv->cuStreamConnection);
-    }
-
-    if (drv->cuStreamConnection != NULL) {
-        drv->cu->cuEGLStreamConsumerDisconnect(&drv->cuStreamConnection);
     }
 
     if (drv->eglDisplay != EGL_NO_DISPLAY) {
@@ -103,11 +99,12 @@ static void reconnect(NVDriver *drv) {
     LOG("Reconnecting to stream");
     eglInitialize(drv->eglDisplay, NULL, NULL);
     if (drv->cuStreamConnection != NULL) {
-        drv->cu->cuEGLStreamConsumerDisconnect(&drv->cuStreamConnection);
+        drv->cu->cuEGLStreamProducerDisconnect(&drv->cuStreamConnection);
     }
     if (drv->eglStream != EGL_NO_STREAM_KHR) {
         eglDestroyStreamKHR(drv->eglDisplay, drv->eglStream);
     }
+    //tell the driver we don't want it to reuse any EGLImages
     EGLint stream_attrib_list[] = { EGL_SUPPORT_REUSE_NV, EGL_FALSE, EGL_NONE };
     drv->eglStream = eglCreateStreamKHR(drv->eglDisplay, stream_attrib_list);
     if (drv->eglStream == EGL_NO_STREAM_KHR) {
@@ -154,12 +151,12 @@ int findGPUIndexFromFd(int displayType, int fd, int gpu, void **device) {
     //work out how we're searching for the GPU
     *device = NULL;
     if (gpu == -1 && fd != -1) {
-        //figure out 'drm device index', basically the minor number of the device node & 0x7f
-        //since we don't know if we're dealing with a master or render node
+        //figure out the 'drm device index', basically the minor number of the device node & 0x7f
+        //since we don't know/what to care if we're dealing with a master or render node
 
         fstat(fd, &buf);
         drmDeviceIndex = minor(buf.st_rdev) & 0x7f;
-        LOG("Looking for drmDeviceIndex: %d", drmDeviceIndex);
+        LOG("Looking for DRM device index: %d", drmDeviceIndex);
     } else {
         LOG("Looking for GPU index: %d", gpu);
     }
@@ -192,7 +189,7 @@ int findGPUIndexFromFd(int displayType, int fd, int gpu, void **device) {
                         continue;
                     }
                 } else if (gpu != attr) {
-                    LOG("Not selected device, skipping");
+                    //LOG("Not selected device, skipping");
                     continue;
                 }
 
@@ -276,8 +273,122 @@ bool initExporter(NVDriver *drv, void *device) {
     return true;
 }
 
+bool exportBackingImage(NVDriver *drv, BackingImage *img) {
+    int planes = 0;
+    if (!eglExportDMABUFImageQueryMESA(drv->eglDisplay, img->image, &img->fourcc, &planes, img->mods)) {
+        LOG("eglExportDMABUFImageQueryMESA failed");
+        return false;
+    }
 
-bool allocateSurface(NVDriver *drv, NVSurface *surface) {
+    LOG("eglExportDMABUFImageQueryMESA: %p %.4s (%x) planes:%d mods:%lx %lx", img, (char*)&img->fourcc, img->fourcc, planes, img->mods[0], img->mods[1]);
+    EGLBoolean r = eglExportDMABUFImageMESA(drv->eglDisplay, img->image, img->fds, img->strides, img->offsets);
+    //LOG("Offset/Pitch: %d %d %d %d", surface->offsets[0], surface->offsets[1], surface->strides[0], surface->strides[1]);
+
+    if (!r) {
+        LOG("Unable to export image");
+        return false;
+    }
+    return true;
+}
+
+BackingImage* createBackingImage(NVDriver *drv, uint32_t width, uint32_t height, EGLImage image, CUarray arrays[]) {
+    BackingImage* img = (BackingImage*) calloc(1, sizeof(BackingImage));
+    img->image = image;
+    img->arrays[0] = arrays[0];
+    img->arrays[1] = arrays[1];
+    img->width = width;
+    img->height = height;
+
+    if (!exportBackingImage(drv, img)) {
+        LOG("Unable to export Backing Image");
+        free(img);
+        return NULL;
+    }
+
+    return img;
+}
+
+
+void destroyBackingImage(NVDriver *drv, BackingImage *img) {
+    //if we're attached to a surface, update the surface to remove us
+    if (img->surface != NULL) {
+        img->surface->backingImage = NULL;
+    }
+
+    LOG("Destroying BackingImage: %p", img);
+    for (int i = 0; i < 4; i++) {
+        if (img->fds[i] != 0) {
+            close(img->fds[i]);
+        }
+    }
+    //eglStreamReleaseImageNV(drv->eglDisplay, drv->eglStream, surface->eglImage, EGL_NO_SYNC);
+    //destroy them rather than releasing them
+    eglDestroyImage(drv->eglDisplay, img->image);
+    drv->cu->cuArrayDestroy(img->arrays[0]);
+    drv->cu->cuArrayDestroy(img->arrays[1]);
+    free(img);
+}
+
+void attachBackingImageToSurface(NVSurface *surface, BackingImage *img) {
+    surface->backingImage = img;
+    img->surface = surface;
+}
+
+void detachBackingImageFromSurface(NVDriver *drv, NVSurface *surface) {
+    if (surface->backingImage == NULL) {
+        LOG("Cannot detach NULL BackingImage from Surface");
+        return;
+    }
+
+    if (surface->backingImage->fourcc == DRM_FORMAT_NV21) {
+        destroyBackingImage(drv, surface->backingImage);
+    } else {
+        pthread_mutex_lock(&drv->imagesMutex);
+
+        ARRAY_FOR_EACH(BackingImage*, img, &drv->images)
+            //find the entry for this surface
+            if (img->surface == surface) {
+                LOG("Detaching BackingImage %p from Surface %p", img, surface);
+                img->surface = NULL;
+                break;
+            }
+        }
+
+        pthread_mutex_unlock(&drv->imagesMutex);
+    }
+
+    surface->backingImage = NULL;
+}
+
+void destroyAllBackingImage(NVDriver *drv) {
+    pthread_mutex_lock(&drv->imagesMutex);
+
+    ARRAY_FOR_EACH_REV(BackingImage*, it, &drv->images)
+        destroyBackingImage(drv, it);
+        remove_element_at(&drv->images, it_idx);
+    END_FOR_EACH
+
+    pthread_mutex_unlock(&drv->imagesMutex);
+}
+
+BackingImage* findFreeBackingImage(NVDriver *drv, NVSurface *surface) {
+    BackingImage *ret = NULL;
+    pthread_mutex_lock(&drv->imagesMutex);
+    //look through the free'd surfaces and see if we can reuse one
+    ARRAY_FOR_EACH(BackingImage*, img, &drv->images)
+        if (img->surface == NULL && img->width == surface->width && img->height == surface->height) {
+            LOG("Using BackingImage %p for Surface %p", img, surface);
+            attachBackingImageToSurface(surface, img);
+            ret = img;
+            break;
+        }
+    END_FOR_EACH
+    pthread_mutex_unlock(&drv->imagesMutex);
+    return ret;
+}
+
+
+BackingImage *allocateBackingImage(NVDriver *drv, const NVSurface *surface) {
     CUeglFrame eglframe = {
         .width = surface->width,
         .height = surface->height,
@@ -322,19 +433,19 @@ bool allocateSurface(NVDriver *drv, NVSurface *surface) {
         .Flags = 0,
         .Format = eglframe.cuFormat
     };
-    CHECK_CUDA_RESULT(drv->cu->cuArray3DCreate(&surface->cuImages[0], &arrDesc));
-    CHECK_CUDA_RESULT(drv->cu->cuArray3DCreate(&surface->cuImages[1], &arr2Desc));
+    CHECK_CUDA_RESULT(drv->cu->cuArray3DCreate(&eglframe.frame.pArray[0], &arrDesc));
+    CHECK_CUDA_RESULT(drv->cu->cuArray3DCreate(&eglframe.frame.pArray[1], &arr2Desc));
 
-    eglframe.frame.pArray[0] = surface->cuImages[0];
-    eglframe.frame.pArray[1] = surface->cuImages[1];
+    pthread_mutex_lock(&drv->exportMutex);
 
-    LOG("presenting frame %dx%d %p %p", eglframe.width, eglframe.height, eglframe.frame.pArray[0], eglframe.frame.pArray[1]);
-    CUresult ret = drv->cu->cuEGLStreamProducerPresentFrame( &drv->cuStreamConnection, eglframe, NULL );
-    if (ret == CUDA_ERROR_UNKNOWN) {
+    LOG("Presenting frame %d %dx%d (%p, %p, %p)", surface->pictureIdx, eglframe.width, eglframe.height, surface, eglframe.frame.pArray[0], eglframe.frame.pArray[1]);
+    CUresult result = drv->cu->cuEGLStreamProducerPresentFrame( &drv->cuStreamConnection, eglframe, NULL );
+    if (result == CUDA_ERROR_UNKNOWN) {
         reconnect(drv);
         CHECK_CUDA_RESULT(drv->cu->cuEGLStreamProducerPresentFrame( &drv->cuStreamConnection, eglframe, NULL ));
     }
 
+    BackingImage *ret = NULL;
     while (1) {
         EGLenum event = 0;
         EGLAttrib aux = 0;
@@ -346,137 +457,116 @@ bool allocateSurface(NVDriver *drv, NVSurface *surface) {
         if (event == EGL_STREAM_IMAGE_ADD_NV) {
             EGLImage image = eglCreateImage(drv->eglDisplay, EGL_NO_CONTEXT, EGL_STREAM_CONSUMER_IMAGE_NV, drv->eglStream, NULL);
             LOG("Adding frame from EGLStream: %p", image);
-            //NVEGLImage* nvEglImage = (NVEGLImage*) calloc(1, sizeof(NVEGLImage));
-//            nvEglImage->image = image;
-//            nvEglImage->next = drv->allocatedEGLImages;
-//            drv->allocatedEGLImages = nvEglImage;
+        } else if (event == EGL_STREAM_IMAGE_REMOVE_NV) {
+            //Not sure if this is ever called
+            eglDestroyImage(drv->eglDisplay, (EGLImage) aux);
+            LOG("Removing frame from EGLStream: %p", aux);
         } else if (event == EGL_STREAM_IMAGE_AVAILABLE_NV) {
             EGLImage img;
             if (!eglStreamAcquireImageNV(drv->eglDisplay, drv->eglStream, &img, EGL_NO_SYNC_NV)) {
                 LOG("eglStreamAcquireImageNV failed");
-                freeSurface(drv, surface);
-                return false;
+                break;
             }
-
             LOG("Acquired image from EGLStream: %p", img);
-            surface->eglImage = img;
 
-            int planes = 0;
-            if (!eglExportDMABUFImageQueryMESA(drv->eglDisplay, surface->eglImage, &surface->fourcc, &planes, surface->mods)) {
-                LOG("eglExportDMABUFImageQueryMESA failed");
-                freeSurface(drv, surface);
-                return false;
-            }
-
-            LOG("eglExportDMABUFImageQueryMESA: %p %.4s (%x) planes:%d mods:%lx %lx", img, (char*)&surface->fourcc, surface->fourcc, planes, surface->mods[0], surface->mods[1]);
-            EGLBoolean r = eglExportDMABUFImageMESA(drv->eglDisplay, surface->eglImage, surface->fds, surface->strides, surface->offsets);
-
-            if (!r) {
-                LOG("Unable to export image");
-                freeSurface(drv, surface);
-                return false;
-            }
+            ret = createBackingImage(drv, surface->width, surface->height, img, eglframe.frame.pArray);
         } else {
             LOG("Unhandled event: %X", event);
         }
     }
 
-    return true;
-}
-
-bool freeSurface(NVDriver *drv, NVSurface *surface) {
-    for (int i = 0; i < 4; i++) {
-        if (surface->fds[i] != 0) {
-            close(surface->fds[i]);
-            surface->fds[i] = 0;
-        }
-    }
-    if (surface->eglImage != EGL_NO_IMAGE) {
-        LOG("Destroying EGLImage: %p", surface->eglImage);
-        eglDestroyImage(drv->eglDisplay, surface->eglImage);
-        surface->eglImage = EGL_NO_IMAGE;
-    }
-    for (int i = 0; i < 2; i++) {
-        if (surface->cuImages[i] != NULL) {
-            LOG("Destroying CUarray: %p", surface->cuImages[i]);
-            drv->cu->cuArrayDestroy(surface->cuImages[i]);
-            surface->cuImages[i] = NULL;
-        }
-    }
-    return true;
-}
-
-bool hasAllocatedSurface(NVSurface *surface) {
-    return surface->eglImage != EGL_NO_IMAGE;
+    pthread_mutex_unlock(&drv->exportMutex);
+    return ret;
 }
 
 bool copyFrameToSurface(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t pitch) {
     int bpp = surface->format == cudaVideoSurfaceFormat_NV12 ? 1 : 2;
-    //frameNo++;
     CUDA_MEMCPY2D cpy = {
         .srcMemoryType = CU_MEMORYTYPE_DEVICE,
         .srcDevice = ptr,
-        //.srcXInBytes = frameNo++ % 80,
         .srcPitch = pitch,
         .dstMemoryType = CU_MEMORYTYPE_ARRAY,
-        .dstArray = surface->cuImages[0],
+        .dstArray = surface->backingImage->arrays[0],
         .Height = surface->height,
         .WidthInBytes = surface->width * bpp
     };
-    CHECK_CUDA_RESULT(drv->cu->cuMemcpy2D(&cpy));
+    CHECK_CUDA_RESULT(drv->cu->cuMemcpy2DAsync(&cpy, 0));
     CUDA_MEMCPY2D cpy2 = {
         .srcMemoryType = CU_MEMORYTYPE_DEVICE,
         .srcDevice = ptr,
         .srcY = surface->height,
         .srcPitch = pitch,
         .dstMemoryType = CU_MEMORYTYPE_ARRAY,
-        .dstArray = surface->cuImages[1],
+        .dstArray = surface->backingImage->arrays[1],
         .Height = surface->height >> 1,
         .WidthInBytes = surface->width * bpp
     };
     CHECK_CUDA_RESULT(drv->cu->cuMemcpy2D(&cpy2));
 
-    drv->cu->cuStreamSynchronize(0);
+    //notify anyone waiting for us to be resolved
+    pthread_mutex_lock(&surface->mutex);
+    surface->resolving = 0;
+    pthread_cond_signal(&surface->cond);
+    pthread_mutex_unlock(&surface->mutex);
+
     return true;
 }
 
-bool exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t pitch, int *fourcc, int *fds, int *offsets, int *strides, uint64_t *mods, int *bppOut) {
-    *bppOut = surface->format == cudaVideoSurfaceFormat_NV12 ? 1 : 2;
+bool realiseSurface(NVDriver *drv, NVSurface *surface) {
+    //make sure we're the only thread updating this surface
+    pthread_mutex_lock(&surface->mutex);
+    //check again to see if it's just been created
+    if (surface->backingImage == NULL) {
+        //try to find a free surface
+        BackingImage *img = findFreeBackingImage(drv, surface);
 
-    if (!hasAllocatedSurface(surface) && !allocateSurface(drv, surface)) {
-        LOG("Unable to allocate surface: %d", surface->pictureIdx);
-        return false;
-    }
+        //if we can't find a free backing image...
+        if (img == NULL) {
+            LOG("No free surfaces found");
 
-    if (surface->fourcc == DRM_FORMAT_NV21) {
-        LOG("Detected NV12/NV21 NVIDIA driver bug, attempting to work around");
-        //free the old surface to prevent leaking them
-        freeSurface(drv, surface);
-        //this is a caused by a bug in old versions the driver that was fixed in the 510 series
-        drv->useCorrectNV12Format = true;
-        //re-export the frame in the correct format
-        allocateSurface(drv, surface);
-        if (surface->fourcc != DRM_FORMAT_NV12) {
-            LOG("Work around unsuccessful");
-        } else {
-            LOG("Work around successful!");
+            //...allocate one
+            img = allocateBackingImage(drv, surface);
+            if (img == NULL) {
+                LOG("Unable to realise surface: %p (%d)", surface, surface->pictureIdx)
+                pthread_mutex_unlock(&surface->mutex);
+                return false;
+            }
+
+            if (img->fourcc == DRM_FORMAT_NV21) {
+                LOG("Detected NV12/NV21 NVIDIA driver bug, attempting to work around");
+                //free the old surface to prevent leaking them
+                destroyBackingImage(drv, img);
+                //this is a caused by a bug in old versions the driver that was fixed in the 510 series
+                drv->useCorrectNV12Format = !drv->useCorrectNV12Format;
+                //re-export the frame in the correct format
+                img = allocateBackingImage(drv, surface);
+                if (img->fourcc != DRM_FORMAT_NV12) {
+                    LOG("Work around unsuccessful");
+                }
+            }
+
+            attachBackingImageToSurface(surface, img);
+            //add our newly created BackingImage to the list
+            pthread_mutex_lock(&drv->imagesMutex);
+            add_element(&drv->images, img);
+            pthread_mutex_unlock(&drv->imagesMutex);
         }
     }
+    pthread_mutex_unlock(&surface->mutex);
 
+    return true;
+}
+
+bool exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t pitch) {
+    if (!realiseSurface(drv, surface)) {
+        return false;
+    }
 
     if (ptr != 0 && !copyFrameToSurface(drv, ptr, surface, pitch)) {
         LOG("Unable to update surface from frame");
         return false;
-    }
-
-    *fourcc = surface->fourcc;
-    for (int i = 0; i < 4; i++) {
-        if (surface->fds[i] != 0) {
-            fds[i] = dup(surface->fds[i]);
-        }
-        offsets[i] = surface->offsets[i];
-        strides[i] = surface->strides[i];
-        mods[i] = surface->mods[i];
+    } else if (ptr == 0) {
+        LOG("exporting with null ptr");
     }
 
     return true;
