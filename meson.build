@@ -18,6 +18,7 @@ dl_dep = cc.find_library('dl', required : false)
 egl_dep = cc.find_library('EGL')
 gst_codecs_deps = dependency('gstreamer-codecparsers-1.0')
 ffnvcodec_deps = dependency('ffnvcodec', version: '>= 11.1.5.1')
+libva_deps = dependency('libva')
 
 shared_library(
     'nvidia_drv_video',
@@ -36,6 +37,7 @@ shared_library(
         'src/vp9.c',
     ],
     dependencies: [
+        libva_deps,
         ffnvcodec_deps,
         gst_codecs_deps,
         egl_dep,
