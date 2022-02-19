@@ -1,2 +1,3 @@
 *.o
 samples/*.mp4
+subprojects/*/
