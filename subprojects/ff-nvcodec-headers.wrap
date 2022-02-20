@@ -1,0 +1,12 @@
+[wrap-file]
+directory = nv-codec-headers-11.1.5.1
+source_url = https://github.com/FFmpeg/nv-codec-headers/releases/download/n11.1.5.1/nv-codec-headers-11.1.5.1.tar.gz
+source_filename = nv-codec-headers-11.1.5.1.tar.gz
+source_hash = a28cdde3ac0e9e02c2dde7a1b4de5333b4ac6148a8332ca712da243a3361a0d9
+patch_filename = ff-nvcodec-headers_11.1.5.1-0_patch.zip
+patch_url = https://wrapdb.mesonbuild.com/v2/ff-nvcodec-headers_11.1.5.1-0/get_patch
+patch_hash = 5ecf67ad26f1e4a3f2a8e10b22b37130dea8c867058ba79271441fdfd4f524a6
+
+[provide]
+ffnvcodec = ffnvcodec_dep
+
