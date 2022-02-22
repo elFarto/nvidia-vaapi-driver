@@ -33,6 +33,8 @@ extern const NVCodec __stop_nvd_codecs[];
 
 static FILE *LOG_OUTPUT;
 
+static int gpu;
+
 __attribute__ ((constructor))
 static void init() {
     LOG_OUTPUT = 0;
@@ -47,6 +49,12 @@ static void init() {
                 LOG_OUTPUT = stdout;
             }
         }
+    }
+
+    gpu = 0;
+    char *nvdGpu = getenv("NVD_GPU");
+    if (nvdGpu != NULL) {
+        gpu = atoi(nvdGpu);
     }
 
     //try to detect the Firefox sandbox and skip loading CUDA if detected
@@ -1644,7 +1652,7 @@ VAStatus __vaDriverInit_1_0(VADriverContextP ctx)
     drv->cu = cu;
     drv->cv = cv;
 
-    CHECK_CUDA_RESULT(cu->cuCtxCreate(&drv->cudaContext, CU_CTX_SCHED_BLOCKING_SYNC, 0));
+    CHECK_CUDA_RESULT(cu->cuCtxCreate(&drv->cudaContext, CU_CTX_SCHED_BLOCKING_SYNC, gpu));
 
     ctx->max_profiles = MAX_PROFILES;
     ctx->max_entrypoints = 1;
@@ -1655,7 +1663,7 @@ VAStatus __vaDriverInit_1_0(VADriverContextP ctx)
 
     ctx->str_vendor = "VA-API NVDEC driver";
 
-    if (!initExporter(drv)) {
+    if (!initExporter(drv, gpu)) {
         cu->cuCtxDestroy(drv->cudaContext);
         free(drv);
         return VA_STATUS_ERROR_OPERATION_FAILED;

@@ -152,7 +152,7 @@ static bool checkModesetParameter(EGLDeviceEXT device) {
     return true;
 }
 
-static int findCudaDisplay(EGLDisplay *eglDisplay) {
+static int findCudaDisplay(EGLDisplay *eglDisplay, int gpu) {
     PFNEGLQUERYDEVICESEXTPROC eglQueryDevicesEXT = (PFNEGLQUERYDEVICESEXTPROC) eglGetProcAddress("eglQueryDevicesEXT");
     PFNEGLQUERYDEVICEATTRIBEXTPROC eglQueryDeviceAttribEXT = (PFNEGLQUERYDEVICEATTRIBEXTPROC) eglGetProcAddress("eglQueryDeviceAttribEXT");
 
@@ -172,9 +172,8 @@ static int findCudaDisplay(EGLDisplay *eglDisplay) {
     for (int i = 0; i < num_devices; i++) {
         EGLAttrib attr;
         if (eglQueryDeviceAttribEXT(devices[i], EGL_CUDA_DEVICE_NV, &attr)) {
-            LOG("Got EGL_CUDA_DEVICE_NV value '%d' from device %d", attr, i);
-            //TODO: currently we're hardcoding the CUDA device to 0, so only create the display on that device
-            if (attr == 0) {
+            LOG("Got EGL_CUDA_DEVICE_NV value '%d' from EGLDevice %d", attr, i);
+            if (attr == gpu) {
                 //attr contains the cuda device id
                 if (!checkModesetParameter(devices[i])) {
                     return -1;
@@ -189,7 +188,7 @@ static int findCudaDisplay(EGLDisplay *eglDisplay) {
     return 0;
 }
 
-bool initExporter(NVDriver *drv) {
+bool initExporter(NVDriver *drv, int gpu) {
     static const EGLAttrib debugAttribs[] = {EGL_DEBUG_MSG_WARN_KHR, EGL_TRUE, EGL_DEBUG_MSG_INFO_KHR, EGL_TRUE, EGL_NONE};
 
     eglQueryStreamConsumerEventNV = (PFNEGLQUERYSTREAMCONSUMEREVENTNVPROC) eglGetProcAddress("eglQueryStreamConsumerEventNV");
@@ -205,9 +204,9 @@ bool initExporter(NVDriver *drv) {
     PFNEGLQUERYDMABUFFORMATSEXTPROC eglQueryDmaBufFormatsEXT = (PFNEGLQUERYDMABUFFORMATSEXTPROC) eglGetProcAddress("eglQueryDmaBufFormatsEXT");
     PFNEGLDEBUGMESSAGECONTROLKHRPROC eglDebugMessageControlKHR = (PFNEGLDEBUGMESSAGECONTROLKHRPROC) eglGetProcAddress("eglDebugMessageControlKHR");
 
-    int ret = findCudaDisplay(&drv->eglDisplay);
+    int ret = findCudaDisplay(&drv->eglDisplay, gpu);
     if (ret == 1) {
-        LOG("Got EGLDisplay from CUDA device");
+        LOG("Got EGLDisplay from CUDA device %d", gpu);
     } else if (ret == 0) {
         LOG("Falling back to using default EGLDisplay");
         drv->eglDisplay = eglGetDisplay(NULL);
