@@ -38,6 +38,10 @@ EGLAPI EGLBoolean EGLAPIENTRY eglStreamReleaseImageNV (EGLDisplay dpy, EGLStream
 #define EGL_DRM_RENDER_NODE_FILE_EXT      0x3377
 #endif
 
+#ifndef EGL_NV_stream_reset
+#define EGL_SUPPORT_REUSE_NV              0x3335
+#endif
+
 static PFNEGLQUERYSTREAMCONSUMEREVENTNVPROC eglQueryStreamConsumerEventNV;
 static PFNEGLSTREAMRELEASEIMAGENVPROC eglStreamReleaseImageNV;
 static PFNEGLSTREAMACQUIREIMAGENVPROC eglStreamAcquireImageNV;
@@ -100,7 +104,8 @@ static void reconnect(NVDriver *drv) {
     if (drv->eglStream != EGL_NO_STREAM_KHR) {
         eglDestroyStreamKHR(drv->eglDisplay, drv->eglStream);
     }
-    drv->eglStream = eglCreateStreamKHR(drv->eglDisplay, NULL);
+    EGLint stream_attrib_list[] = { EGL_SUPPORT_REUSE_NV, EGL_FALSE, EGL_NONE };
+    drv->eglStream = eglCreateStreamKHR(drv->eglDisplay, stream_attrib_list);
     if (drv->eglStream == EGL_NO_STREAM_KHR) {
         LOG("Unable to create EGLStream");
         return;
