@@ -342,7 +342,7 @@ bool allocateSurface(NVDriver *drv, NVSurface *surface) {
                 return false;
             }
 
-            //LOG("eglExportDMABUFImageQueryMESA: %p %.4s (%x) planes:%d mods:%lx %lx", img, (char*)fourcc, *fourcc, planes, mods[0], mods[1]);
+            LOG("eglExportDMABUFImageQueryMESA: %p %.4s (%x) planes:%d mods:%lx %lx", img, (char*)&surface->fourcc, surface->fourcc, planes, surface->mods[0], surface->mods[1]);
             EGLBoolean r = eglExportDMABUFImageMESA(drv->eglDisplay, surface->eglImage, surface->fds, surface->strides, surface->offsets);
 
             if (!r) {

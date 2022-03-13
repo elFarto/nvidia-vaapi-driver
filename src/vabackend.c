@@ -1564,8 +1564,9 @@ static VAStatus nvExportSurfaceHandle(
         procParams.top_field_first = surfaceObj->topFieldFirst;
         procParams.second_field = surfaceObj->secondField;
 
+        LOG("Mapping surface %d (picIdx: %d)", surface_id, surfaceObj->pictureIdx);
         CHECK_CUDA_RESULT(cv->cuvidMapVideoFrame(context->decoder, surfaceObj->pictureIdx, &deviceMemory, &pitch, &procParams));
-        LOG("got address %llX (%d) for surface %d (picIdx: %d)", deviceMemory, pitch, surface_id, surfaceObj->pictureIdx);
+        LOG("Mapped surface to %llX (%d)", deviceMemory, pitch);
     } else {
         pitch = surfaceObj->width;
     }
