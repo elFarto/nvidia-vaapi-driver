@@ -33,7 +33,7 @@ extern const NVCodec __stop_nvd_codecs[];
 
 static FILE *LOG_OUTPUT;
 
-static int gpu;
+static int gpu = -1;
 
 __attribute__ ((constructor))
 static void init() {
@@ -51,7 +51,6 @@ static void init() {
         }
     }
 
-    gpu = 0;
     char *nvdGpu = getenv("NVD_GPU");
     if (nvdGpu != NULL) {
         gpu = atoi(nvdGpu);
@@ -1640,12 +1639,25 @@ static VAStatus nvTerminate( VADriverContextP ctx )
 __attribute__((visibility("default")))
 VAStatus __vaDriverInit_1_0(VADriverContextP ctx)
 {
-    LOG("Initialising NVIDIA VA-API Driver: %p", ctx);
+    LOG("Initialising NVIDIA VA-API Driver: %p %X", ctx, ctx->display_type);
+
+    if (gpu == -1 && (ctx->display_type & VA_DISPLAY_MAJOR_MASK) != VA_DISPLAY_DRM) {
+        LOG("Non-DRM display type detected, defaulting to GPU ID 0. Use NVD_GPU to pick a specific GPU.");
+        gpu = 0;
+    }
 
     //check to make sure we initialised the CUDA functions correctly
     if (cu == NULL || cv == NULL) {
         return VA_STATUS_ERROR_OPERATION_FAILED;
     }
+
+    //find the correct GPU to use, either by GPU Id or by fd
+    void *device = NULL;
+    int fd = -1;
+    if (ctx->drm_state != NULL) {
+        fd = ((struct drm_state*) ctx->drm_state)->fd;
+    }
+    gpu = findGPUIndexFromFd(ctx->display_type, fd, gpu, &device);
 
     NVDriver *drv = (NVDriver*) calloc(1, sizeof(NVDriver));
     ctx->pDriverData = drv;
@@ -1664,7 +1676,7 @@ VAStatus __vaDriverInit_1_0(VADriverContextP ctx)
 
     ctx->str_vendor = "VA-API NVDEC driver";
 
-    if (!initExporter(drv, gpu)) {
+    if (!initExporter(drv, device)) {
         cu->cuCtxDestroy(drv->cudaContext);
         free(drv);
         return VA_STATUS_ERROR_OPERATION_FAILED;

@@ -7,6 +7,7 @@
 #include <sys/ioctl.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <sys/sysmacros.h>
 
 #if defined __has_include && __has_include(<libdrm/drm.h>)
 #  include <libdrm/drm.h>
@@ -34,6 +35,10 @@ EGLAPI EGLBoolean EGLAPIENTRY eglStreamReleaseImageNV (EGLDisplay dpy, EGLStream
 #endif
 #endif
 
+#ifndef EGL_EXT_device_drm
+#define EGL_DRM_MASTER_FD_EXT                   0x333C
+#endif
+
 #ifndef EGL_EXT_device_drm_render_node
 #define EGL_DRM_RENDER_NODE_FILE_EXT      0x3377
 #endif
@@ -50,7 +55,6 @@ static PFNEGLEXPORTDMABUFIMAGEQUERYMESAPROC eglExportDMABUFImageQueryMESA;
 static PFNEGLCREATESTREAMKHRPROC eglCreateStreamKHR;
 static PFNEGLDESTROYSTREAMKHRPROC eglDestroyStreamKHR;
 static PFNEGLSTREAMIMAGECONSUMERCONNECTNVPROC eglStreamImageConsumerConnectNV;
-static PFNEGLQUERYDEVICESTRINGEXTPROC eglQueryDeviceStringEXT;
 
 static void debug(EGLenum error,const char *command,EGLint messageType,EGLLabelKHR threadLabel,EGLLabelKHR objectLabel,const char* message) {
     LOG("[EGL] %s: %s", command, message);
@@ -118,82 +122,104 @@ static void reconnect(NVDriver *drv) {
     drv->numFramesPresented = 0;
 }
 
-static bool checkModesetParameter(EGLDeviceEXT device) {
-    //we need to check to see if modeset=1 has been passed to the nvidia_drm driver
-    //since you need to be root to read the parameter out of /sys, we'll have to find the
-    //DRM device file, open it and issue an ioctl to see if the ASYNC_PAGE_FLIP cap is set
-    const char* drmDeviceFile = eglQueryDeviceStringEXT(device, EGL_DRM_RENDER_NODE_FILE_EXT);
-    char tmpDeviceName[20]; // /dev/dri/renderD128
-    if (drmDeviceFile == NULL) {
-        LOG("Unable to retrieve render node, deriving render node from master node");
-        drmDeviceFile = eglQueryDeviceStringEXT(device, EGL_DRM_DEVICE_FILE_EXT);
-        //compute the render node device path. opening the master node logs an error to syslog
-        //which we shouldn't really do.
-        if (drmDeviceFile != NULL) {
-            // /dev/dri/card == 12
-            const char* cardIdxStr = drmDeviceFile + 12;
-            int cardIdx = atoi(cardIdxStr);
-            snprintf(tmpDeviceName, 20, "/dev/dri/renderD%u", cardIdx + 128);
-            drmDeviceFile = tmpDeviceName;
+static bool checkModesetParameterFromFd(int fd) {
+    if (fd > 0) {
+        //this ioctl should fail if modeset=0
+        struct drm_get_cap caps = { .capability = DRM_CAP_DUMB_BUFFER };
+        int ret = ioctl(fd, DRM_IOCTL_GET_CAP, &caps);
+        if (ret != 0) {
+            //the modeset parameter is set to 0
+            LOG("ERROR: This driver requires the nvidia_drm.modeset kernel module parameter set to 1");
+            return false;
         }
-    }
-    LOG("Checking device file: %s", drmDeviceFile);
-    if (drmDeviceFile != NULL) {
-        int fd = open(drmDeviceFile, O_RDONLY);
-        if (fd > 0) {
-            //this ioctl should fail if modeset=0
-            struct drm_get_cap caps = { .capability = DRM_CAP_DUMB_BUFFER };
-            int ret = ioctl(fd, DRM_IOCTL_GET_CAP, &caps);
-            close(fd);
-            if (ret != 0) {
-                //the modeset parameter is set to 0
-                LOG("ERROR: This driver requires the nvidia_drm.modeset kernel module parameter set to 1");
-                return false;
-            }
-        } else {
-            LOG("Unable to check nvidia_drm modeset setting");
-        }
+    } else {
+        LOG("Unable to check nvidia_drm modeset setting");
     }
     return true;
 }
 
-static int findCudaDisplay(EGLDisplay *eglDisplay, int gpu) {
+int findGPUIndexFromFd(int displayType, int fd, int gpu, void **device) {
+    struct stat buf;
+    int drmDeviceIndex = -1;
+
     PFNEGLQUERYDEVICESEXTPROC eglQueryDevicesEXT = (PFNEGLQUERYDEVICESEXTPROC) eglGetProcAddress("eglQueryDevicesEXT");
     PFNEGLQUERYDEVICEATTRIBEXTPROC eglQueryDeviceAttribEXT = (PFNEGLQUERYDEVICEATTRIBEXTPROC) eglGetProcAddress("eglQueryDeviceAttribEXT");
-
-    *eglDisplay = EGL_NO_DISPLAY;
+    PFNEGLQUERYDEVICESTRINGEXTPROC eglQueryDeviceStringEXT = (PFNEGLQUERYDEVICESTRINGEXTPROC) eglGetProcAddress("eglQueryDeviceStringEXT");
 
     if (eglQueryDevicesEXT == NULL || eglQueryDeviceAttribEXT == NULL) {
+        LOG("No support for EGL_EXT_device_enumeration");
         return 0;
     }
 
+    //work out how we're searching for the GPU
+    *device = NULL;
+    if (gpu == -1 && fd != -1) {
+        //figure out 'drm device index', basically the minor number of the device node & 0x7f
+        //since we don't know if we're dealing with a master or render node
+
+        fstat(fd, &buf);
+        drmDeviceIndex = minor(buf.st_rdev) & 0x7f;
+        LOG("Looking for drmDeviceIndex: %d", drmDeviceIndex);
+    } else {
+        LOG("Looking for GPU index: %d", gpu);
+    }
+
+    //go grab some EGL devices
     EGLDeviceEXT devices[8];
     EGLint num_devices;
     if(!eglQueryDevicesEXT(8, devices, &num_devices)) {
+        LOG("Unable to query EGL devices");
         return 0;
     }
 
     LOG("Found %d EGL devices", num_devices);
     for (int i = 0; i < num_devices; i++) {
-        EGLAttrib attr;
-        if (eglQueryDeviceAttribEXT(devices[i], EGL_CUDA_DEVICE_NV, &attr)) {
-            LOG("Got EGL_CUDA_DEVICE_NV value '%d' from EGLDevice %d", attr, i);
-            if (attr == gpu) {
-                //attr contains the cuda device id
-                if (!checkModesetParameter(devices[i])) {
-                    return -1;
+        EGLAttrib attr = -1;
+
+        //retrieve the DRM device path for this EGLDevice
+        const char* drmDeviceFile = eglQueryDeviceStringEXT(devices[i], EGL_DRM_DEVICE_FILE_EXT);
+        if (drmDeviceFile != NULL) {
+            //if we have one, try and get the CUDA device id
+            if (eglQueryDeviceAttribEXT(devices[i], EGL_CUDA_DEVICE_NV, &attr)) {
+                LOG("Got EGL_CUDA_DEVICE_NV value '%d' for EGLDevice %d", attr, i);
+
+                //if we're looking for a matching drm device index check it here
+                if (gpu == -1 && fd != -1) {
+                    stat(drmDeviceFile, &buf);
+                    int foundDrmDeviceIndex = minor(buf.st_rdev) & 0x7f;
+                    LOG("Found drmDeviceIndex: %d", foundDrmDeviceIndex);
+                    if (foundDrmDeviceIndex != drmDeviceIndex) {
+                        continue;
+                    }
+                } else if (gpu != attr) {
+                    LOG("Not selected device, skipping");
+                    continue;
                 }
 
-                *eglDisplay = eglGetPlatformDisplay(EGL_PLATFORM_DEVICE_EXT, devices[i], NULL);
-                return 1;
+                //if it's the device we're looking for, check the modeset parameter on it.
+                if  (!checkModesetParameterFromFd(fd)) {
+                    continue;
+                }
+
+                //TODO it's likely if we get here with (gpu != -1 && foundDrmDeviceIndex != drmDeviceIndex)
+                //then the fd that was passed to us is not an NVIDIA GPU and we should try to implement some sort of optimus support
+                //We can't really rely on the return from checking EGL_CUDA_DEVICE_NV as some non-NVIDIA drivers claim they support it
+
+                LOG("Selecting EGLDevice %d", i);
+                *device = devices[i];
+                return attr;
+            } else {
+                LOG("No EGL_CUDA_DEVICE_NV support for EGLDevice %d", i);
             }
+        } else {
+            LOG("No DRM device file for EGLDevice %d", i);
         }
     }
-
+    LOG("No match found, falling back to default device");
     return 0;
 }
 
-bool initExporter(NVDriver *drv, int gpu) {
+bool initExporter(NVDriver *drv, void *device) {
     static const EGLAttrib debugAttribs[] = {EGL_DEBUG_MSG_WARN_KHR, EGL_TRUE, EGL_DEBUG_MSG_INFO_KHR, EGL_TRUE, EGL_NONE};
 
     eglQueryStreamConsumerEventNV = (PFNEGLQUERYSTREAMCONSUMEREVENTNVPROC) eglGetProcAddress("eglQueryStreamConsumerEventNV");
@@ -204,20 +230,20 @@ bool initExporter(NVDriver *drv, int gpu) {
     eglCreateStreamKHR = (PFNEGLCREATESTREAMKHRPROC) eglGetProcAddress("eglCreateStreamKHR");
     eglDestroyStreamKHR = (PFNEGLDESTROYSTREAMKHRPROC) eglGetProcAddress("eglDestroyStreamKHR");
     eglStreamImageConsumerConnectNV = (PFNEGLSTREAMIMAGECONSUMERCONNECTNVPROC) eglGetProcAddress("eglStreamImageConsumerConnectNV");
-    eglQueryDeviceStringEXT = (PFNEGLQUERYDEVICESTRINGEXTPROC) eglGetProcAddress("eglQueryDeviceStringEXT");
 
     PFNEGLQUERYDMABUFFORMATSEXTPROC eglQueryDmaBufFormatsEXT = (PFNEGLQUERYDMABUFFORMATSEXTPROC) eglGetProcAddress("eglQueryDmaBufFormatsEXT");
     PFNEGLDEBUGMESSAGECONTROLKHRPROC eglDebugMessageControlKHR = (PFNEGLDEBUGMESSAGECONTROLKHRPROC) eglGetProcAddress("eglDebugMessageControlKHR");
 
-    int ret = findCudaDisplay(&drv->eglDisplay, gpu);
-    if (ret == 1) {
-        LOG("Got EGLDisplay from CUDA device %d", gpu);
-    } else if (ret == 0) {
+    drv->eglDisplay = eglGetPlatformDisplay(EGL_PLATFORM_DEVICE_EXT, (EGLDeviceEXT) device, NULL);
+    if (drv->eglDisplay == NULL) {
         LOG("Falling back to using default EGLDisplay");
         drv->eglDisplay = eglGetDisplay(NULL);
-    } else if (ret == -1) {
+    }
+
+    if (drv->eglDisplay == NULL) {
         return false;
     }
+
     if (!eglInitialize(drv->eglDisplay, NULL, NULL)) {
         LOG("Unable to initialise EGL for display: %p", drv->eglDisplay);
         return false;
