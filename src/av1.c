@@ -335,7 +335,7 @@ static const VAProfile av1SupportedProfiles[] =  {
     VAProfileAV1Profile1,
 };
 
-static const DECLARE_CODEC(av1Codec) = {
+const DECLARE_CODEC(av1Codec) = {
     .computeCudaCodec = computeAV1CudaCodec,
     .handlers = {
         [VAPictureParameterBufferType] = copyAV1PicParam,

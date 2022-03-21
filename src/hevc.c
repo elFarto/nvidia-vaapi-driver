@@ -307,7 +307,7 @@ static const VAProfile hevcSupportedProfiles[] = {
     // VAProfileHEVCMain12,
 };
 
-static const DECLARE_CODEC(hevcCodec) = {
+const DECLARE_CODEC(hevcCodec) = {
     .computeCudaCodec = computeHEVCCudaCodec,
     .handlers = {
         [VAPictureParameterBufferType] = copyHEVCPicParam,

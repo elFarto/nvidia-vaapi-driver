@@ -126,13 +126,15 @@ typedef cudaVideoCodec (*ComputeCudaCodec)(VAProfile);
 
 //padding/alignment is very important to this structure as it's placed in it's own section
 //in the executable.
-typedef struct _NVCodec
+struct _NVCodec
 {
     ComputeCudaCodec    computeCudaCodec;
     HandlerFunc         handlers[VABufferTypeMax];
     int                 supportedProfileCount;
     const VAProfile     *supportedProfiles;
-} NVCodec;
+} __attribute__((aligned));
+
+typedef struct _NVCodec NVCodec;
 
 void appendBuffer(AppendableBuffer *ab, const void *buf, uint64_t size);
 int pictureIdxFromSurfaceId(NVDriver *ctx, VASurfaceID surf);

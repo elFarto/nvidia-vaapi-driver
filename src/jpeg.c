@@ -52,7 +52,7 @@ static const VAProfile jpegSupportedProfiles[] = {
     VAProfileJPEGBaseline,
 };
 
-static const DECLARE_CODEC(jpegCodec) = {
+const DECLARE_CODEC(jpegCodec) = {
     .computeCudaCodec = computeJPEGCudaCodec,
     .handlers = {
         [VAPictureParameterBufferType] = copyJPEGPicParam,

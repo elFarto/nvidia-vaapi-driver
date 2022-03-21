@@ -157,7 +157,7 @@ static const VAProfile vp9SupportedProfiles[] = {
     VAProfileVP9Profile3,
 };
 
-static const DECLARE_CODEC(vp9Codec) = {
+const DECLARE_CODEC(vp9Codec) = {
     .computeCudaCodec = computeVP9CudaCodec,
     .handlers = {
         [VAPictureParameterBufferType] = copyVP9PicParam,
