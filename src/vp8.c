@@ -60,7 +60,7 @@ static const VAProfile vp8SupportedProfiles[] = {
     VAProfileVP8Version0_3,
 };
 
-static const DECLARE_CODEC(vp8Codec) = {
+const DECLARE_CODEC(vp8Codec) = {
     .computeCudaCodec = computeVP8CudaCodec,
     .handlers = {
         [VAPictureParameterBufferType] = copyVP8PicParam,

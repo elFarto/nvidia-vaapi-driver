@@ -146,7 +146,7 @@ static const VAProfile mpeg2SupportedProfiles[] = {
     VAProfileMPEG2Simple,
 };
 
-static const DECLARE_CODEC(mpeg2Codec) = {
+const DECLARE_CODEC(mpeg2Codec) = {
     .computeCudaCodec = computeMPEG2CudaCodec,
     .handlers = {
         [VAPictureParameterBufferType] = copyMPEG2PicParam,
