@@ -171,7 +171,10 @@ void logger(const char *filename, const char *function, int line, const char *ms
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
 #define PTROFF(base, bytes) ((void *)((unsigned char *)(base) + (bytes)))
 #define DECLARE_CODEC(name) \
-    __attribute__((used, section("nvd_codecs"), aligned(__alignof__(NVCodec)))) \
+    __attribute__((used)) \
+    __attribute__((retain)) \
+    __attribute__((section("nvd_codecs"))) \
+    __attribute__((aligned(__alignof__(NVCodec)))) \
     NVCodec name
 
 #endif // VABACKEND_H
