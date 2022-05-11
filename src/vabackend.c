@@ -63,7 +63,7 @@ static void init() {
     }
 
     char *nvdMaxInstances = getenv("NVD_MAX_INSTANCES");
-    if (nvdGpu != NULL) {
+    if (nvdMaxInstances != NULL) {
         max_instances = atoi(nvdMaxInstances);
     }
 
