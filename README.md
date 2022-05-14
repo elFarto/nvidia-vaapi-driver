@@ -33,9 +33,12 @@ meson setup build
 meson install -C build
 ```
 
-# Debugging
+# Environment Variables
 
-The `NVD_LOG` environment variable can be used to control logging, `NVD_LOG=1` will log to stdout, and `NVD_LOG=<filename>` will append to the specified file (or stdout if the file can't be opened).
+| Variable | Purpose |
+|---|---|
+|`NVD_LOG`|This environment variable can be used to control logging, if it's set to `1` it will log to stdout. If it is set to anything else, it will use that as the filename to append to (or stdout if the file can't be opened).|
+|`NVD_MAX_INSTANCES`|This environment variable controls the maximum concurrent instances of the driver will be allowed per-process. This option is only really useful for older GPUs with not much VRAM, especially with Firefox on video heavy websites. |
 
 # Firefox
 

@@ -27,6 +27,10 @@
 
 #include <time.h>
 
+pthread_mutex_t concurrency_mutex;
+static uint32_t instances;
+static uint32_t max_instances = 0;
+
 static CudaFunctions *cu;
 static CuvidFunctions *cv;
 
@@ -56,6 +60,11 @@ static void init() {
     char *nvdGpu = getenv("NVD_GPU");
     if (nvdGpu != NULL) {
         gpu = atoi(nvdGpu);
+    }
+
+    char *nvdMaxInstances = getenv("NVD_MAX_INSTANCES");
+    if (nvdMaxInstances != NULL) {
+        max_instances = atoi(nvdMaxInstances);
     }
 
     //try to detect the Firefox sandbox and skip loading CUDA if detected
@@ -1752,6 +1761,11 @@ static VAStatus nvTerminate( VADriverContextP ctx )
 
     cu->cuCtxDestroy(drv->cudaContext);
 
+    pthread_mutex_lock(&concurrency_mutex);
+    instances--;
+    LOG("Now have %d (%d max) instances", instances, max_instances);
+    pthread_mutex_unlock(&concurrency_mutex);
+
     return VA_STATUS_SUCCESS;
 }
 
@@ -1759,6 +1773,16 @@ __attribute__((visibility("default")))
 VAStatus __vaDriverInit_1_0(VADriverContextP ctx)
 {
     LOG("Initialising NVIDIA VA-API Driver: %p %X", ctx, ctx->display_type);
+
+    pthread_mutex_lock(&concurrency_mutex);
+    LOG("Now have %d (%d max) instances", instances, max_instances);
+    if (max_instances > 0 && instances >= max_instances) {
+        pthread_mutex_unlock(&concurrency_mutex);
+        return VA_STATUS_ERROR_HW_BUSY;
+    }
+    instances++;
+    pthread_mutex_unlock(&concurrency_mutex);
+
 
     if (gpu == -1 && (ctx->display_type & VA_DISPLAY_MAJOR_MASK) != VA_DISPLAY_DRM) {
         LOG("Non-DRM display type detected, defaulting to GPU ID 0. Use NVD_GPU to pick a specific GPU.");
