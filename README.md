@@ -56,10 +56,22 @@ In addition the following environment variables need to be set:
 |---|---|---|
 |LIBVA_DRIVER_NAME|nvidia|This forces libva to load the `nvidia` backend, as the current version doesn't know which driver to load for the nvidia-drm driver.|
 |MOZ_DISABLE_RDD_SANDBOX|1|This disables the sandbox for the RDD process that the decoder runs in.|
-|EGL_PLATFORM|wayland|This option is needed on FF98+, due to a regression that has been introduced.|
+|EGL_PLATFORM|wayland|This option is needed on FF98+ when running on Wayland, due to a regression that has been introduced.|
 
 # MPV
 
 Currently this only works with a build of MPV from git master.
 
 There's no real reason to run it with mpv except for testing, as mpv already supports using nvdec directly. The `test.sh` script will run mpv with the file provided and various environment variables set to use the newly built driver
+
+# Verifying
+
+To verify that the driver is being used to decode video, you can use nvidia-settings or nvidia-smi:
+
+- nvidia-settings
+
+  By selecting the relevant GPU on the left of the nvidia-settings window, it will show `Video Engine Utilization` on the right. While playing a video this value should be non-zero
+
+- nvidia-smi
+
+  Running `nvidia-smi` while decoding a video should show a Firefox process with `C` in the `Type` column. In addition `nvidia-smi pmon` will show the usage of the decode engine per-process, and `nvidia-smi dmon` will show the usage per-GPU.
