@@ -779,7 +779,7 @@ static VAStatus nvCreateContext(
     //it isn't particually efficient to do this, but it is simple
     vdci.ulNumOutputSurfaces = 1;
     //just allocate as many surfaces as have been created since we can never have as much information as the decode to guess correctly
-    vdci.ulNumDecodeSurfaces = drv->surfaceCount;
+    vdci.ulNumDecodeSurfaces = drv->surfaceCount != 0 ? drv->surfaceCount : num_render_targets;
     //reset this to 0 as there are some cases where the context will be destroyed but not terminated, meaning if it's initialised again
     //we'll have even more surfaces
     drv->surfaceCount = 0;
@@ -949,6 +949,15 @@ static VAStatus nvBeginPicture(
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
     NVContext *nvCtx = (NVContext*) getObjectPtr(drv, context);
     NVSurface *surf = (NVSurface*) getObjectPtr(drv, render_target);
+
+    if (surf->context != NULL && surf->context != nvCtx) {
+        //this surface was last used on a different context, we need to free up the backing image (it might not be the correct size)
+        if (surf->backingImage != NULL) {
+            detachBackingImageFromSurface(drv, surf);
+        }
+        //...and reset the pictureIdx
+        surf->pictureIdx = -1;
+    }
 
     if (surf->pictureIdx == -1) {
         surf->pictureIdx = nvCtx->currentPictureId++;
