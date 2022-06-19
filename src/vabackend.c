@@ -246,7 +246,7 @@ static void deleteObject(NVDriver *drv, VAGenericID id) {
 }
 
 static bool destroyContext(NVDriver *drv, NVContext *nvCtx) {
-    cu->cuCtxPushCurrent(drv->cudaContext);
+    CHECK_CUDA_RESULT(cu->cuCtxPushCurrent(drv->cudaContext));
 
     //TODO need to check the thread is actually valid
     LOG("Signaling resolve thread to exit");
@@ -266,7 +266,7 @@ static bool destroyContext(NVDriver *drv, NVContext *nvCtx) {
     nvCtx->decoder = NULL;
     if (decoder != NULL) {
       CUresult result = cv->cuvidDestroyDecoder(decoder);
-      cu->cuCtxPopCurrent(NULL);
+      CHECK_CUDA_RESULT(cu->cuCtxPopCurrent(NULL));
       if (result != CUDA_SUCCESS) {
           LOG("cuvidDestroyDecoder failed: %d", result);
           return false;
@@ -337,7 +337,7 @@ static int doesGPUSupportCodec(cudaVideoCodec codec, int bitDepth, cudaVideoChro
 static void* resolveSurfaces(void *param) {
     NVContext *ctx = (NVContext*) param;
     NVDriver *drv = ctx->drv;
-    cu->cuCtxPushCurrent(drv->cudaContext);
+    CHECK_CUDA_RESULT(cu->cuCtxPushCurrent(drv->cudaContext));
 
     LOG("[RT] Resolve thread for %p started", ctx);
     while (!ctx->exiting) {
@@ -393,7 +393,7 @@ static VAStatus nvQueryConfigProfiles(
     )
 {
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
-    cu->cuCtxPushCurrent(drv->cudaContext);
+    CHECK_CUDA_RESULT(cu->cuCtxPushCurrent(drv->cudaContext));
 
     int profiles = 0;
     if (doesGPUSupportCodec(cudaVideoCodec_MPEG2, 8, cudaVideoChromaFormat_420, NULL, NULL)) {
@@ -485,7 +485,7 @@ static VAStatus nvQueryConfigProfiles(
 
     *num_profiles = profiles;
 
-    cu->cuCtxPopCurrent(NULL);
+    CHECK_CUDA_RESULT(cu->cuCtxPopCurrent(NULL));
 
     return VA_STATUS_SUCCESS;
 }
@@ -784,7 +784,7 @@ static VAStatus nvCreateContext(
     //we'll have even more surfaces
     drv->surfaceCount = 0;
 
-    cv->cuvidCtxLockCreate(&vdci.vidLock, drv->cudaContext);
+    CHECK_CUDA_RESULT(cv->cuvidCtxLockCreate(&vdci.vidLock, drv->cudaContext));
 
     CUvideodecoder decoder;
     CUresult result = cv->cuvidCreateDecoder(&decoder, &vdci);
@@ -1705,7 +1705,7 @@ static VAStatus nvExportSurfaceHandle(
 
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
 
-    cu->cuCtxPushCurrent(drv->cudaContext);
+    CHECK_CUDA_RESULT(cu->cuCtxPushCurrent(drv->cudaContext));
 
     NVSurface *surface = (NVSurface*) getObjectPtr(drv, surface_id);
 
@@ -1748,7 +1748,7 @@ static VAStatus nvExportSurfaceHandle(
     ptr->layers[1].offset[0] = img->offsets[1];
     ptr->layers[1].pitch[0] = img->strides[1];
 
-    cu->cuCtxPopCurrent(NULL);
+    CHECK_CUDA_RESULT(cu->cuCtxPopCurrent(NULL));
 
     LOG("Exporting with %d %d %d %d %d %d", ptr->width, ptr->height, ptr->layers[0].offset[0], ptr->layers[0].pitch[0], ptr->layers[1].offset[0], ptr->layers[1].pitch[0])
 
@@ -1760,7 +1760,7 @@ static VAStatus nvTerminate( VADriverContextP ctx )
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
     LOG("Terminating %p", ctx);
 
-    cu->cuCtxPushCurrent(drv->cudaContext);
+    CHECK_CUDA_RESULT(cu->cuCtxPushCurrent(drv->cudaContext));
 
     destroyAllBackingImage(drv);
 
@@ -1768,7 +1768,7 @@ static VAStatus nvTerminate( VADriverContextP ctx )
 
     releaseExporter(drv);
 
-    cu->cuCtxDestroy(drv->cudaContext);
+    CHECK_CUDA_RESULT(cu->cuCtxDestroy(drv->cudaContext));
 
     pthread_mutex_lock(&concurrency_mutex);
     instances--;

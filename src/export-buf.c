@@ -99,7 +99,7 @@ static void reconnect(NVDriver *drv) {
     LOG("Reconnecting to stream");
     eglInitialize(drv->eglDisplay, NULL, NULL);
     if (drv->cuStreamConnection != NULL) {
-        drv->cu->cuEGLStreamProducerDisconnect(&drv->cuStreamConnection);
+        CHECK_CUDA_RESULT(drv->cu->cuEGLStreamProducerDisconnect(&drv->cuStreamConnection));
     }
     if (drv->eglStream != EGL_NO_STREAM_KHR) {
         eglDestroyStreamKHR(drv->eglDisplay, drv->eglStream);
@@ -324,8 +324,10 @@ void destroyBackingImage(NVDriver *drv, BackingImage *img) {
     //eglStreamReleaseImageNV(drv->eglDisplay, drv->eglStream, surface->eglImage, EGL_NO_SYNC);
     //destroy them rather than releasing them
     eglDestroyImage(drv->eglDisplay, img->image);
-    drv->cu->cuArrayDestroy(img->arrays[0]);
-    drv->cu->cuArrayDestroy(img->arrays[1]);
+    CHECK_CUDA_RESULT(drv->cu->cuArrayDestroy(img->arrays[0]));
+    CHECK_CUDA_RESULT(drv->cu->cuArrayDestroy(img->arrays[1]));
+    img->arrays[0] = NULL;
+    img->arrays[1] = NULL;
     free(img);
 }
 
