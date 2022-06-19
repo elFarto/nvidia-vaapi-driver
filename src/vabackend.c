@@ -1272,76 +1272,69 @@ static VAStatus nvGetImage(
         VAImageID image
     )
 {
-    return VA_STATUS_ERROR_UNIMPLEMENTED;
-//    NVDriver *drv = (NVDriver*) ctx->pDriverData;
+    NVDriver *drv = (NVDriver*) ctx->pDriverData;
 
-//    NVSurface *surfaceObj = (NVSurface*) getObject(drv, surface)->obj;
-//    NVImage *imageObj = (NVImage*) getObject(drv, image)->obj;
-//    NVContext *context = (NVContext*) surfaceObj->context;
+    NVSurface *surfaceObj = (NVSurface*) getObject(drv, surface)->obj;
+    NVImage *imageObj = (NVImage*) getObject(drv, image)->obj;
+    NVContext *context = (NVContext*) surfaceObj->context;
 
-//    if (context == NULL) {
-//        return VA_STATUS_ERROR_INVALID_CONTEXT;
-//    }
+    if (context == NULL) {
+        return VA_STATUS_ERROR_INVALID_CONTEXT;
+    }
 
-//    int bytesPerPixel = 1;
-//    if (imageObj->format == VA_FOURCC_P010 || imageObj->format == VA_FOURCC_P012) {
-//        bytesPerPixel = 2;
-//    }
+    int bytesPerPixel = 1;
+    if (imageObj->format == VA_FOURCC_P010 || imageObj->format == VA_FOURCC_P012) {
+        bytesPerPixel = 2;
+    }
 
-//    CUVIDPROCPARAMS procParams = {0};
-//    procParams.progressive_frame = surfaceObj->progressiveFrame;
-//    procParams.top_field_first = surfaceObj->topFieldFirst;
-//    procParams.second_field = surfaceObj->secondField;
+    //wait for the surface to be decoded
+    nvSyncSurface(ctx, surface);
 
-//    CUdeviceptr deviceMemory = (CUdeviceptr) NULL;
-//    unsigned int pitch;
+    //luma
+    CUDA_MEMCPY2D memcpy2d = {
+      .srcXInBytes = 0, .srcY = 0,
+      .srcMemoryType = CU_MEMORYTYPE_ARRAY,
+      .srcArray = surfaceObj->backingImage->arrays[0],
 
-//    CUresult result = cv->cuvidMapVideoFrame(context->decoder, surfaceObj->pictureIdx, &deviceMemory, &pitch, &procParams);
-//    LOG("got address %X for surface %d", deviceMemory, getObject(drv, surface)->id);
+      .dstXInBytes = 0, .dstY = 0,
+      .dstMemoryType = CU_MEMORYTYPE_HOST,
+      .dstHost = imageObj->imageBuffer->ptr,
+      .dstPitch = width * bytesPerPixel,
 
-//    if (result != CUDA_SUCCESS)
-//    {
-//            LOG("cuvidMapVideoFrame failed: %d", result);
-//            return VA_STATUS_ERROR_DECODING_ERROR;
-//    }
+      .WidthInBytes = width * bytesPerPixel,
+      .Height = height
+    };
 
-//    CUDA_MEMCPY2D memcpy2d = {
-//      .srcXInBytes = 0, .srcY = 0,
-//      .srcMemoryType = CU_MEMORYTYPE_DEVICE,
-//      .srcDevice = deviceMemory,
-//      .srcPitch = pitch,
+    CUresult result = cu->cuMemcpy2D(&memcpy2d);
+    if (result != CUDA_SUCCESS)
+    {
+            LOG("cuMemcpy2D failed: %d", result);
+            return VA_STATUS_ERROR_DECODING_ERROR;
+    }
 
-//      .dstXInBytes = 0, .dstY = 0,
-//      .dstMemoryType = CU_MEMORYTYPE_HOST,
-//      .dstHost = imageObj->imageBuffer->ptr,
-//      .dstPitch = width * bytesPerPixel,
+    //chroma
+    CUDA_MEMCPY2D memcpy2dChroma = {
+      .srcXInBytes = 0, .srcY = 0,
+      .srcMemoryType = CU_MEMORYTYPE_ARRAY,
+      .srcArray = surfaceObj->backingImage->arrays[1],
 
-//      .WidthInBytes = width * bytesPerPixel,
-//      .Height = height + (height>>1) //luma and chroma
-//    };
+      .dstXInBytes = 0, .dstY = 0,
+      .dstMemoryType = CU_MEMORYTYPE_HOST,
+      .dstHost = imageObj->imageBuffer->ptr + (width * height * bytesPerPixel),
+      .dstPitch = width * bytesPerPixel,
 
-//    result = cu->cuMemcpy2D(&memcpy2d);
-//    if (result != CUDA_SUCCESS)
-//    {
-//            LOG("cuMemcpy2D failed: %d", result);
-//            return VA_STATUS_ERROR_DECODING_ERROR;
-//    }
+      .WidthInBytes = width * bytesPerPixel,
+      .Height = (height>>1)
+    };
 
-//    cv->cuvidUnmapVideoFrame(context->decoder, deviceMemory);
+    result = cu->cuMemcpy2D(&memcpy2dChroma);
+    if (result != CUDA_SUCCESS)
+    {
+            LOG("cuMemcpy2D failed: %d", result);
+            return VA_STATUS_ERROR_DECODING_ERROR;
+    }
 
-////    static int counter = 0;
-////    char filename[64];
-////    int size = (pitch * surfaceObj->height) + (pitch * surfaceObj->height>>1);
-////    char *buf = malloc(size);
-////    snprintf(filename, 64, "/tmp/frame-%03d.data\0", counter++);
-////    LOG("writing %d to %s", surfaceObj->pictureIdx, filename);
-////    int fd = open(filename, O_RDWR | O_TRUNC | O_CREAT, 0644);
-////    cuMemcpyDtoH(buf, deviceMemory, size);
-////    write(fd, buf, size);
-////    free(buf);
-////    close(fd);
-
-//    return VA_STATUS_SUCCESS;
+    return VA_STATUS_SUCCESS;
 }
 
 static VAStatus nvPutImage(
