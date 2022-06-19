@@ -20,4 +20,4 @@ export NVD_LOG=1
 #mpv -v --hwdec=vaapi-copy --hwdec-codecs=all --vd-lavc-check-hw-profile=no $@
 #mpv -v -v --msg-level=all=debug --hwdec=vaapi --hwdec-codecs=all --vd-lavc-check-hw-profile=no $@
 #apitrace trace -v -a egl 
-$MPV -v --msg-level=all=debug --hwdec=vaapi-copy --opengl-debug --hwdec-codecs=all --vd-lavc-check-hw-profile=no "$@"
+$MPV -v --msg-level=all=debug --hwdec=vaapi --opengl-debug --hwdec-codecs=all --vd-lavc-check-hw-profile=no "$@"
