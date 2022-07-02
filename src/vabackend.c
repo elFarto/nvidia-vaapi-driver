@@ -11,6 +11,7 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <sys/param.h>
+#include <sys/ioctl.h>
 
 #include <va/va_backend.h>
 #include <va/va_drmcommon.h>
@@ -1777,6 +1778,24 @@ VAStatus __vaDriverInit_1_0(VADriverContextP ctx)
 {
     LOG("Initialising NVIDIA VA-API Driver: %p %X", ctx, ctx->display_type);
 
+    bool isDrm = (ctx->display_type & VA_DISPLAY_MAJOR_MASK) == VA_DISPLAY_DRM;
+    if (gpu == -1 && !isDrm) {
+        LOG("Non-DRM display type detected, defaulting to GPU ID 0. Use NVD_GPU to pick a specific GPU.");
+        gpu = 0;
+    } else if (gpu == -1 && isDrm) {
+        int fd = ((struct drm_state*) ctx->drm_state)->fd;
+        char name[16] = {0};
+        struct drm_version ver = {
+            .name = name,
+            .name_len = 15
+        };
+        int ret = ioctl(fd, DRM_IOCTL_VERSION, &ver);
+        if (ret || strncmp(name, "nvidia-drm", 10)) {
+            LOG("Invalid driver for DRM device: %s", ver.name);
+            return VA_STATUS_ERROR_OPERATION_FAILED;
+        }
+    }
+
     pthread_mutex_lock(&concurrency_mutex);
     LOG("Now have %d (%d max) instances", instances, max_instances);
     if (max_instances > 0 && instances >= max_instances) {
@@ -1785,12 +1804,6 @@ VAStatus __vaDriverInit_1_0(VADriverContextP ctx)
     }
     instances++;
     pthread_mutex_unlock(&concurrency_mutex);
-
-
-    if (gpu == -1 && (ctx->display_type & VA_DISPLAY_MAJOR_MASK) != VA_DISPLAY_DRM) {
-        LOG("Non-DRM display type detected, defaulting to GPU ID 0. Use NVD_GPU to pick a specific GPU.");
-        gpu = 0;
-    }
 
     //check to make sure we initialised the CUDA functions correctly
     if (cu == NULL || cv == NULL) {
