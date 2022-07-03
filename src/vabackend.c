@@ -263,18 +263,18 @@ static bool destroyContext(NVDriver *drv, NVContext *nvCtx) {
     freeBuffer(&nvCtx->sliceOffsets);
     freeBuffer(&nvCtx->buf);
 
-    CUvideodecoder decoder = nvCtx->decoder;
-    nvCtx->decoder = NULL;
-    if (decoder != NULL) {
-      CUresult result = cv->cuvidDestroyDecoder(decoder);
-      CHECK_CUDA_RESULT(cu->cuCtxPopCurrent(NULL));
+    bool successful = true;
+    if (nvCtx->decoder != NULL) {
+      CUresult result = cv->cuvidDestroyDecoder(nvCtx->decoder);
       if (result != CUDA_SUCCESS) {
           LOG("cuvidDestroyDecoder failed: %d", result);
-          return false;
+          successful = false;
       }
     }
+    nvCtx->decoder = NULL;
+    CHECK_CUDA_RESULT(cu->cuCtxPopCurrent(NULL));
 
-    return true;
+    return successful;
 }
 
 static void deleteAllObjects(NVDriver *drv) {
@@ -1507,7 +1507,8 @@ static VAStatus nvQuerySurfaceAttributes(
 
         CHECK_CUDA_RESULT(cu->cuCtxPushCurrent(drv->cudaContext));
         CUresult result = cv->cuvidGetDecoderCaps(&videoDecodeCaps);
-        cu->cuCtxPopCurrent(NULL);
+        CHECK_CUDA_RESULT(cu->cuCtxPopCurrent(NULL));
+
         if (result != CUDA_SUCCESS) {
             CHECK_CUDA_RESULT(result);
             return VA_STATUS_ERROR_OPERATION_FAILED;
