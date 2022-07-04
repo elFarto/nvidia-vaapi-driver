@@ -573,3 +573,38 @@ bool exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t 
 
     return true;
 }
+
+bool fillExportDescriptor(NVDriver *drv, NVSurface *surface, VADRMPRIMESurfaceDescriptor *desc) {
+    BackingImage *img = surface->backingImage;
+
+    int bpp = img->fourcc == DRM_FORMAT_NV12 ? 1 : 2;
+
+    //TODO only support 420 images (either NV12, P010 or P012)
+    desc->fourcc = img->fourcc;
+    desc->width = img->width;
+    desc->height = img->height;
+    desc->num_layers = 2;
+    desc->num_objects = 2;
+
+    desc->objects[0].fd = dup(img->fds[0]);
+    desc->objects[0].size = img->width * img->height * bpp;
+    desc->objects[0].drm_format_modifier = img->mods[0];
+
+    desc->objects[1].fd = dup(img->fds[1]);
+    desc->objects[1].size = img->width * (img->height >> 1) * bpp;
+    desc->objects[1].drm_format_modifier = img->mods[1];
+
+    desc->layers[0].drm_format = img->fourcc == DRM_FORMAT_NV12 ? DRM_FORMAT_R8 : DRM_FORMAT_R16;
+    desc->layers[0].num_planes = 1;
+    desc->layers[0].object_index[0] = 0;
+    desc->layers[0].offset[0] = img->offsets[0];
+    desc->layers[0].pitch[0] = img->strides[0];
+
+    desc->layers[1].drm_format = img->fourcc == DRM_FORMAT_NV12 ? DRM_FORMAT_RG88 : DRM_FORMAT_RG1616;
+    desc->layers[1].num_planes = 1;
+    desc->layers[1].object_index[0] = 1;
+    desc->layers[1].offset[0] = img->offsets[1];
+    desc->layers[1].pitch[0] = img->strides[1];
+
+    return true;
+}
