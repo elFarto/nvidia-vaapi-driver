@@ -1829,41 +1829,11 @@ static VAStatus nvExportSurfaceHandle(
         return VA_STATUS_ERROR_ALLOCATION_FAILED;
     }
 
-    BackingImage *img = surface->backingImage;
-
-    int bpp = img->fourcc == DRM_FORMAT_NV12 ? 1 : 2;
-
-    //TODO currently only supports 420 images (either NV12, P010 or P012)
     VADRMPRIMESurfaceDescriptor *ptr = (VADRMPRIMESurfaceDescriptor*) descriptor;
-    ptr->fourcc = img->fourcc;
-    ptr->width = img->width;
-    ptr->height = img->height;
-    ptr->num_layers = 2;
-    ptr->num_objects = 2;
 
-    ptr->objects[0].fd = dup(img->fds[0]);
-    ptr->objects[0].size = img->width * img->height * bpp;
-    ptr->objects[0].drm_format_modifier = img->mods[0];
+    fillExportDescriptor(drv, surface, ptr);
 
-    ptr->objects[1].fd = dup(img->fds[1]);
-    ptr->objects[1].size = img->width * (img->height >> 1) * bpp;
-    ptr->objects[1].drm_format_modifier = img->mods[1];
-
-    ptr->layers[0].drm_format = img->fourcc == DRM_FORMAT_NV12 ? DRM_FORMAT_R8 : DRM_FORMAT_R16;
-    ptr->layers[0].num_planes = 1;
-    ptr->layers[0].object_index[0] = 0;
-    ptr->layers[0].offset[0] = img->offsets[0];
-    ptr->layers[0].pitch[0] = img->strides[0];
-
-    ptr->layers[1].drm_format = img->fourcc == DRM_FORMAT_NV12 ? DRM_FORMAT_RG88 : DRM_FORMAT_RG1616;
-    ptr->layers[1].num_planes = 1;
-    ptr->layers[1].object_index[0] = 1;
-    ptr->layers[1].offset[0] = img->offsets[1];
-    ptr->layers[1].pitch[0] = img->strides[1];
-
-    CHECK_CUDA_RESULT(cu->cuCtxPopCurrent(NULL));
-
-    LOG("Exporting with %d %d %d %d %d %d", ptr->width, ptr->height, ptr->layers[0].offset[0], ptr->layers[0].pitch[0], ptr->layers[1].offset[0], ptr->layers[1].pitch[0])
+    LOG("Exporting with %d %d %d %d %d %d", ptr->width, ptr->height, ptr->layers[0].offset[0], ptr->layers[0].pitch[0], ptr->layers[1].offset[0], ptr->layers[1].pitch[0]);
 
     return VA_STATUS_SUCCESS;
 }
