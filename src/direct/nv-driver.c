@@ -100,10 +100,6 @@ NvV32 nv_export_object_to_fd(int fd, int export_fd, NvHandle hClient, NvHandle h
     return nv_rm_control(fd, hClient, hClient, NV0000_CTRL_CMD_OS_UNIX_EXPORT_OBJECT_TO_FD, 0, sizeof(params), &params);
 }
 
-void nv0_register_fd(int nv0_fd, int nvctl_fd) {
-    ioctl(nv0_fd, _IOC(_IOC_READ|_IOC_WRITE, 0x46, 0xc9, 0x4), nvctl_fd);
-}
-
 bool get_device_uuid(NVDriverContext *context, char uuid[16]) {
     NV0000_CTRL_GPU_GET_UUID_FROM_GPU_ID_PARAMS uuidParams = {
         .gpuId = context->devInfo.gpu_id,
@@ -128,7 +124,6 @@ bool init_nvdriver(NVDriverContext *context, int drmFd) {
     }
 
     int nvctlFd = open("/dev/nvidiactl", O_RDWR|O_CLOEXEC);
-    int nv0Fd = open("/dev/nvidia0", O_RDWR|O_CLOEXEC);
 
     //nv_check_version(nvctl_fd, "515.48.07");
     //not sure why this is called.
@@ -142,9 +137,6 @@ bool init_nvdriver(NVDriverContext *context, int drmFd) {
 
     //attach the drm fd to this handle
     nv_attach_gpus(nvctlFd, context->devInfo.gpu_id);
-
-    //register the control fd with the nvidia0 device..? not sure why this is needed, but things don't work if you don't call it
-    nv0_register_fd(nv0Fd, nvctlFd);
 
     //allocate the parent memory object
     NV0080_ALLOC_PARAMETERS deviceParams = {
@@ -167,11 +159,9 @@ bool init_nvdriver(NVDriverContext *context, int drmFd) {
 
     context->drmFd = drmFd;
     context->nvctlFd = nvctlFd;
-    context->nv0Fd = nv0Fd;
 
     return true;
 err:
-    close(nv0Fd);
     close(nvctlFd);
     return false;
 }

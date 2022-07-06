@@ -10,7 +10,6 @@
 
 typedef struct {
     int nvctlFd;
-    int nv0Fd;
     int drmFd;
     struct drm_nvidia_get_dev_info_params devInfo;
     uint32_t clientObject;
