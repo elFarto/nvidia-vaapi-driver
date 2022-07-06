@@ -23,7 +23,9 @@ thread_dep = dependency('threads')
 
 sources = [
     'src/av1.c',
-    'src/export-buf.c',
+    # 'src/export-buf.c',
+    'src/direct/direct-export-buf.c',
+    'src/direct/nv-driver.c',
     'src/h264.c',
     'src/hevc.c',
     'src/jpeg.c',
@@ -39,6 +41,8 @@ if gst_codecs_deps.found()
     sources += ['src/vp9.c',]
 endif
 
+nvidia_incdir = include_directories('nvidia-include')
+
 shared_library(
     'nvidia_drv_video',
     name_prefix: '',
@@ -52,6 +56,7 @@ shared_library(
         dl_dep,
         thread_dep,
     ],
+    include_directories: nvidia_incdir,
     install: true,
     install_dir: get_option('libdir') / 'dri',
     gnu_symbol_visibility: 'hidden',

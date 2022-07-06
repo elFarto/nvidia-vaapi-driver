@@ -9,6 +9,7 @@
 
 #include <pthread.h>
 #include "list.h"
+#include "direct/nv-driver.h"
 
 #define SURFACE_QUEUE_SIZE 16
 #define MAX_IMAGE_COUNT 64
@@ -86,6 +87,7 @@ typedef struct _BackingImage {
     int         offsets[4];
     int         strides[4];
     uint64_t    mods[4];
+    uint32_t    size[4];
 } BackingImage;
 
 typedef struct
@@ -107,6 +109,7 @@ typedef struct
     pthread_mutex_t         exportMutex;
     pthread_mutex_t         imagesMutex;
     Array/*<NVEGLImage>*/   images;
+    NVDriverContext         driverContext;
 } NVDriver;
 
 struct _NVCodec;
