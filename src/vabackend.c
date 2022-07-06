@@ -1717,7 +1717,7 @@ static VAStatus nvExportSurfaceHandle(
 
     fillExportDescriptor(drv, surface, ptr);
 
-    LOG("Exporting with %d %d %d %d %d %d", ptr->width, ptr->height, ptr->layers[0].offset[0], ptr->layers[0].pitch[0], ptr->layers[1].offset[0], ptr->layers[1].pitch[0]);
+    LOG("Exporting with %d %d %d %d %lx %d %d %lx", ptr->width, ptr->height, ptr->layers[0].offset[0], ptr->layers[0].pitch[0], ptr->objects[0].drm_format_modifier, ptr->layers[1].offset[0], ptr->layers[1].pitch[0], ptr->objects[1].drm_format_modifier);
 
     return VA_STATUS_SUCCESS;
 }
