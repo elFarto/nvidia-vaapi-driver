@@ -13,6 +13,8 @@
 #include "nv-driver.h"
 #include "../vabackend.h"
 
+#include "../vabackend.h"
+
 NvV32 nv_alloc_object(int fd, NvHandle hRoot, NvHandle hObjectParent, NvHandle* hObjectNew, NvV32 hClass, void* params) {
     NVOS64_PARAMETERS alloc = {
         .hRoot = hRoot,
@@ -28,6 +30,18 @@ NvV32 nv_alloc_object(int fd, NvHandle hRoot, NvHandle hObjectParent, NvHandle* 
     *hObjectNew = alloc.hObjectNew;
 
     return ret == 0 ? alloc.status : NV_ERR_GENERIC;
+}
+
+NvV32 nv_free_object(int fd, NvHandle hRoot, NvHandle hObject) {
+    NVOS00_PARAMETERS freeParams = {
+        .hRoot = hRoot,
+        .hObjectParent = 0, //not actually used
+        .hObjectOld = hObject
+    };
+
+    int ret = ioctl(fd, _IOC(_IOC_READ|_IOC_WRITE, NV_IOCTL_MAGIC, NV_ESC_RM_FREE, sizeof(NVOS00_PARAMETERS)), &freeParams);
+
+    return ret == 0 ? freeParams.status : NV_ERR_GENERIC;
 }
 
 NvV32 nv_vid_heap_control(int fd, NVOS32_PARAMETERS* params) {
@@ -101,6 +115,10 @@ NvV32 nv_export_object_to_fd(int fd, int export_fd, NvHandle hClient, NvHandle h
     return nv_rm_control(fd, hClient, hClient, NV0000_CTRL_CMD_OS_UNIX_EXPORT_OBJECT_TO_FD, 0, sizeof(params), &params);
 }
 
+void nv0_register_fd(int nv0_fd, int nvctl_fd) {
+    ioctl(nv0_fd, _IOC(_IOC_READ|_IOC_WRITE, 0x46, 0xc9, 0x4), &nvctl_fd);
+}
+
 bool get_device_uuid(NVDriverContext *context, char uuid[16]) {
     NV0000_CTRL_GPU_GET_UUID_FROM_GPU_ID_PARAMS uuidParams = {
         .gpuId = context->devInfo.gpu_id,
@@ -119,6 +137,7 @@ bool get_device_uuid(NVDriverContext *context, char uuid[16]) {
 }
 
 bool init_nvdriver(NVDriverContext *context, int drmFd) {
+    LOG("Initing nvdriver...");
     int drmret = ioctl(drmFd, DRM_IOCTL_NVIDIA_GET_DEV_INFO, &context->devInfo);
     if (drmret) {
         LOG("DRM_IOCTL_NVIDIA_GET_DEV_INFO failed: %d %d", drmret);
@@ -128,6 +147,7 @@ bool init_nvdriver(NVDriverContext *context, int drmFd) {
     LOG("Got dev info: %x", context->devInfo.generic_page_kind);
 
     int nvctlFd = open("/dev/nvidiactl", O_RDWR|O_CLOEXEC);
+    //int nv0Fd = open("/dev/nvidia0", O_RDWR|O_CLOEXEC);
 
     //nv_check_version(nvctl_fd, "515.48.07");
     //not sure why this is called.
@@ -164,15 +184,35 @@ bool init_nvdriver(NVDriverContext *context, int drmFd) {
         goto err;
     }
 
+    //TODO honestly not sure if this is needed
+    //nv0_register_fd(nv0Fd, nvctlFd);
+
     context->drmFd = drmFd;
     context->nvctlFd = nvctlFd;
+    //context->nv0Fd = nv0Fd;
 
     LOG("Done initing");
 
     return true;
 err:
+
+    LOG("Got error initing");
     close(nvctlFd);
     return false;
+}
+
+bool free_nvdriver(NVDriverContext *context) {
+    NvV32 ret = nv_free_object(context->nvctlFd, context->clientObject, context->subdeviceObject);
+
+    ret = nv_free_object(context->nvctlFd, context->clientObject, context->deviceObject);
+
+    ret = nv_free_object(context->nvctlFd, context->clientObject, context->clientObject);
+
+    close(context->nvctlFd);
+    close(context->drmFd);
+    //close(context->nv0Fd);
+
+    memset(context, 0, sizeof(NVDriverContext));
 }
 
 int alloc_memory(NVDriverContext *context, uint32_t size, uint32_t alignment, uint32_t bpc) {
@@ -180,23 +220,27 @@ int alloc_memory(NVDriverContext *context, uint32_t size, uint32_t alignment, ui
     NvHandle bufferObject = 0;
     NV_MEMORY_ALLOCATION_PARAMS memParams = {
         .owner = context->clientObject,
-        .type = 0,
-        .flags = NVOS32_ALLOC_FLAGS_IGNORE_BANK_PLACEMENT |//0x01c101
+        .type = NVOS32_TYPE_IMAGE,
+        .flags = NVOS32_ALLOC_FLAGS_IGNORE_BANK_PLACEMENT |
                  NVOS32_ALLOC_FLAGS_ALIGNMENT_FORCE |
-                 //NVOS32_ALLOC_FLAGS_MEMORY_HANDLE_PROVIDED |
                  NVOS32_ALLOC_FLAGS_MAP_NOT_REQUIRED |
                  NVOS32_ALLOC_FLAGS_PERSISTENT_VIDMEM,
-        .attr = 0x11820000 | (bpc == 8 ? NVOS32_ATTR_DEPTH_8 : NVOS32_ATTR_DEPTH_16),//0x11000000, //NVOS32_ATTR_DEPTH_8/NVOS32_ATTR_DEPTH_16 |
-                                                                  //NVOS32_ATTR_FORMAT_BLOCK_LINEAR |
-                                                                  //NVOS32_ATTR_PAGE_SIZE_HUGE |
-                                                                  //NVOS32_ATTR_PHYSICALITY_CONTIGUOUS
+
+        .attr = ((bpc == 8 ? DRF_DEF(OS32, _ATTR, _DEPTH, _8)
+                           : DRF_DEF(OS32, _ATTR, _DEPTH, _16))) |
+                DRF_DEF(OS32, _ATTR, _FORMAT, _BLOCK_LINEAR) |
+                DRF_DEF(OS32, _ATTR, _PAGE_SIZE, _HUGE) |
+                DRF_DEF(OS32, _ATTR, _PHYSICALITY, _CONTIGUOUS),
         .format = 0xfe, //?
         .width = 0,
         .height = 0,
         .size = size,
         .alignment = alignment,
-        .attr2 = 0x100005 //NVOS32_ATTR2_ZBC_PREFER_NO_ZBC | NVOS32_ATTR2_GPU_CACHEABLE_YES | NVOS32_ATTR2_PAGE_SIZE_HUGE_2MB
+        .attr2 = DRF_DEF(OS32, _ATTR2, _ZBC, _PREFER_NO_ZBC) |
+                 DRF_DEF(OS32, _ATTR2, _GPU_CACHEABLE, _YES) |
+                 DRF_DEF(OS32, _ATTR2, _PAGE_SIZE_HUGE, _2MB)
     };
+    LOG("Allocating object");
     NvV32 ret = nv_alloc_object(context->nvctlFd, context->clientObject, context->deviceObject, &bufferObject, NV01_MEMORY_LOCAL_USER, &memParams);
 
     //open a new handle to return
@@ -211,6 +255,9 @@ int alloc_memory(NVDriverContext *context, uint32_t size, uint32_t alignment, ui
         close(nvctFd2);
         return -1;
     }
+
+    //ret = nv_free_object(context->nvctlFd, context->clientObject, bufferObject);
+
     return nvctFd2;
 }
 
@@ -223,9 +270,24 @@ int alloc_image(NVDriverContext *context, uint32_t width, uint32_t height, uint8
     uint32_t bytesPerChannel = bitsPerChannel/8;
     uint32_t bytesPerPixel = channels * bytesPerChannel;
 
+    //first figure out the gob layout
+    uint32_t log2GobsPerBlockX = 0; //TODO not sure if these are the correct numbers to start with, but they're the largest ones i've seen used
+    uint32_t log2GobsPerBlockY = 4;
+    uint32_t log2GobsPerBlockZ = 0;
+    if (1) {
+        while (log2GobsPerBlockX > 0 && (gobWidthInBytes << (log2GobsPerBlockX - 1)) >= width * bytesPerPixel)
+            log2GobsPerBlockX--;
+        while (log2GobsPerBlockY > 0 && (gobHeightInBytes << (log2GobsPerBlockY - 1)) >= height)
+            log2GobsPerBlockY--;
+        while (log2GobsPerBlockZ > 0 && (gobDepthInBytes << (log2GobsPerBlockZ - 1)) >= depth)
+            log2GobsPerBlockZ--;
+    }
+
+    printf("aligned sizes: %dx%d\n", gobWidthInBytes << log2GobsPerBlockX, gobHeightInBytes << log2GobsPerBlockY );
+
     //These two seem to be correct, but it was discovered by trial and error so I'm not 100% sure
-    uint32_t widthInBytes = ROUND_UP(width * bytesPerPixel, 64);
-    uint32_t alignedHeight = ROUND_UP(height, 128);
+    uint32_t widthInBytes = ROUND_UP(width * bytesPerPixel, gobWidthInBytes << log2GobsPerBlockX);
+    uint32_t alignedHeight = ROUND_UP(height, gobHeightInBytes << log2GobsPerBlockY);
 
     uint32_t granularity = 65536;
     uint32_t imageSizeInBytes = widthInBytes * alignedHeight;
@@ -236,19 +298,7 @@ int alloc_image(NVDriverContext *context, uint32_t width, uint32_t height, uint8
     int fd = alloc_memory(context, size, alignment, bitsPerChannel);
 
     //now export the dma-buf
-    uint32_t pitchInBlocks = widthInBytes / gobWidthInBytes;
-
-    uint32_t log2GobsPerBlockX = 0; //TODO not sure if these are the correct numbers to start with, but they're the largest ones i've seen used
-    uint32_t log2GobsPerBlockY = 4;
-    uint32_t log2GobsPerBlockZ = 0;
-    if (1) {
-        while (log2GobsPerBlockX > 0 && (gobWidthInBytes << (log2GobsPerBlockX - 1)) >= widthInBytes)
-            log2GobsPerBlockX--;
-        while (log2GobsPerBlockY > 0 && (gobHeightInBytes << (log2GobsPerBlockY - 1)) >= height)
-            log2GobsPerBlockY--;
-        while (log2GobsPerBlockZ > 0 && (gobDepthInBytes << (log2GobsPerBlockZ - 1)) >= depth)
-            log2GobsPerBlockZ--;
-    }
+    uint32_t pitchInBlocks = widthInBytes / (gobWidthInBytes << log2GobsPerBlockX);
 
     //printf("got gobsPerBlock: %ux%u %u %u %u %d\n", width, height, log2GobsPerBlockX, log2GobsPerBlockY, log2GobsPerBlockZ, pitchInBlocks);
     //duplicate the fd so we don't invalidate it by importing it
