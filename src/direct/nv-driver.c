@@ -46,12 +46,6 @@ NvV32 nv_free_object(int fd, NvHandle hRoot, NvHandle hObject) {
     return ret == 0 ? freeParams.status : NV_ERR_GENERIC;
 }
 
-NvV32 nv_vid_heap_control(int fd, NVOS32_PARAMETERS* params) {
-    int ret = ioctl(fd, _IOC(_IOC_READ|_IOC_WRITE, NV_IOCTL_MAGIC, NV_ESC_RM_VID_HEAP_CONTROL, sizeof(NVOS32_PARAMETERS)), params);
-
-    return ret == 0 ? params->status : NV_ERR_GENERIC;
-}
-
 NvV32 nv_rm_control(int fd, NvHandle hClient, NvHandle hObject, NvV32 cmd, NvU32 flags, int paramSize, void* params) {
     NVOS54_PARAMETERS control = {
         .hClient = hClient,
@@ -118,13 +112,14 @@ NvV32 nv_export_object_to_fd(int fd, int export_fd, NvHandle hClient, NvHandle h
 }
 
 void nv0_register_fd(int nv0_fd, int nvctl_fd) {
-    ioctl(nv0_fd, _IOC(_IOC_READ|_IOC_WRITE, 0x46, 0xc9, 0x4), &nvctl_fd);
+    ioctl(nv0_fd, _IOC(_IOC_READ|_IOC_WRITE, NV_IOCTL_MAGIC, NV_ESC_REGISTER_FD, sizeof(int)), &nvctl_fd);
 }
 
 bool get_device_uuid(NVDriverContext *context, char uuid[16]) {
     NV0000_CTRL_GPU_GET_UUID_FROM_GPU_ID_PARAMS uuidParams = {
         .gpuId = context->devInfo.gpu_id,
-        .flags = NV0000_CTRL_CMD_GPU_GET_UUID_FROM_GPU_ID_FLAGS_FORMAT_BINARY | NV0000_CTRL_CMD_GPU_GET_UUID_FROM_GPU_ID_FLAGS_TYPE_SHA1
+        .flags = NV0000_CTRL_CMD_GPU_GET_UUID_FROM_GPU_ID_FLAGS_FORMAT_BINARY |
+                 NV0000_CTRL_CMD_GPU_GET_UUID_FROM_GPU_ID_FLAGS_TYPE_SHA1
     };
     int ret = nv_rm_control(context->nvctlFd, context->clientObject, context->clientObject, NV0000_CTRL_CMD_GPU_GET_UUID_FROM_GPU_ID, 0, sizeof(uuidParams), &uuidParams);
     if (ret) {
@@ -256,7 +251,7 @@ int alloc_memory(NVDriverContext *context, uint32_t size, uint32_t alignment, ui
         return -1;
     }
 
-    //ret = nv_free_object(context->nvctlFd, context->clientObject, bufferObject);
+    ret = nv_free_object(context->nvctlFd, context->clientObject, bufferObject);
 
     return nvctFd2;
 }
