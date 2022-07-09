@@ -17,10 +17,6 @@
 #  include <drm/drm_fourcc.h>
 #endif
 
-void releaseExporter(NVDriver *drv) {
-
-}
-
 int findGPUIndexFromFd(int displayType, int fd, int gpu, void **device) {
     if (fd == -1) {
         fd = open("/dev/dri/renderD128", O_RDWR|O_CLOEXEC);
@@ -30,7 +26,6 @@ int findGPUIndexFromFd(int displayType, int fd, int gpu, void **device) {
     *((int**) device) = (int*) fd;
     return 0;
 }
-
 static void debug(EGLenum error,const char *command,EGLint messageType,EGLLabelKHR threadLabel,EGLLabelKHR objectLabel,const char* message) {
     LOG("[EGL] %s: %s", command, message);
 }
@@ -40,7 +35,13 @@ bool initExporter(NVDriver *drv, void *device) {
     PFNEGLDEBUGMESSAGECONTROLKHRPROC eglDebugMessageControlKHR = (PFNEGLDEBUGMESSAGECONTROLKHRPROC) eglGetProcAddress("eglDebugMessageControlKHR");
     eglDebugMessageControlKHR(debug, debugAttribs);
 
-    return init_nvdriver(&drv->driverContext, (int) device);
+    bool ret = init_nvdriver(&drv->driverContext, (int) device);
+
+    return ret;
+}
+
+void releaseExporter(NVDriver *drv) {
+    free_nvdriver(&drv->driverContext);
 }
 
 bool exportBackingImage(NVDriver *drv, BackingImage *img) {
