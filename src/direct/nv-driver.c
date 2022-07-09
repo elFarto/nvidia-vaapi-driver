@@ -115,6 +115,15 @@ void nv0_register_fd(int nv0_fd, int nvctl_fd) {
     ioctl(nv0_fd, _IOC(_IOC_READ|_IOC_WRITE, NV_IOCTL_MAGIC, NV_ESC_REGISTER_FD, sizeof(int)), &nvctl_fd);
 }
 
+bool get_device_info(int fd, struct drm_nvidia_get_dev_info_params *devInfo) {
+    int ret = ioctl(fd, DRM_IOCTL_NVIDIA_GET_DEV_INFO, devInfo);
+    if (ret) {
+        LOG("DRM_IOCTL_NVIDIA_GET_DEV_INFO failed: %d %d", ret);
+        return false;
+    }
+    return true;
+}
+
 bool get_device_uuid(NVDriverContext *context, char uuid[16]) {
     NV0000_CTRL_GPU_GET_UUID_FROM_GPU_ID_PARAMS uuidParams = {
         .gpuId = context->devInfo.gpu_id,
@@ -135,9 +144,7 @@ bool get_device_uuid(NVDriverContext *context, char uuid[16]) {
 
 bool init_nvdriver(NVDriverContext *context, int drmFd) {
     LOG("Initing nvdriver...");
-    int drmret = ioctl(drmFd, DRM_IOCTL_NVIDIA_GET_DEV_INFO, &context->devInfo);
-    if (drmret) {
-        LOG("DRM_IOCTL_NVIDIA_GET_DEV_INFO failed: %d %d", drmret);
+    if (!get_device_info(drmFd, &context->devInfo)) {
         return false;
     }
 

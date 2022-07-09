@@ -98,18 +98,23 @@ typedef struct
     Array/*<Object>*/       objects;
     pthread_mutex_t         objectCreationMutex;
     VAGenericID             nextObjId;
+    bool                    useCorrectNV12Format;
+    bool                    supports16BitSurface;
+    int                     cudaGpuId;
+    int                     drmFd;
+    int                     surfaceCount;
+    pthread_mutex_t         exportMutex;
+    pthread_mutex_t         imagesMutex;
+    Array/*<NVEGLImage>*/   images;
+    //fields for direct backend
+    NVDriverContext         driverContext;
+    //fields for egl backend
+    EGLDeviceEXT            eglDevice;
     EGLDisplay              eglDisplay;
     EGLContext              eglContext;
     EGLStreamKHR            eglStream;
     CUeglStreamConnection   cuStreamConnection;
     int                     numFramesPresented;
-    bool                    useCorrectNV12Format;
-    bool                    supports16BitSurface;
-    int                     surfaceCount;
-    pthread_mutex_t         exportMutex;
-    pthread_mutex_t         imagesMutex;
-    Array/*<NVEGLImage>*/   images;
-    NVDriverContext         driverContext;
 } NVDriver;
 
 struct _NVCodec;

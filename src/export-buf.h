@@ -4,8 +4,7 @@
 #include "vabackend.h"
 #include <va/va_drmcommon.h>
 
-int findGPUIndexFromFd(int displayType, int fd, int gpu, void **device);
-bool initExporter(NVDriver *drv, void *device);
+bool initExporter(NVDriver *drv);
 void releaseExporter(NVDriver *drv);
 bool exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t pitch);
 void detachBackingImageFromSurface(NVDriver *drv, NVSurface *surface);

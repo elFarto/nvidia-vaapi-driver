@@ -8,6 +8,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/sysmacros.h>
+#include <string.h>
 
 #if defined __has_include && __has_include(<libdrm/drm.h>)
 #  include <libdrm/drm.h>
@@ -17,29 +18,46 @@
 #  include <drm/drm_fourcc.h>
 #endif
 
-int findGPUIndexFromFd(int displayType, int fd, int gpu, void **device) {
-    if (fd == -1) {
-        fd = open("/dev/dri/renderD128", O_RDWR|O_CLOEXEC);
-        LOG("Manually opened DRM device");
-    } else {
-        //dup it so we can close it later and not effect firefox
-        fd = dup(fd);
-    }
+void findGPUIndexFromFd(NVDriver *drv) {
+    //find the CUDA device id
+    char drmUuid[16];
+    get_device_uuid(&drv->driverContext, drmUuid);
 
-    *((int**) device) = (int*) fd;
-    return 0;
+    int gpuIdx = 0;
+    do {
+        CUuuid uuid;
+        CUresult ret = drv->cu->cuDeviceGetUuid(&uuid, gpuIdx);
+        if (ret != CUDA_SUCCESS || memcmp(drmUuid, uuid.bytes, 16) == 0) {
+            break;
+        }
+        gpuIdx++;
+    } while(true);
+
+    drv->cudaGpuId = gpuIdx;
 }
 
 static void debug(EGLenum error,const char *command,EGLint messageType,EGLLabelKHR threadLabel,EGLLabelKHR objectLabel,const char* message) {
     LOG("[EGL] %s: %s", command, message);
 }
 
-bool initExporter(NVDriver *drv, void *device) {
+bool initExporter(NVDriver *drv) {
     static const EGLAttrib debugAttribs[] = {EGL_DEBUG_MSG_WARN_KHR, EGL_TRUE, EGL_DEBUG_MSG_INFO_KHR, EGL_TRUE, EGL_NONE};
     PFNEGLDEBUGMESSAGECONTROLKHRPROC eglDebugMessageControlKHR = (PFNEGLDEBUGMESSAGECONTROLKHRPROC) eglGetProcAddress("eglDebugMessageControlKHR");
     eglDebugMessageControlKHR(debug, debugAttribs);
 
-    bool ret = init_nvdriver(&drv->driverContext, (int) device);
+    //make sure we have a drm fd
+    if (drv->drmFd == -1) {
+        //TODO make this configurable
+        drv->drmFd = open("/dev/dri/renderD128", O_RDWR|O_CLOEXEC);
+        LOG("Manually opened DRM device");
+    } else {
+        //dup it so we can close it later and not effect firefox
+        drv->drmFd = dup(drv->drmFd);
+    }
+
+    bool ret = init_nvdriver(&drv->driverContext, drv->drmFd);
+
+    findGPUIndexFromFd(drv);
 
     return ret;
 }
