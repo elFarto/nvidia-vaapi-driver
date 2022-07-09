@@ -19,6 +19,7 @@ egl_dep = cc.find_library('EGL')
 gst_codecs_deps = dependency('gstreamer-codecparsers-1.0')
 ffnvcodec_deps = dependency('ffnvcodec', version: '>= 11.1.5.1')
 libva_deps = dependency('libva', version: '>= 1.8.0')
+thread_dep = dependency('threads')
 
 shared_library(
     'nvidia_drv_video',
@@ -44,6 +45,7 @@ shared_library(
         egl_dep,
         m_dep,
         dl_dep,
+        thread_dep,
     ],
     install: true,
     install_dir: get_option('libdir') / 'dri',
