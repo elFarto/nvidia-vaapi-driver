@@ -21,11 +21,15 @@ int findGPUIndexFromFd(int displayType, int fd, int gpu, void **device) {
     if (fd == -1) {
         fd = open("/dev/dri/renderD128", O_RDWR|O_CLOEXEC);
         LOG("Manually opened DRM device");
+    } else {
+        //dup it so we can close it later and not effect firefox
+        fd = dup(fd);
     }
 
     *((int**) device) = (int*) fd;
     return 0;
 }
+
 static void debug(EGLenum error,const char *command,EGLint messageType,EGLLabelKHR threadLabel,EGLLabelKHR objectLabel,const char* message) {
     LOG("[EGL] %s: %s", command, message);
 }

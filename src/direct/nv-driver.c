@@ -15,6 +15,8 @@
 
 #include "../vabackend.h"
 
+#include "../vabackend.h"
+
 NvV32 nv_alloc_object(int fd, NvHandle hRoot, NvHandle hObjectParent, NvHandle* hObjectNew, NvV32 hClass, void* params) {
     NVOS64_PARAMETERS alloc = {
         .hRoot = hRoot,
@@ -147,7 +149,7 @@ bool init_nvdriver(NVDriverContext *context, int drmFd) {
     LOG("Got dev info: %x", context->devInfo.generic_page_kind);
 
     int nvctlFd = open("/dev/nvidiactl", O_RDWR|O_CLOEXEC);
-    //int nv0Fd = open("/dev/nvidia0", O_RDWR|O_CLOEXEC);
+    int nv0Fd = open("/dev/nvidia0", O_RDWR|O_CLOEXEC);
 
     //nv_check_version(nvctl_fd, "515.48.07");
     //not sure why this is called.
@@ -185,13 +187,11 @@ bool init_nvdriver(NVDriverContext *context, int drmFd) {
     }
 
     //TODO honestly not sure if this is needed
-    //nv0_register_fd(nv0Fd, nvctlFd);
+    nv0_register_fd(nv0Fd, nvctlFd);
 
     context->drmFd = drmFd;
     context->nvctlFd = nvctlFd;
-    //context->nv0Fd = nv0Fd;
-
-    LOG("Done initing");
+    context->nv0Fd = nv0Fd;
 
     return true;
 err:
@@ -210,7 +210,7 @@ bool free_nvdriver(NVDriverContext *context) {
 
     close(context->nvctlFd);
     close(context->drmFd);
-    //close(context->nv0Fd);
+    close(context->nv0Fd);
 
     memset(context, 0, sizeof(NVDriverContext));
 }
