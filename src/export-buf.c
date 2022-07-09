@@ -135,30 +135,29 @@ static bool checkModesetParameterFromFd(int fd) {
     return true;
 }
 
-int findGPUIndexFromFd(int displayType, int fd, int gpu, void **device) {
+void findGPUIndexFromFd(NVDriver *drv) {
     struct stat buf;
-    int drmDeviceIndex = -1;
-
+    int drmDeviceIndex;
     PFNEGLQUERYDEVICESEXTPROC eglQueryDevicesEXT = (PFNEGLQUERYDEVICESEXTPROC) eglGetProcAddress("eglQueryDevicesEXT");
     PFNEGLQUERYDEVICEATTRIBEXTPROC eglQueryDeviceAttribEXT = (PFNEGLQUERYDEVICEATTRIBEXTPROC) eglGetProcAddress("eglQueryDeviceAttribEXT");
     PFNEGLQUERYDEVICESTRINGEXTPROC eglQueryDeviceStringEXT = (PFNEGLQUERYDEVICESTRINGEXTPROC) eglGetProcAddress("eglQueryDeviceStringEXT");
 
     if (eglQueryDevicesEXT == NULL || eglQueryDeviceAttribEXT == NULL) {
         LOG("No support for EGL_EXT_device_enumeration");
-        return 0;
+        drv->cudaGpuId = 0;
+        return;
     }
 
     //work out how we're searching for the GPU
-    *device = NULL;
-    if (gpu == -1 && fd != -1) {
+    if (drv->cudaGpuId == -1 && drv->drmFd != -1) {
         //figure out the 'drm device index', basically the minor number of the device node & 0x7f
         //since we don't know/what to care if we're dealing with a master or render node
 
-        fstat(fd, &buf);
+        fstat(drv->drmFd, &buf);
         drmDeviceIndex = minor(buf.st_rdev) & 0x7f;
         LOG("Looking for DRM device index: %d", drmDeviceIndex);
     } else {
-        LOG("Looking for GPU index: %d", gpu);
+        LOG("Looking for GPU index: %d", drv->cudaGpuId);
     }
 
     //go grab some EGL devices
@@ -166,7 +165,8 @@ int findGPUIndexFromFd(int displayType, int fd, int gpu, void **device) {
     EGLint num_devices;
     if(!eglQueryDevicesEXT(8, devices, &num_devices)) {
         LOG("Unable to query EGL devices");
-        return 0;
+        drv->cudaGpuId = 0;
+        return;
     }
 
     LOG("Found %d EGL devices", num_devices);
@@ -181,20 +181,20 @@ int findGPUIndexFromFd(int displayType, int fd, int gpu, void **device) {
                 LOG("Got EGL_CUDA_DEVICE_NV value '%d' for EGLDevice %d", attr, i);
 
                 //if we're looking for a matching drm device index check it here
-                if (gpu == -1 && fd != -1) {
+                if (drv->cudaGpuId == -1 && drv->drmFd != -1) {
                     stat(drmDeviceFile, &buf);
                     int foundDrmDeviceIndex = minor(buf.st_rdev) & 0x7f;
                     LOG("Found drmDeviceIndex: %d", foundDrmDeviceIndex);
                     if (foundDrmDeviceIndex != drmDeviceIndex) {
                         continue;
                     }
-                } else if (gpu != attr) {
+                } else if (drv->cudaGpuId != attr) {
                     //LOG("Not selected device, skipping");
                     continue;
                 }
 
                 //if it's the device we're looking for, check the modeset parameter on it.
-                if  (!checkModesetParameterFromFd(fd)) {
+                if  (!checkModesetParameterFromFd(drv->drmFd)) {
                     continue;
                 }
 
@@ -203,8 +203,8 @@ int findGPUIndexFromFd(int displayType, int fd, int gpu, void **device) {
                 //We can't really rely on the return from checking EGL_CUDA_DEVICE_NV as some non-NVIDIA drivers claim they support it
 
                 LOG("Selecting EGLDevice %d", i);
-                *device = devices[i];
-                return attr;
+                drv->eglDevice = devices[i];
+                drv->cudaGpuId = attr;
             } else {
                 LOG("No EGL_CUDA_DEVICE_NV support for EGLDevice %d", i);
             }
@@ -213,10 +213,12 @@ int findGPUIndexFromFd(int displayType, int fd, int gpu, void **device) {
         }
     }
     LOG("No match found, falling back to default device");
-    return 0;
+    drv->cudaGpuId = 0;
 }
 
-bool initExporter(NVDriver *drv, void *device) {
+bool initExporter(NVDriver *drv) {
+    findGPUIndexFromFd(drv);
+
     static const EGLAttrib debugAttribs[] = {EGL_DEBUG_MSG_WARN_KHR, EGL_TRUE, EGL_DEBUG_MSG_INFO_KHR, EGL_TRUE, EGL_NONE};
 
     eglQueryStreamConsumerEventNV = (PFNEGLQUERYSTREAMCONSUMEREVENTNVPROC) eglGetProcAddress("eglQueryStreamConsumerEventNV");
@@ -231,7 +233,7 @@ bool initExporter(NVDriver *drv, void *device) {
     PFNEGLQUERYDMABUFFORMATSEXTPROC eglQueryDmaBufFormatsEXT = (PFNEGLQUERYDMABUFFORMATSEXTPROC) eglGetProcAddress("eglQueryDmaBufFormatsEXT");
     PFNEGLDEBUGMESSAGECONTROLKHRPROC eglDebugMessageControlKHR = (PFNEGLDEBUGMESSAGECONTROLKHRPROC) eglGetProcAddress("eglDebugMessageControlKHR");
 
-    drv->eglDisplay = eglGetPlatformDisplay(EGL_PLATFORM_DEVICE_EXT, (EGLDeviceEXT) device, NULL);
+    drv->eglDisplay = eglGetPlatformDisplay(EGL_PLATFORM_DEVICE_EXT, (EGLDeviceEXT) drv->eglDevice, NULL);
     if (drv->eglDisplay == NULL) {
         LOG("Falling back to using default EGLDisplay");
         drv->eglDisplay = eglGetDisplay(NULL);
@@ -268,7 +270,7 @@ bool initExporter(NVDriver *drv, void *device) {
         }
     }
 
-    reconnect(drv);
+    //reconnect(drv);
 
     return true;
 }
@@ -442,7 +444,8 @@ BackingImage *allocateBackingImage(NVDriver *drv, const NVSurface *surface) {
 
     LOG("Presenting frame %d %dx%d (%p, %p, %p)", surface->pictureIdx, eglframe.width, eglframe.height, surface, eglframe.frame.pArray[0], eglframe.frame.pArray[1]);
     CUresult result = drv->cu->cuEGLStreamProducerPresentFrame( &drv->cuStreamConnection, eglframe, NULL );
-    if (result == CUDA_ERROR_UNKNOWN) {
+    LOG("got cuEGLStreamProducerPresentFrame result: %d", result);
+    if (result == CUDA_ERROR_UNKNOWN || result == 400) { //CUDA_ERROR_INVALID_HANDLE = 400
         reconnect(drv);
         CHECK_CUDA_RESULT(drv->cu->cuEGLStreamProducerPresentFrame( &drv->cuStreamConnection, eglframe, NULL ));
     }
