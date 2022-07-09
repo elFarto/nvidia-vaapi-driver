@@ -28,7 +28,7 @@
 
 #include <time.h>
 
-pthread_mutex_t concurrency_mutex;
+pthread_mutex_t concurrency_mutex = PTHREAD_MUTEX_INITIALIZER;
 static uint32_t instances;
 static uint32_t max_instances = 0;
 
@@ -806,6 +806,7 @@ static VAStatus nvCreateContext(
     nvCtx->codec = selectedCodec;
 
     pthread_mutexattr_t attrib;
+    pthread_mutexattr_init(&attrib);
     pthread_mutexattr_settype(&attrib, PTHREAD_MUTEX_RECURSIVE);
     pthread_mutex_init(&nvCtx->surfaceCreationMutex, &attrib);
 
@@ -1844,6 +1845,7 @@ VAStatus __vaDriverInit_1_0(VADriverContextP ctx)
     }
 
     pthread_mutexattr_t attrib;
+    pthread_mutexattr_init(&attrib);
     pthread_mutexattr_settype(&attrib, PTHREAD_MUTEX_RECURSIVE);
     pthread_mutex_init(&drv->objectCreationMutex, &attrib);
     pthread_mutex_init(&drv->imagesMutex, &attrib);
