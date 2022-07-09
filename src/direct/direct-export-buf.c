@@ -1,3 +1,5 @@
+#define _GNU_SOURCE 1
+
 #include "../export-buf.h"
 #include <stdio.h>
 #include <ffnvcodec/dynlink_loader.h>
@@ -20,6 +22,11 @@ void releaseExporter(NVDriver *drv) {
 }
 
 int findGPUIndexFromFd(int displayType, int fd, int gpu, void **device) {
+    if (fd == -1) {
+        fd = open("/dev/dri/renderD128", O_RDWR|O_CLOEXEC);
+        LOG("Manually opened DRM device");
+    }
+
     *((int**) device) = (int*) fd;
     return 0;
 }
@@ -33,8 +40,7 @@ bool initExporter(NVDriver *drv, void *device) {
     PFNEGLDEBUGMESSAGECONTROLKHRPROC eglDebugMessageControlKHR = (PFNEGLDEBUGMESSAGECONTROLKHRPROC) eglGetProcAddress("eglDebugMessageControlKHR");
     eglDebugMessageControlKHR(debug, debugAttribs);
 
-    init_nvdriver(&drv->driverContext, (int) device);
-    return true;
+    return init_nvdriver(&drv->driverContext, (int) device);
 }
 
 bool exportBackingImage(NVDriver *drv, BackingImage *img) {
@@ -58,6 +64,8 @@ void detachBackingImageFromSurface(NVDriver *drv, NVSurface *surface) {
         LOG("Cannot detach NULL BackingImage from Surface");
         return;
     }
+
+    destroyBackingImage(drv, surface->backingImage);
 
     pthread_mutex_lock(&drv->imagesMutex);
 
@@ -111,7 +119,7 @@ void import_to_cuda(NVDriver *drv, NVDriverImage *image, int bpc, int channels, 
         .size = image->memorySize
     };
 
-    //printf("using size: %dx%d = %x\n", image->width, image->height, image->memorySize);
+    LOG("importing memory size: %dx%d = %x", image->width, image->height, image->memorySize);
 
     CUexternalMemory extMem;
     CHECK_CUDA_RESULT(drv->cu->cuImportExternalMemory(&extMem, &extMemDesc));
@@ -250,8 +258,6 @@ bool exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t 
 
 bool fillExportDescriptor(NVDriver *drv, NVSurface *surface, VADRMPRIMESurfaceDescriptor *desc) {
     BackingImage *img = surface->backingImage;
-
-    int bpp = img->fourcc == DRM_FORMAT_NV12 ? 1 : 2;
 
     //TODO only support 420 images (either NV12, P010 or P012)
     desc->fourcc = img->fourcc;

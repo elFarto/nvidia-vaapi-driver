@@ -11,6 +11,7 @@
 #include <drm/drm_fourcc.h>
 
 #include "nv-driver.h"
+#include "../vabackend.h"
 
 NvV32 nv_alloc_object(int fd, NvHandle hRoot, NvHandle hObjectParent, NvHandle* hObjectNew, NvV32 hClass, void* params) {
     NVOS64_PARAMETERS alloc = {
@@ -120,8 +121,11 @@ bool get_device_uuid(NVDriverContext *context, char uuid[16]) {
 bool init_nvdriver(NVDriverContext *context, int drmFd) {
     int drmret = ioctl(drmFd, DRM_IOCTL_NVIDIA_GET_DEV_INFO, &context->devInfo);
     if (drmret) {
+        LOG("DRM_IOCTL_NVIDIA_GET_DEV_INFO failed: %d %d", drmret);
         return false;
     }
+
+    LOG("Got dev info: %x", context->devInfo.generic_page_kind);
 
     int nvctlFd = open("/dev/nvidiactl", O_RDWR|O_CLOEXEC);
 
@@ -132,6 +136,7 @@ bool init_nvdriver(NVDriverContext *context, int drmFd) {
     //allocate the root object
     NvV32 ret = nv_alloc_object(nvctlFd, 0, 0, &context->clientObject, NV01_ROOT_CLIENT, (void*)0);
     if (ret) {
+        LOG("nv_alloc_object NV01_ROOT_CLIENT failed");
         goto err;
     }
 
@@ -147,6 +152,7 @@ bool init_nvdriver(NVDriverContext *context, int drmFd) {
     //allocate the device object
     ret = nv_alloc_object(nvctlFd, context->clientObject, context->clientObject, &context->deviceObject, NV01_DEVICE_0, &deviceParams);
     if (ret) {
+        LOG("nv_alloc_object NV01_DEVICE_0 failed");
         goto err;
     }
 
@@ -154,11 +160,14 @@ bool init_nvdriver(NVDriverContext *context, int drmFd) {
     NV2080_ALLOC_PARAMETERS subdevice = { 0 };
     ret = nv_alloc_object(nvctlFd, context->clientObject, context->deviceObject, &context->subdeviceObject, NV20_SUBDEVICE_0, &subdevice);
     if (ret) {
+        LOG("nv_alloc_object NV20_SUBDEVICE_0 failed");
         goto err;
     }
 
     context->drmFd = drmFd;
     context->nvctlFd = nvctlFd;
+
+    LOG("Done initing");
 
     return true;
 err:
@@ -278,6 +287,7 @@ int alloc_image(NVDriverContext *context, uint32_t width, uint32_t height, uint8
     };
     drmret = ioctl(context->drmFd, DRM_IOCTL_GEM_CLOSE, &gem_close);
 
+
     image->width = width;
     image->height = height;
     image->nvFd = fd;
@@ -294,5 +304,8 @@ int alloc_image(NVDriverContext *context, uint32_t width, uint32_t height, uint8
         printf("Unknown fourcc\n");
         return false;
     }
+
+    LOG("created image: %dx%d %lx %d %x", width, height, image->mods, widthInBytes, imageSizeInBytes);
+
     return true;
 }
