@@ -75,6 +75,11 @@ typedef struct
     NVBuffer    *imageBuffer;
 } NVImage;
 
+typedef struct {
+    CUexternalMemory extMem;
+    CUmipmappedArray mipmapArray;
+} NVCudaImage;
+
 typedef struct _BackingImage {
     NVSurface   *surface;
     EGLImage    image;
@@ -87,6 +92,8 @@ typedef struct _BackingImage {
     int         strides[4];
     uint64_t    mods[4];
     uint32_t    size[4];
+    //direct backend only
+    NVCudaImage cudaImages[2];
 } BackingImage;
 
 typedef struct
