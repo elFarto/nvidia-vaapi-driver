@@ -23,17 +23,19 @@ void findGPUIndexFromFd(NVDriver *drv) {
     char drmUuid[16];
     get_device_uuid(&drv->driverContext, drmUuid);
 
-    int gpuIdx = 0;
-    do {
-        CUuuid uuid;
-        CUresult ret = drv->cu->cuDeviceGetUuid(&uuid, gpuIdx);
-        if (ret != CUDA_SUCCESS || memcmp(drmUuid, uuid.bytes, 16) == 0) {
-            break;
-        }
-        gpuIdx++;
-    } while(true);
+    int gpuCount = 0;
+    CHECK_CUDA_RESULT(drv->cu->cuDeviceGetCount(&gpuCount));
 
-    drv->cudaGpuId = gpuIdx;
+    for (int i = 0; i < gpuCount; i++) {
+        CUuuid uuid;
+        CUresult ret = drv->cu->cuDeviceGetUuid(&uuid, i);
+        if (ret == CUDA_SUCCESS && memcmp(drmUuid, uuid.bytes, 16) == 0) {
+            drv->cudaGpuId = i;
+            return;
+        }
+    }
+
+    drv->cudaGpuId = 0;
 }
 
 static void debug(EGLenum error,const char *command,EGLint messageType,EGLLabelKHR threadLabel,EGLLabelKHR objectLabel,const char* message) {
@@ -67,74 +69,11 @@ void releaseExporter(NVDriver *drv) {
 }
 
 bool exportBackingImage(NVDriver *drv, BackingImage *img) {
+    //backing image is already exported, we don't need to do anything here
     return true;
 }
 
-void destroyBackingImage(NVDriver *drv, BackingImage *img) {
-    if (img->surface != NULL) {
-        img->surface->backingImage = NULL;
-    }
-    //just leak it for now
-}
-
-void attachBackingImageToSurface(NVSurface *surface, BackingImage *img) {
-    surface->backingImage = img;
-    img->surface = surface;
-}
-
-void detachBackingImageFromSurface(NVDriver *drv, NVSurface *surface) {
-    if (surface->backingImage == NULL) {
-        LOG("Cannot detach NULL BackingImage from Surface");
-        return;
-    }
-
-    destroyBackingImage(drv, surface->backingImage);
-
-    pthread_mutex_lock(&drv->imagesMutex);
-
-    ARRAY_FOR_EACH(BackingImage*, img, &drv->images)
-        //find the entry for this surface
-        if (img->surface == surface) {
-            LOG("Detaching BackingImage %p from Surface %p", img, surface);
-            img->surface = NULL;
-            break;
-        }
-    }
-
-    pthread_mutex_unlock(&drv->imagesMutex);
-
-    surface->backingImage = NULL;
-}
-
-
-void destroyAllBackingImage(NVDriver *drv) {
-    pthread_mutex_lock(&drv->imagesMutex);
-
-    ARRAY_FOR_EACH_REV(BackingImage*, it, &drv->images)
-        destroyBackingImage(drv, it);
-        remove_element_at(&drv->images, it_idx);
-    END_FOR_EACH
-
-    pthread_mutex_unlock(&drv->imagesMutex);
-}
-
-BackingImage* findFreeBackingImage(NVDriver *drv, NVSurface *surface) {
-    BackingImage *ret = NULL;
-    pthread_mutex_lock(&drv->imagesMutex);
-    //look through the free'd surfaces and see if we can reuse one
-    ARRAY_FOR_EACH(BackingImage*, img, &drv->images)
-        if (img->surface == NULL && img->width == surface->width && img->height == surface->height) {
-            LOG("Using BackingImage %p for Surface %p", img, surface);
-            attachBackingImageToSurface(surface, img);
-            ret = img;
-            break;
-        }
-    END_FOR_EACH
-    pthread_mutex_unlock(&drv->imagesMutex);
-    return ret;
-}
-
-void import_to_cuda(NVDriver *drv, NVDriverImage *image, int bpc, int channels, CUarray *arr) {
+void import_to_cuda(NVDriver *drv, NVDriverImage *image, int bpc, int channels, NVCudaImage *cudaImage, CUarray *array) {
     CUDA_EXTERNAL_MEMORY_HANDLE_DESC extMemDesc = {
         .type = CU_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD,
         .handle.fd = image->nvFd,
@@ -144,8 +83,7 @@ void import_to_cuda(NVDriver *drv, NVDriverImage *image, int bpc, int channels, 
 
     LOG("importing memory size: %dx%d = %x", image->width, image->height, image->memorySize);
 
-    CUexternalMemory extMem;
-    CHECK_CUDA_RESULT(drv->cu->cuImportExternalMemory(&extMem, &extMemDesc));
+    CHECK_CUDA_RESULT(drv->cu->cuImportExternalMemory(&cudaImage->extMem, &extMemDesc));
 
     close(image->nvFd);
 
@@ -162,22 +100,22 @@ void import_to_cuda(NVDriver *drv, NVDriverImage *image, int bpc, int channels, 
         .offset = 0
     };
     //create a mimap array from the imported memory
-    CUmipmappedArray m_mipmapArray;
-    CHECK_CUDA_RESULT(drv->cu->cuExternalMemoryGetMappedMipmappedArray(&m_mipmapArray, extMem, &mipmapArrayDesc));
+    CHECK_CUDA_RESULT(drv->cu->cuExternalMemoryGetMappedMipmappedArray(&cudaImage->mipmapArray, cudaImage->extMem, &mipmapArrayDesc));
 
     //create an array from the mipmap array
-    CHECK_CUDA_RESULT(drv->cu->cuMipmappedArrayGetLevel(arr, m_mipmapArray, 0));
+    CHECK_CUDA_RESULT(drv->cu->cuMipmappedArrayGetLevel(array, cudaImage->mipmapArray, 0));
 }
 
 BackingImage *allocateBackingImage(NVDriver *drv, const NVSurface *surface) {
     NVDriverImage driverImageY = { 0 }, driverImageUV = { 0 };
+
     BackingImage *backingImage = calloc(1, sizeof(BackingImage));
 
     alloc_image(&drv->driverContext, surface->width, surface->height, 1, 8, &driverImageY);
     alloc_image(&drv->driverContext, surface->width>>1, surface->height>>1, 2, 8, &driverImageUV);
 
-    import_to_cuda(drv, &driverImageY, 8, 1, &backingImage->arrays[0]);
-    import_to_cuda(drv, &driverImageUV, 8, 2, &backingImage->arrays[1]);
+    import_to_cuda(drv, &driverImageY, 8, 1, &backingImage->cudaImages[0], &backingImage->arrays[0]);
+    import_to_cuda(drv, &driverImageUV, 8, 2, &backingImage->cudaImages[1], &backingImage->arrays[1]);
 
     backingImage->fds[0] = driverImageY.drmFd;
     backingImage->fds[1] = driverImageUV.drmFd;
@@ -197,6 +135,55 @@ BackingImage *allocateBackingImage(NVDriver *drv, const NVSurface *surface) {
     backingImage->size[1] = driverImageUV.memorySize;
 
     return backingImage;
+}
+
+void destroyBackingImage(NVDriver *drv, BackingImage *img) {
+    if (img->surface != NULL) {
+        img->surface->backingImage = NULL;
+    }
+
+    for (int i = 0; i < 4; i++) {
+        if (img->fds[i] > 0) {
+            close(img->fds[i]);
+        }
+    }
+
+    for (int i = 0; i < 2; i++) {
+        if (img->arrays[i] != NULL) {
+            CHECK_CUDA_RESULT(drv->cu->cuArrayDestroy(img->arrays[i]));
+        }
+
+        CHECK_CUDA_RESULT(drv->cu->cuMipmappedArrayDestroy(img->cudaImages[i].mipmapArray));
+        CHECK_CUDA_RESULT(drv->cu->cuDestroyExternalMemory(img->cudaImages[i].extMem));
+    }
+
+    memset(img, 0, sizeof(BackingImage));
+    free(img);
+}
+
+void attachBackingImageToSurface(NVSurface *surface, BackingImage *img) {
+    surface->backingImage = img;
+    img->surface = surface;
+}
+
+void detachBackingImageFromSurface(NVDriver *drv, NVSurface *surface) {
+    if (surface->backingImage == NULL) {
+        return;
+    }
+
+    destroyBackingImage(drv, surface->backingImage);
+    surface->backingImage = NULL;
+}
+
+void destroyAllBackingImage(NVDriver *drv) {
+    pthread_mutex_lock(&drv->imagesMutex);
+
+    ARRAY_FOR_EACH_REV(BackingImage*, it, &drv->images)
+        destroyBackingImage(drv, it);
+        remove_element_at(&drv->images, it_idx);
+    END_FOR_EACH
+
+    pthread_mutex_unlock(&drv->imagesMutex);
 }
 
 bool copyFrameToSurface(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t pitch) {
@@ -238,26 +225,14 @@ bool realiseSurface(NVDriver *drv, NVSurface *surface) {
     //check again to see if it's just been created
     if (surface->backingImage == NULL) {
         //try to find a free surface
-        BackingImage *img = findFreeBackingImage(drv, surface);
-
-        //if we can't find a free backing image...
+        BackingImage *img = img = allocateBackingImage(drv, surface);
         if (img == NULL) {
-            LOG("No free surfaces found");
-
-            //...allocate one
-            img = allocateBackingImage(drv, surface);
-            if (img == NULL) {
-                LOG("Unable to realise surface: %p (%d)", surface, surface->pictureIdx)
-                pthread_mutex_unlock(&surface->mutex);
-                return false;
-            }
-
-            attachBackingImageToSurface(surface, img);
-            //add our newly created BackingImage to the list
-            pthread_mutex_lock(&drv->imagesMutex);
-            add_element(&drv->images, img);
-            pthread_mutex_unlock(&drv->imagesMutex);
+            LOG("Unable to realise surface: %p (%d)", surface, surface->pictureIdx)
+            pthread_mutex_unlock(&surface->mutex);
+            return false;
         }
+
+        attachBackingImageToSurface(surface, img);
     }
     pthread_mutex_unlock(&surface->mutex);
 
