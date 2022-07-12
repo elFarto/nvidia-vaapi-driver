@@ -11,13 +11,8 @@
 #include <string.h>
 #include "../backend-common.h"
 
-#if defined __has_include && __has_include(<libdrm/drm.h>)
-#  include <libdrm/drm.h>
-#  include <libdrm/drm_fourcc.h>
-#else
-#  include <drm/drm.h>
-#  include <drm/drm_fourcc.h>
-#endif
+#include <drm.h>
+#include <drm_fourcc.h>
 
 void findGPUIndexFromFd(NVDriver *drv) {
     //find the CUDA device id

@@ -15,11 +15,7 @@
 #include <va/va_backend.h>
 #include <va/va_drmcommon.h>
 
-#if defined __has_include && __has_include(<libdrm/drm.h>)
-#  include <libdrm/drm_fourcc.h>
-#else
-#  include <drm/drm_fourcc.h>
-#endif
+#include <drm_fourcc.h>
 
 #include <unistd.h>
 #include <sys/types.h>

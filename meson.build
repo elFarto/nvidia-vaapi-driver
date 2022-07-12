@@ -19,6 +19,7 @@ deps = [
     cc.find_library('EGL'),
     dependency('ffnvcodec', version: '>= 11.1.5.1'),
     dependency('libva', version: '>= 1.8.0').partial_dependency(compile_args: true),
+    dependency('libdrm', version: '>=2.4.60').partial_dependency(compile_args: true),
     dependency('threads'),
 ]
 gst_codecs_deps = dependency('gstreamer-codecparsers-1.0', required: false)

@@ -10,13 +10,8 @@
 #include <unistd.h>
 #include <sys/sysmacros.h>
 
-#if defined __has_include && __has_include(<libdrm/drm.h>)
-#  include <libdrm/drm.h>
-#  include <libdrm/drm_fourcc.h>
-#else
-#  include <drm/drm.h>
-#  include <drm/drm_fourcc.h>
-#endif
+#include <drm.h>
+#include <drm_fourcc.h>
 
 #ifndef EGL_NV_stream_consumer_eglimage
 #define EGL_NV_stream_consumer_eglimage 1
