@@ -23,7 +23,7 @@ thread_dep = dependency('threads')
 
 sources = [
     'src/av1.c',
-    # 'src/export-buf.c',
+    'src/export-buf.c',
     'src/direct/direct-export-buf.c',
     'src/direct/nv-driver.c',
     'src/h264.c',
@@ -46,7 +46,6 @@ nvidia_incdir = include_directories('nvidia-include')
 shared_library(
     'nvidia_drv_video',
     name_prefix: '',
-    sources: sources,
     dependencies: [
         libva_deps,
         ffnvcodec_deps,

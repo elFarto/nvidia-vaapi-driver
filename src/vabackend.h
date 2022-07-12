@@ -6,6 +6,7 @@
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 #include <stdbool.h>
+#include <va/va_drmcommon.h>
 
 #include <pthread.h>
 #include "list.h"
@@ -97,7 +98,20 @@ typedef struct _BackingImage {
     NVCudaImage cudaImages[2];
 } BackingImage;
 
-typedef struct
+struct _NVDriver;
+
+typedef struct {
+    const char *name;
+    bool (*initExporter)(struct _NVDriver *drv);
+    void (*releaseExporter)(struct _NVDriver *drv);
+    bool (*exportCudaPtr)(struct _NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t pitch);
+    void (*detachBackingImageFromSurface)(struct _NVDriver *drv, NVSurface *surface);
+    bool (*realiseSurface)(struct _NVDriver *drv, NVSurface *surface);
+    bool (*fillExportDescriptor)(struct _NVDriver *drv, NVSurface *surface, VADRMPRIMESurfaceDescriptor *desc);
+    void (*destroyAllBackingImage)(struct _NVDriver *drv);
+} NVBackend;
+
+typedef struct _NVDriver
 {
     CudaFunctions           *cu;
     CuvidFunctions          *cv;
@@ -113,6 +127,7 @@ typedef struct
     pthread_mutex_t         exportMutex;
     pthread_mutex_t         imagesMutex;
     Array/*<NVEGLImage>*/   images;
+    const NVBackend         *backend;
     //fields for direct backend
     NVDriverContext         driverContext;
     //fields for egl backend

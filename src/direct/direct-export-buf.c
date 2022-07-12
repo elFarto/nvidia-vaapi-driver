@@ -1,6 +1,6 @@
 #define _GNU_SOURCE 1
 
-#include "../export-buf.h"
+#include "../vabackend.h"
 #include <stdio.h>
 #include <ffnvcodec/dynlink_loader.h>
 #include <sys/stat.h>
@@ -42,7 +42,8 @@ static void debug(EGLenum error,const char *command,EGLint messageType,EGLLabelK
     LOG("[EGL] %s: %s", command, message);
 }
 
-bool initExporter(NVDriver *drv) {
+bool direct_initExporter(NVDriver *drv) {
+    //this is only needed to see errors in firefox
     static const EGLAttrib debugAttribs[] = {EGL_DEBUG_MSG_WARN_KHR, EGL_TRUE, EGL_DEBUG_MSG_INFO_KHR, EGL_TRUE, EGL_NONE};
     PFNEGLDEBUGMESSAGECONTROLKHRPROC eglDebugMessageControlKHR = (PFNEGLDEBUGMESSAGECONTROLKHRPROC) eglGetProcAddress("eglDebugMessageControlKHR");
     eglDebugMessageControlKHR(debug, debugAttribs);
@@ -64,16 +65,16 @@ bool initExporter(NVDriver *drv) {
     return ret;
 }
 
-void releaseExporter(NVDriver *drv) {
+void direct_releaseExporter(NVDriver *drv) {
     free_nvdriver(&drv->driverContext);
 }
 
-bool exportBackingImage(NVDriver *drv, BackingImage *img) {
+static bool exportBackingImage(NVDriver *drv, BackingImage *img) {
     //backing image is already exported, we don't need to do anything here
     return true;
 }
 
-void import_to_cuda(NVDriver *drv, NVDriverImage *image, int bpc, int channels, NVCudaImage *cudaImage, CUarray *array) {
+static void import_to_cuda(NVDriver *drv, NVDriverImage *image, int bpc, int channels, NVCudaImage *cudaImage, CUarray *array) {
     CUDA_EXTERNAL_MEMORY_HANDLE_DESC extMemDesc = {
         .type = CU_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD,
         .handle.fd = image->nvFd,
@@ -106,38 +107,38 @@ void import_to_cuda(NVDriver *drv, NVDriverImage *image, int bpc, int channels, 
     CHECK_CUDA_RESULT(drv->cu->cuMipmappedArrayGetLevel(array, cudaImage->mipmapArray, 0));
 }
 
-BackingImage *allocateBackingImage(NVDriver *drv, const NVSurface *surface) {
-    NVDriverImage driverImageY = { 0 }, driverImageUV = { 0 };
+BackingImage *direct_allocateBackingImage(NVDriver *drv, const NVSurface *surface) {
+    NVDriverImage driverImages[2] = { 0 };
 
     BackingImage *backingImage = calloc(1, sizeof(BackingImage));
 
-    alloc_image(&drv->driverContext, surface->width, surface->height, 1, 8, &driverImageY);
-    alloc_image(&drv->driverContext, surface->width>>1, surface->height>>1, 2, 8, &driverImageUV);
+    alloc_image(&drv->driverContext, surface->width, surface->height, 1, 8, &driverImages[0]);
+    alloc_image(&drv->driverContext, surface->width>>1, surface->height>>1, 2, 8, &driverImages[1]);
 
-    import_to_cuda(drv, &driverImageY, 8, 1, &backingImage->cudaImages[0], &backingImage->arrays[0]);
-    import_to_cuda(drv, &driverImageUV, 8, 2, &backingImage->cudaImages[1], &backingImage->arrays[1]);
+    import_to_cuda(drv, &driverImages[0], 8, 1, &backingImage->cudaImages[0], &backingImage->arrays[0]);
+    import_to_cuda(drv, &driverImages[1], 8, 2, &backingImage->cudaImages[1], &backingImage->arrays[1]);
 
-    backingImage->fds[0] = driverImageY.drmFd;
-    backingImage->fds[1] = driverImageUV.drmFd;
+    backingImage->fds[0] = driverImages[0].drmFd;
+    backingImage->fds[1] = driverImages[1].drmFd;
 
     backingImage->fourcc = DRM_FORMAT_NV12;
 
     backingImage->width = surface->width;
     backingImage->height = surface->height;
 
-    backingImage->strides[0] = driverImageY.pitch;
-    backingImage->strides[1] = driverImageUV.pitch;
+    backingImage->strides[0] = driverImages[0].pitch;
+    backingImage->strides[1] = driverImages[1].pitch;
 
-    backingImage->mods[0] = driverImageY.mods;
-    backingImage->mods[1] = driverImageUV.mods;
+    backingImage->mods[0] = driverImages[0].mods;
+    backingImage->mods[1] = driverImages[1].mods;
 
-    backingImage->size[0] = driverImageY.memorySize;
-    backingImage->size[1] = driverImageUV.memorySize;
+    backingImage->size[0] = driverImages[0].memorySize;
+    backingImage->size[1] = driverImages[1].memorySize;
 
     return backingImage;
 }
 
-void destroyBackingImage(NVDriver *drv, BackingImage *img) {
+static void destroyBackingImage(NVDriver *drv, BackingImage *img) {
     if (img->surface != NULL) {
         img->surface->backingImage = NULL;
     }
@@ -161,12 +162,12 @@ void destroyBackingImage(NVDriver *drv, BackingImage *img) {
     free(img);
 }
 
-void attachBackingImageToSurface(NVSurface *surface, BackingImage *img) {
+void direct_attachBackingImageToSurface(NVSurface *surface, BackingImage *img) {
     surface->backingImage = img;
     img->surface = surface;
 }
 
-void detachBackingImageFromSurface(NVDriver *drv, NVSurface *surface) {
+void direct_detachBackingImageFromSurface(NVDriver *drv, NVSurface *surface) {
     if (surface->backingImage == NULL) {
         return;
     }
@@ -175,7 +176,7 @@ void detachBackingImageFromSurface(NVDriver *drv, NVSurface *surface) {
     surface->backingImage = NULL;
 }
 
-void destroyAllBackingImage(NVDriver *drv) {
+void direct_destroyAllBackingImage(NVDriver *drv) {
     pthread_mutex_lock(&drv->imagesMutex);
 
     ARRAY_FOR_EACH_REV(BackingImage*, it, &drv->images)
@@ -186,7 +187,7 @@ void destroyAllBackingImage(NVDriver *drv) {
     pthread_mutex_unlock(&drv->imagesMutex);
 }
 
-bool copyFrameToSurface(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t pitch) {
+static bool copyFrameToSurface(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t pitch) {
     int bpp = surface->format == cudaVideoSurfaceFormat_NV12 ? 1 : 2;
     CUDA_MEMCPY2D cpy = {
         .srcMemoryType = CU_MEMORYTYPE_DEVICE,
@@ -219,28 +220,28 @@ bool copyFrameToSurface(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint
     return true;
 }
 
-bool realiseSurface(NVDriver *drv, NVSurface *surface) {
+bool direct_realiseSurface(NVDriver *drv, NVSurface *surface) {
     //make sure we're the only thread updating this surface
     pthread_mutex_lock(&surface->mutex);
     //check again to see if it's just been created
     if (surface->backingImage == NULL) {
         //try to find a free surface
-        BackingImage *img = img = allocateBackingImage(drv, surface);
+        BackingImage *img = img = direct_allocateBackingImage(drv, surface);
         if (img == NULL) {
             LOG("Unable to realise surface: %p (%d)", surface, surface->pictureIdx)
             pthread_mutex_unlock(&surface->mutex);
             return false;
         }
 
-        attachBackingImageToSurface(surface, img);
+        direct_attachBackingImageToSurface(surface, img);
     }
     pthread_mutex_unlock(&surface->mutex);
 
     return true;
 }
 
-bool exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t pitch) {
-    if (!realiseSurface(drv, surface)) {
+bool direct_exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t pitch) {
+    if (!direct_realiseSurface(drv, surface)) {
         return false;
     }
 
@@ -254,7 +255,7 @@ bool exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t 
     return true;
 }
 
-bool fillExportDescriptor(NVDriver *drv, NVSurface *surface, VADRMPRIMESurfaceDescriptor *desc) {
+bool direct_fillExportDescriptor(NVDriver *drv, NVSurface *surface, VADRMPRIMESurfaceDescriptor *desc) {
     BackingImage *img = surface->backingImage;
 
     //TODO only support 420 images (either NV12, P010 or P012)
@@ -286,3 +287,14 @@ bool fillExportDescriptor(NVDriver *drv, NVSurface *surface, VADRMPRIMESurfaceDe
 
     return true;
 }
+
+const NVBackend DIRECT_BACKEND = {
+    .name = "direct",
+    .initExporter = direct_initExporter,
+    .releaseExporter = direct_releaseExporter,
+    .exportCudaPtr = direct_exportCudaPtr,
+    .detachBackingImageFromSurface = direct_detachBackingImageFromSurface,
+    .realiseSurface = direct_realiseSurface,
+    .fillExportDescriptor = direct_fillExportDescriptor,
+    .destroyAllBackingImage = direct_destroyAllBackingImage
+};
