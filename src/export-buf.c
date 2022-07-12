@@ -1,4 +1,4 @@
-#include "export-buf.h"
+#include "vabackend.h"
 #include <stdio.h>
 #include <ffnvcodec/dynlink_loader.h>
 #include <EGL/egl.h>
@@ -60,7 +60,7 @@ static void debug(EGLenum error,const char *command,EGLint messageType,EGLLabelK
     LOG("[EGL] %s: %s", command, message);
 }
 
-void releaseExporter(NVDriver *drv) {
+void egl_releaseExporter(NVDriver *drv) {
     //TODO not sure if this is still needed as we don't return anything now
     LOG("Releasing exporter, %d outstanding frames", drv->numFramesPresented);
     while (true) {
@@ -135,7 +135,7 @@ static bool checkModesetParameterFromFd(int fd) {
     return true;
 }
 
-void findGPUIndexFromFd(NVDriver *drv) {
+static void findGPUIndexFromFd(NVDriver *drv) {
     struct stat buf;
     int drmDeviceIndex;
     PFNEGLQUERYDEVICESEXTPROC eglQueryDevicesEXT = (PFNEGLQUERYDEVICESEXTPROC) eglGetProcAddress("eglQueryDevicesEXT");
@@ -216,7 +216,7 @@ void findGPUIndexFromFd(NVDriver *drv) {
     drv->cudaGpuId = 0;
 }
 
-bool initExporter(NVDriver *drv) {
+bool egl_initExporter(NVDriver *drv) {
     findGPUIndexFromFd(drv);
 
     static const EGLAttrib debugAttribs[] = {EGL_DEBUG_MSG_WARN_KHR, EGL_TRUE, EGL_DEBUG_MSG_INFO_KHR, EGL_TRUE, EGL_NONE};
@@ -275,7 +275,7 @@ bool initExporter(NVDriver *drv) {
     return true;
 }
 
-bool exportBackingImage(NVDriver *drv, BackingImage *img) {
+static bool exportBackingImage(NVDriver *drv, BackingImage *img) {
     int planes = 0;
     if (!eglExportDMABUFImageQueryMESA(drv->eglDisplay, img->image, &img->fourcc, &planes, img->mods)) {
         LOG("eglExportDMABUFImageQueryMESA failed");
@@ -293,7 +293,7 @@ bool exportBackingImage(NVDriver *drv, BackingImage *img) {
     return true;
 }
 
-BackingImage* createBackingImage(NVDriver *drv, uint32_t width, uint32_t height, EGLImage image, CUarray arrays[]) {
+static BackingImage* createBackingImage(NVDriver *drv, uint32_t width, uint32_t height, EGLImage image, CUarray arrays[]) {
     BackingImage* img = (BackingImage*) calloc(1, sizeof(BackingImage));
     img->image = image;
     img->arrays[0] = arrays[0];
@@ -311,7 +311,7 @@ BackingImage* createBackingImage(NVDriver *drv, uint32_t width, uint32_t height,
 }
 
 
-void destroyBackingImage(NVDriver *drv, BackingImage *img) {
+void egl_destroyBackingImage(NVDriver *drv, BackingImage *img) {
     //if we're attached to a surface, update the surface to remove us
     if (img->surface != NULL) {
         img->surface->backingImage = NULL;
@@ -333,19 +333,19 @@ void destroyBackingImage(NVDriver *drv, BackingImage *img) {
     free(img);
 }
 
-void attachBackingImageToSurface(NVSurface *surface, BackingImage *img) {
+void egl_attachBackingImageToSurface(NVSurface *surface, BackingImage *img) {
     surface->backingImage = img;
     img->surface = surface;
 }
 
-void detachBackingImageFromSurface(NVDriver *drv, NVSurface *surface) {
+void egl_detachBackingImageFromSurface(NVDriver *drv, NVSurface *surface) {
     if (surface->backingImage == NULL) {
         LOG("Cannot detach NULL BackingImage from Surface");
         return;
     }
 
     if (surface->backingImage->fourcc == DRM_FORMAT_NV21) {
-        destroyBackingImage(drv, surface->backingImage);
+        egl_destroyBackingImage(drv, surface->backingImage);
     } else {
         pthread_mutex_lock(&drv->imagesMutex);
 
@@ -364,25 +364,25 @@ void detachBackingImageFromSurface(NVDriver *drv, NVSurface *surface) {
     surface->backingImage = NULL;
 }
 
-void destroyAllBackingImage(NVDriver *drv) {
+void egl_destroyAllBackingImage(NVDriver *drv) {
     pthread_mutex_lock(&drv->imagesMutex);
 
     ARRAY_FOR_EACH_REV(BackingImage*, it, &drv->images)
-        destroyBackingImage(drv, it);
+        egl_destroyBackingImage(drv, it);
         remove_element_at(&drv->images, it_idx);
     END_FOR_EACH
 
     pthread_mutex_unlock(&drv->imagesMutex);
 }
 
-BackingImage* findFreeBackingImage(NVDriver *drv, NVSurface *surface) {
+static BackingImage* findFreeBackingImage(NVDriver *drv, NVSurface *surface) {
     BackingImage *ret = NULL;
     pthread_mutex_lock(&drv->imagesMutex);
     //look through the free'd surfaces and see if we can reuse one
     ARRAY_FOR_EACH(BackingImage*, img, &drv->images)
         if (img->surface == NULL && img->width == surface->width && img->height == surface->height) {
             LOG("Using BackingImage %p for Surface %p", img, surface);
-            attachBackingImageToSurface(surface, img);
+            egl_attachBackingImageToSurface(surface, img);
             ret = img;
             break;
         }
@@ -392,7 +392,7 @@ BackingImage* findFreeBackingImage(NVDriver *drv, NVSurface *surface) {
 }
 
 
-BackingImage *allocateBackingImage(NVDriver *drv, const NVSurface *surface) {
+BackingImage *egl_allocateBackingImage(NVDriver *drv, const NVSurface *surface) {
     CUeglFrame eglframe = {
         .width = surface->width,
         .height = surface->height,
@@ -484,7 +484,7 @@ BackingImage *allocateBackingImage(NVDriver *drv, const NVSurface *surface) {
     return ret;
 }
 
-bool copyFrameToSurface(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t pitch) {
+static bool copyFrameToSurface(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t pitch) {
     int bpp = surface->format == cudaVideoSurfaceFormat_NV12 ? 1 : 2;
     CUDA_MEMCPY2D cpy = {
         .srcMemoryType = CU_MEMORYTYPE_DEVICE,
@@ -517,7 +517,7 @@ bool copyFrameToSurface(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint
     return true;
 }
 
-bool realiseSurface(NVDriver *drv, NVSurface *surface) {
+bool egl_realiseSurface(NVDriver *drv, NVSurface *surface) {
     //make sure we're the only thread updating this surface
     pthread_mutex_lock(&surface->mutex);
     //check again to see if it's just been created
@@ -530,7 +530,7 @@ bool realiseSurface(NVDriver *drv, NVSurface *surface) {
             LOG("No free surfaces found");
 
             //...allocate one
-            img = allocateBackingImage(drv, surface);
+            img = egl_allocateBackingImage(drv, surface);
             if (img == NULL) {
                 LOG("Unable to realise surface: %p (%d)", surface, surface->pictureIdx)
                 pthread_mutex_unlock(&surface->mutex);
@@ -540,17 +540,17 @@ bool realiseSurface(NVDriver *drv, NVSurface *surface) {
             if (img->fourcc == DRM_FORMAT_NV21) {
                 LOG("Detected NV12/NV21 NVIDIA driver bug, attempting to work around");
                 //free the old surface to prevent leaking them
-                destroyBackingImage(drv, img);
+                egl_destroyBackingImage(drv, img);
                 //this is a caused by a bug in old versions the driver that was fixed in the 510 series
                 drv->useCorrectNV12Format = !drv->useCorrectNV12Format;
                 //re-export the frame in the correct format
-                img = allocateBackingImage(drv, surface);
+                img = egl_allocateBackingImage(drv, surface);
                 if (img->fourcc != DRM_FORMAT_NV12) {
                     LOG("Work around unsuccessful");
                 }
             }
 
-            attachBackingImageToSurface(surface, img);
+            egl_attachBackingImageToSurface(surface, img);
             //add our newly created BackingImage to the list
             pthread_mutex_lock(&drv->imagesMutex);
             add_element(&drv->images, img);
@@ -562,8 +562,8 @@ bool realiseSurface(NVDriver *drv, NVSurface *surface) {
     return true;
 }
 
-bool exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t pitch) {
-    if (!realiseSurface(drv, surface)) {
+bool egl_exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t pitch) {
+    if (!egl_realiseSurface(drv, surface)) {
         return false;
     }
 
@@ -577,7 +577,7 @@ bool exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t 
     return true;
 }
 
-bool fillExportDescriptor(NVDriver *drv, NVSurface *surface, VADRMPRIMESurfaceDescriptor *desc) {
+bool egl_fillExportDescriptor(NVDriver *drv, NVSurface *surface, VADRMPRIMESurfaceDescriptor *desc) {
     BackingImage *img = surface->backingImage;
 
     int bpp = img->fourcc == DRM_FORMAT_NV12 ? 1 : 2;
@@ -611,3 +611,14 @@ bool fillExportDescriptor(NVDriver *drv, NVSurface *surface, VADRMPRIMESurfaceDe
 
     return true;
 }
+
+const NVBackend EGL_BACKEND = {
+    .name = "egl",
+    .initExporter = egl_initExporter,
+    .releaseExporter = egl_releaseExporter,
+    .exportCudaPtr = egl_exportCudaPtr,
+    .detachBackingImageFromSurface = egl_detachBackingImageFromSurface,
+    .realiseSurface = egl_realiseSurface,
+    .fillExportDescriptor = egl_fillExportDescriptor,
+    .destroyAllBackingImage = egl_destroyAllBackingImage
+};

@@ -1,7 +1,6 @@
 #define _GNU_SOURCE
 
 #include "vabackend.h"
-#include "export-buf.h"
 
 #include <stdio.h>
 #include <stdint.h>
@@ -41,6 +40,9 @@ extern const NVCodec __stop_nvd_codecs[];
 static FILE *LOG_OUTPUT;
 
 static int gpu = -1;
+static enum {
+    EGL, DIRECT
+} backend = EGL;
 
 __attribute__ ((constructor))
 static void init() {
@@ -66,6 +68,11 @@ static void init() {
     char *nvdMaxInstances = getenv("NVD_MAX_INSTANCES");
     if (nvdMaxInstances != NULL) {
         max_instances = atoi(nvdMaxInstances);
+    }
+
+    char *nvdBackend = getenv("NVD_BACKEND");
+    if (nvdBackend != NULL && strncmp(nvdBackend, "direct", 6) == 0) {
+        backend = DIRECT;
     }
 
     //try to detect the Firefox sandbox and skip loading CUDA if detected
@@ -375,7 +382,7 @@ static void* resolveSurfaces(void *param) {
         LOG("Mapped surface %d to %llX (%d)", surface->pictureIdx, deviceMemory, pitch);
 
         //update cuarray
-        exportCudaPtr(drv, deviceMemory, surface, pitch);
+        drv->backend->exportCudaPtr(drv, deviceMemory, surface, pitch);
         LOG("Surface %d exported", surface->pictureIdx);
         //unmap frame
         CHECK_CUDA_RESULT(cv->cuvidUnmapVideoFrame(ctx->decoder, deviceMemory));
@@ -721,7 +728,7 @@ static VAStatus nvDestroySurfaces(
 
         CHECK_CUDA_RESULT(cu->cuEventDestroy(surface->event));
 
-        detachBackingImageFromSurface(drv, surface);
+        drv->backend->detachBackingImageFromSurface(drv, surface);
 
         deleteObject(drv, surface_list[i]);
     }
@@ -955,7 +962,7 @@ static VAStatus nvBeginPicture(
     if (surf->context != NULL && surf->context != nvCtx) {
         //this surface was last used on a different context, we need to free up the backing image (it might not be the correct size)
         if (surf->backingImage != NULL) {
-            detachBackingImageFromSurface(drv, surf);
+            drv->backend->detachBackingImageFromSurface(drv, surf);
         }
         //...and reset the pictureIdx
         surf->pictureIdx = -1;
@@ -1708,14 +1715,14 @@ static VAStatus nvExportSurfaceHandle(
 
     LOG("Exporting surface: %d (%p)", surface->pictureIdx, surface);
 
-    if (!realiseSurface(drv, surface)) {
+    if (!drv->backend->realiseSurface(drv, surface)) {
         LOG("Unable to export surface");
         return VA_STATUS_ERROR_ALLOCATION_FAILED;
     }
 
     VADRMPRIMESurfaceDescriptor *ptr = (VADRMPRIMESurfaceDescriptor*) descriptor;
 
-    fillExportDescriptor(drv, surface, ptr);
+    drv->backend->fillExportDescriptor(drv, surface, ptr);
 
     LOG("Exporting with %d %d %d %d %lx %d %d %lx", ptr->width, ptr->height, ptr->layers[0].offset[0], ptr->layers[0].pitch[0], ptr->objects[0].drm_format_modifier, ptr->layers[1].offset[0], ptr->layers[1].pitch[0], ptr->objects[1].drm_format_modifier);
 
@@ -1729,11 +1736,11 @@ static VAStatus nvTerminate( VADriverContextP ctx )
 
     CHECK_CUDA_RESULT(cu->cuCtxPushCurrent(drv->cudaContext));
 
-    destroyAllBackingImage(drv);
+    drv->backend->destroyAllBackingImage(drv);
 
     deleteAllObjects(drv);
 
-    releaseExporter(drv);
+    drv->backend->releaseExporter(drv);
 
     CHECK_CUDA_RESULT(cu->cuCtxDestroy(drv->cudaContext));
 
@@ -1744,6 +1751,9 @@ static VAStatus nvTerminate( VADriverContextP ctx )
 
     return VA_STATUS_SUCCESS;
 }
+
+extern const NVBackend DIRECT_BACKEND;
+extern const NVBackend EGL_BACKEND;
 
 __attribute__((visibility("default")))
 VAStatus __vaDriverInit_1_0(VADriverContextP ctx)
@@ -1790,6 +1800,13 @@ VAStatus __vaDriverInit_1_0(VADriverContextP ctx)
     drv->useCorrectNV12Format = true;
     drv->cudaGpuId = gpu;
     drv->drmFd = ctx->drm_state != NULL ? ((struct drm_state*) ctx->drm_state)->fd : -1;
+    if (backend == EGL) {
+        LOG("Selecting EGL backend");
+        drv->backend = &EGL_BACKEND;
+    } else if (backend == DIRECT) {
+        LOG("Selecting Direct backend");
+        drv->backend = &DIRECT_BACKEND;
+    }
 
     ctx->max_profiles = MAX_PROFILES;
     ctx->max_entrypoints = 1;
@@ -1798,7 +1815,11 @@ VAStatus __vaDriverInit_1_0(VADriverContextP ctx)
     ctx->max_image_formats = 3;
     ctx->max_subpic_formats = 1;
 
-    ctx->str_vendor = "VA-API NVDEC driver";
+    if (backend == DIRECT) {
+        ctx->str_vendor = "VA-API NVDEC driver [direct backend]";
+    } else if (backend == EGL) {
+        ctx->str_vendor = "VA-API NVDEC driver [egl backend]";
+    }
 
     pthread_mutexattr_t attrib;
     pthread_mutexattr_init(&attrib);
@@ -1807,7 +1828,7 @@ VAStatus __vaDriverInit_1_0(VADriverContextP ctx)
     pthread_mutex_init(&drv->imagesMutex, &attrib);
     pthread_mutex_init(&drv->exportMutex, NULL);
 
-    if (!initExporter(drv)) {
+    if (!drv->backend->initExporter(drv)) {
         free(drv);
         return VA_STATUS_ERROR_OPERATION_FAILED;
     }

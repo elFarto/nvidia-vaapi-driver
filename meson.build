@@ -28,7 +28,7 @@ shared_library(
     name_prefix: '',
     sources: [
         'src/av1.c',
-#        'src/export-buf.c',
+        'src/export-buf.c',
         'src/direct/direct-export-buf.c',
         'src/direct/nv-driver.c',
         'src/h264.c',

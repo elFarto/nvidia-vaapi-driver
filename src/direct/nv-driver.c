@@ -228,12 +228,13 @@ int alloc_memory(NVDriverContext *context, uint32_t size, uint32_t alignment, ui
                  NVOS32_ALLOC_FLAGS_MAP_NOT_REQUIRED |
                  NVOS32_ALLOC_FLAGS_PERSISTENT_VIDMEM,
 
-        .attr = ((bpc == 8 ? DRF_DEF(OS32, _ATTR, _DEPTH, _8)
-                           : DRF_DEF(OS32, _ATTR, _DEPTH, _16))) |
+        .attr = //((bpc == 8 ? DRF_DEF(OS32, _ATTR, _DEPTH, _8)
+                //           : DRF_DEF(OS32, _ATTR, _DEPTH, _16))) |
+                DRF_DEF(OS32, _ATTR, _DEPTH, _UNKNOWN) |
                 DRF_DEF(OS32, _ATTR, _FORMAT, _BLOCK_LINEAR) |
                 DRF_DEF(OS32, _ATTR, _PAGE_SIZE, _HUGE) |
                 DRF_DEF(OS32, _ATTR, _PHYSICALITY, _CONTIGUOUS),
-        .format = 0xfe, //?
+        .format = 0,
         .width = 0,
         .height = 0,
         .size = size,
@@ -276,14 +277,13 @@ int alloc_image(NVDriverContext *context, uint32_t width, uint32_t height, uint8
     uint32_t log2GobsPerBlockX = 0; //TODO not sure if these are the correct numbers to start with, but they're the largest ones i've seen used
     uint32_t log2GobsPerBlockY = 4;
     uint32_t log2GobsPerBlockZ = 0;
-    if (1) {
-        while (log2GobsPerBlockX > 0 && (gobWidthInBytes << (log2GobsPerBlockX - 1)) >= width * bytesPerPixel)
-            log2GobsPerBlockX--;
-        while (log2GobsPerBlockY > 0 && (gobHeightInBytes << (log2GobsPerBlockY - 1)) >= height)
-            log2GobsPerBlockY--;
-        while (log2GobsPerBlockZ > 0 && (gobDepthInBytes << (log2GobsPerBlockZ - 1)) >= depth)
-            log2GobsPerBlockZ--;
-    }
+
+    while (log2GobsPerBlockX > 0 && (gobWidthInBytes << (log2GobsPerBlockX - 1)) >= width * bytesPerPixel)
+        log2GobsPerBlockX--;
+    while (log2GobsPerBlockY > 0 && (gobHeightInBytes << (log2GobsPerBlockY - 1)) >= height)
+        log2GobsPerBlockY--;
+    while (log2GobsPerBlockZ > 0 && (gobDepthInBytes << (log2GobsPerBlockZ - 1)) >= depth)
+        log2GobsPerBlockZ--;
 
     printf("aligned sizes: %dx%d\n", gobWidthInBytes << log2GobsPerBlockX, gobHeightInBytes << log2GobsPerBlockY );
 
@@ -332,7 +332,6 @@ int alloc_image(NVDriverContext *context, uint32_t width, uint32_t height, uint8
         .handle = params.handle
     };
     drmret = ioctl(context->drmFd, DRM_IOCTL_PRIME_HANDLE_TO_FD, &prime_handle);
-    //printf("got DRM_IOCTL_PRIME_HANDLE_TO_FD: %d %d\n", drmret, prime_handle.fd); fflush(stdout);
 
     struct drm_gem_close gem_close = {
         .handle = params.handle
