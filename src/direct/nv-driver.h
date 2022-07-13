@@ -13,9 +13,9 @@ typedef struct {
     int nv0Fd;
     int drmFd;
     struct drm_nvidia_get_dev_info_params devInfo;
-    uint32_t clientObject;
-    uint32_t deviceObject;
-    uint32_t subdeviceObject;
+    NvHandle clientObject;
+    NvHandle deviceObject;
+    NvHandle subdeviceObject;
 } NVDriverContext;
 
 typedef struct {
@@ -33,7 +33,7 @@ typedef struct {
 bool init_nvdriver(NVDriverContext *context, int drmFd);
 bool free_nvdriver(NVDriverContext *context);
 bool get_device_uuid(NVDriverContext *context, char uuid[16]);
-int alloc_memory(NVDriverContext *context, uint32_t size, uint32_t alignment, uint32_t bpc);
-int alloc_image(NVDriverContext *context, uint32_t width, uint32_t height, uint8_t channels, uint8_t bytesPerChannel, NVDriverImage *image);
+bool alloc_memory(NVDriverContext *context, uint32_t size, uint32_t alignment, uint32_t bpc, int *fd);
+bool alloc_image(NVDriverContext *context, uint32_t width, uint32_t height, uint8_t channels, uint8_t bytesPerChannel, NVDriverImage *image);
 
 #endif
