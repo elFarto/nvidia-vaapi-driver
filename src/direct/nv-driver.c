@@ -10,14 +10,14 @@
 
 #include <drm/drm_fourcc.h>
 
+//#define NV_TYPESAFE_HANDLES 1
+
 #include "nv-driver.h"
 #include "../vabackend.h"
 
-#include "../vabackend.h"
+static const NvHandle NULL_OBJECT = {0};
 
-#include "../vabackend.h"
-
-NvV32 nv_alloc_object(int fd, NvHandle hRoot, NvHandle hObjectParent, NvHandle* hObjectNew, NvV32 hClass, void* params) {
+bool nv_alloc_object(int fd, NvHandle hRoot, NvHandle hObjectParent, NvHandle* hObjectNew, NvV32 hClass, void* params) {
     NVOS64_PARAMETERS alloc = {
         .hRoot = hRoot,
         .hObjectParent = hObjectParent,
@@ -29,24 +29,38 @@ NvV32 nv_alloc_object(int fd, NvHandle hRoot, NvHandle hObjectParent, NvHandle* 
 
     int ret = ioctl(fd, _IOC(_IOC_READ|_IOC_WRITE, NV_IOCTL_MAGIC, NV_ESC_RM_ALLOC, sizeof(NVOS64_PARAMETERS)), &alloc);
 
+    if (ret != 0 || alloc.status != NV_OK) {
+        LOG("nv_alloc_object failed: %d %X", ret, alloc.status);
+        return false;
+    }
+
     *hObjectNew = alloc.hObjectNew;
 
-    return ret == 0 ? alloc.status : NV_ERR_GENERIC;
+    return true;
 }
 
-NvV32 nv_free_object(int fd, NvHandle hRoot, NvHandle hObject) {
+bool nv_free_object(int fd, NvHandle hRoot, NvHandle hObject) {
+    if (hObject == 0) {
+        return true;
+    }
+
     NVOS00_PARAMETERS freeParams = {
         .hRoot = hRoot,
-        .hObjectParent = 0, //not actually used
+        .hObjectParent = NULL_OBJECT,
         .hObjectOld = hObject
     };
 
     int ret = ioctl(fd, _IOC(_IOC_READ|_IOC_WRITE, NV_IOCTL_MAGIC, NV_ESC_RM_FREE, sizeof(NVOS00_PARAMETERS)), &freeParams);
 
-    return ret == 0 ? freeParams.status : NV_ERR_GENERIC;
+    if (ret != 0 || freeParams.status != NV_OK) {
+        LOG("nv_free_object failed: %d %X", ret, freeParams.status);
+        return false;
+    }
+
+    return true;
 }
 
-NvV32 nv_rm_control(int fd, NvHandle hClient, NvHandle hObject, NvV32 cmd, NvU32 flags, int paramSize, void* params) {
+bool nv_rm_control(int fd, NvHandle hClient, NvHandle hObject, NvV32 cmd, NvU32 flags, int paramSize, void* params) {
     NVOS54_PARAMETERS control = {
         .hClient = hClient,
         .hObject = hObject,
@@ -58,10 +72,15 @@ NvV32 nv_rm_control(int fd, NvHandle hClient, NvHandle hObject, NvV32 cmd, NvU32
 
     int ret = ioctl(fd, _IOC(_IOC_READ|_IOC_WRITE, NV_IOCTL_MAGIC, NV_ESC_RM_CONTROL, sizeof(NVOS54_PARAMETERS)), &control);
 
-    return ret == 0 ? control.status : NV_ERR_GENERIC;
+    if (ret != 0 || control.status != NV_OK) {
+        LOG("nv_rm_control failed: %d %X", ret, control.status);
+        return false;
+    }
+
+    return true;
 }
 
-NvV32 nv_check_version(int fd, char *versionString) {
+bool nv_check_version(int fd, char *versionString) {
     nv_ioctl_rm_api_version_t obj = {
         .cmd = 0
     };
@@ -70,7 +89,7 @@ NvV32 nv_check_version(int fd, char *versionString) {
 
     int ret = ioctl(fd, _IOC(_IOC_READ|_IOC_WRITE, NV_IOCTL_MAGIC, NV_ESC_CHECK_VERSION_STR, sizeof(obj)), &obj);
 
-    return ret == 0 && obj.reply == NV_RM_API_VERSION_REPLY_RECOGNIZED ? NV_OK : NV_ERR_GENERIC;
+    return ret == 0 && obj.reply == NV_RM_API_VERSION_REPLY_RECOGNIZED;
 }
 
 NvU64 nv_sys_params(int fd) {
@@ -82,19 +101,19 @@ NvU64 nv_sys_params(int fd) {
     return ret == 0 ? obj.memblock_size : 0;
 }
 
-NvV32 nv_card_info(int fd, nv_ioctl_card_info_t (*card_info)[32]) {
+bool nv_card_info(int fd, nv_ioctl_card_info_t (*card_info)[32]) {
     int ret = ioctl(fd, _IOC(_IOC_READ|_IOC_WRITE, NV_IOCTL_MAGIC, NV_ESC_CARD_INFO, sizeof(nv_ioctl_card_info_t) * 32), card_info);
 
-    return ret == 0 ? NV_OK : NV_ERR_GENERIC;
+    return ret == 0;
 }
 
-NvBool nv_attach_gpus(int fd, int gpu) {
+bool nv_attach_gpus(int fd, int gpu) {
     int ret = ioctl(fd, _IOC(_IOC_READ|_IOC_WRITE, NV_IOCTL_MAGIC, NV_ESC_ATTACH_GPUS_TO_FD, sizeof(gpu)), &gpu);
 
     return ret == 0;
 }
 
-NvV32 nv_export_object_to_fd(int fd, int export_fd, NvHandle hClient, NvHandle hDevice, NvHandle hParent, NvHandle hObject) {
+bool nv_export_object_to_fd(int fd, int export_fd, NvHandle hClient, NvHandle hDevice, NvHandle hParent, NvHandle hObject) {
     NV0000_CTRL_OS_UNIX_EXPORT_OBJECT_TO_FD_PARAMS params = {
         .fd = export_fd,
         .flags = 0,
@@ -111,14 +130,15 @@ NvV32 nv_export_object_to_fd(int fd, int export_fd, NvHandle hClient, NvHandle h
     return nv_rm_control(fd, hClient, hClient, NV0000_CTRL_CMD_OS_UNIX_EXPORT_OBJECT_TO_FD, 0, sizeof(params), &params);
 }
 
-void nv0_register_fd(int nv0_fd, int nvctl_fd) {
-    ioctl(nv0_fd, _IOC(_IOC_READ|_IOC_WRITE, NV_IOCTL_MAGIC, NV_ESC_REGISTER_FD, sizeof(int)), &nvctl_fd);
+bool nv0_register_fd(int nv0_fd, int nvctl_fd) {
+    int ret = ioctl(nv0_fd, _IOC(_IOC_READ|_IOC_WRITE, NV_IOCTL_MAGIC, NV_ESC_REGISTER_FD, sizeof(int)), &nvctl_fd);
+    return ret == 0;
 }
 
 bool get_device_info(int fd, struct drm_nvidia_get_dev_info_params *devInfo) {
     int ret = ioctl(fd, DRM_IOCTL_NVIDIA_GET_DEV_INFO, devInfo);
     if (ret) {
-        LOG("DRM_IOCTL_NVIDIA_GET_DEV_INFO failed: %d %d", ret);
+        LOG("DRM_IOCTL_NVIDIA_GET_DEV_INFO failed: %d", ret);
         return false;
     }
     return true;
@@ -150,22 +170,35 @@ bool init_nvdriver(NVDriverContext *context, int drmFd) {
 
     LOG("Got dev info: %x", context->devInfo.generic_page_kind);
 
-    int nvctlFd = open("/dev/nvidiactl", O_RDWR|O_CLOEXEC);
-    int nv0Fd = open("/dev/nvidia0", O_RDWR|O_CLOEXEC);
+    int nvctlFd = -1, nv0Fd = -1;
+
+    nvctlFd = open("/dev/nvidiactl", O_RDWR|O_CLOEXEC);
+    if (nvctlFd == -1) {
+        goto err;
+    }
+
+    nv0Fd = open("/dev/nvidia0", O_RDWR|O_CLOEXEC);
+    if (nv0Fd == -1) {
+        goto err;
+    }
 
     //nv_check_version(nvctl_fd, "515.48.07");
     //not sure why this is called.
     //printf("sys params: %llu\n", nv_sys_params(nvctl_fd));
 
     //allocate the root object
-    NvV32 ret = nv_alloc_object(nvctlFd, 0, 0, &context->clientObject, NV01_ROOT_CLIENT, (void*)0);
-    if (ret) {
+    bool ret = nv_alloc_object(nvctlFd, NULL_OBJECT, NULL_OBJECT, &context->clientObject, NV01_ROOT_CLIENT, (void*)0);
+    if (!ret) {
         LOG("nv_alloc_object NV01_ROOT_CLIENT failed");
         goto err;
     }
 
     //attach the drm fd to this handle
-    nv_attach_gpus(nvctlFd, context->devInfo.gpu_id);
+    ret = nv_attach_gpus(nvctlFd, context->devInfo.gpu_id);
+    if (!ret) {
+        LOG("nv_attach_gpu failed");
+        goto err;
+    }
 
     //allocate the parent memory object
     NV0080_ALLOC_PARAMETERS deviceParams = {
@@ -175,7 +208,7 @@ bool init_nvdriver(NVDriverContext *context, int drmFd) {
 
     //allocate the device object
     ret = nv_alloc_object(nvctlFd, context->clientObject, context->clientObject, &context->deviceObject, NV01_DEVICE_0, &deviceParams);
-    if (ret) {
+    if (!ret) {
         LOG("nv_alloc_object NV01_DEVICE_0 failed");
         goto err;
     }
@@ -183,13 +216,17 @@ bool init_nvdriver(NVDriverContext *context, int drmFd) {
     //allocate the subdevice object
     NV2080_ALLOC_PARAMETERS subdevice = { 0 };
     ret = nv_alloc_object(nvctlFd, context->clientObject, context->deviceObject, &context->subdeviceObject, NV20_SUBDEVICE_0, &subdevice);
-    if (ret) {
+    if (!ret) {
         LOG("nv_alloc_object NV20_SUBDEVICE_0 failed");
         goto err;
     }
 
     //TODO honestly not sure if this is needed
-    nv0_register_fd(nv0Fd, nvctlFd);
+    ret = nv0_register_fd(nv0Fd, nvctlFd);
+    if (!ret) {
+        LOG("nv0_register_fd failed");
+        goto err;
+    }
 
     context->drmFd = drmFd;
     context->nvctlFd = nvctlFd;
@@ -199,27 +236,38 @@ bool init_nvdriver(NVDriverContext *context, int drmFd) {
 err:
 
     LOG("Got error initing");
-    close(nvctlFd);
+    if (nvctlFd != -1) {
+        close(nvctlFd);
+    }
+    if (nv0Fd != -1) {
+        close(nv0Fd);
+    }
     return false;
 }
 
 bool free_nvdriver(NVDriverContext *context) {
-    NvV32 ret = nv_free_object(context->nvctlFd, context->clientObject, context->subdeviceObject);
+    nv_free_object(context->nvctlFd, context->clientObject, context->subdeviceObject);
+    nv_free_object(context->nvctlFd, context->clientObject, context->deviceObject);
+    nv_free_object(context->nvctlFd, context->clientObject, context->clientObject);
 
-    ret = nv_free_object(context->nvctlFd, context->clientObject, context->deviceObject);
-
-    ret = nv_free_object(context->nvctlFd, context->clientObject, context->clientObject);
-
-    close(context->nvctlFd);
-    close(context->drmFd);
-    close(context->nv0Fd);
+    if (context->nvctlFd > 0) {
+        close(context->nvctlFd);
+    }
+    if (context->drmFd > 0) {
+        close(context->drmFd);
+    }
+    if (context->nv0Fd > 0) {
+        close(context->nv0Fd);
+    }
 
     memset(context, 0, sizeof(NVDriverContext));
+    return true;
 }
 
-int alloc_memory(NVDriverContext *context, uint32_t size, uint32_t alignment, uint32_t bpc) {
+bool alloc_memory(NVDriverContext *context, uint32_t size, uint32_t alignment, uint32_t bpc, int *fd) {
     //allocate the buffer
-    NvHandle bufferObject = 0;
+    int nvctlFd2 = -1;
+    NvHandle bufferObject = {0};
     NV_MEMORY_ALLOCATION_PARAMS memParams = {
         .owner = context->clientObject,
         .type = NVOS32_TYPE_IMAGE,
@@ -244,27 +292,57 @@ int alloc_memory(NVDriverContext *context, uint32_t size, uint32_t alignment, ui
                  DRF_DEF(OS32, _ATTR2, _PAGE_SIZE_HUGE, _2MB)
     };
     LOG("Allocating object");
-    NvV32 ret = nv_alloc_object(context->nvctlFd, context->clientObject, context->deviceObject, &bufferObject, NV01_MEMORY_LOCAL_USER, &memParams);
+    bool ret = nv_alloc_object(context->nvctlFd, context->clientObject, context->deviceObject, &bufferObject, NV01_MEMORY_LOCAL_USER, &memParams);
+    if (!ret) {
+        LOG("nv_alloc_object NV01_MEMORY_LOCAL_USER failed");
+        return false;
+    }
 
     //open a new handle to return
-    int nvctFd2 = open("/dev/nvidiactl", O_RDWR|O_CLOEXEC);
+    nvctlFd2 = open("/dev/nvidiactl", O_RDWR|O_CLOEXEC);
+    if (nvctlFd2 == -1) {
+        LOG("open /dev/nvidiactl failed");
+        goto err;
+    }
 
     //attach the new fd to the correct gpus
-    nv_attach_gpus(nvctFd2, context->devInfo.gpu_id);
+    ret = nv_attach_gpus(nvctlFd2, context->devInfo.gpu_id);
+    if (!ret) {
+        LOG("nv_attach_gpus failed");
+        goto err;
+    }
 
     //actually export the object
-    ret = nv_export_object_to_fd(context->nvctlFd, nvctFd2, context->clientObject, context->deviceObject, context->deviceObject, bufferObject);
-    if (ret) {
-        close(nvctFd2);
-        return -1;
+    ret = nv_export_object_to_fd(context->nvctlFd, nvctlFd2, context->clientObject, context->deviceObject, context->deviceObject, bufferObject);
+    if (!ret) {
+        LOG("nv_export_object_to_fd failed");
+        goto err;
     }
 
     ret = nv_free_object(context->nvctlFd, context->clientObject, bufferObject);
+    if (!ret) {
+        LOG("nv_free_object failed");
+        goto err;
+    }
 
-    return nvctFd2;
+    *fd = nvctlFd2;
+    return true;
+
+ err:
+    LOG("error");
+    if (nvctlFd2 > 0) {
+        close(nvctlFd2);
+    }
+
+    ret = nv_free_object(context->nvctlFd, context->clientObject, bufferObject);
+    if (!ret) {
+        LOG("nv_free_object failed");
+    }
+
+    return false;
 }
 
-int alloc_image(NVDriverContext *context, uint32_t width, uint32_t height, uint8_t channels, uint8_t bitsPerChannel, NVDriverImage *image) {
+bool alloc_image(NVDriverContext *context, uint32_t width, uint32_t height, uint8_t channels, uint8_t bitsPerChannel, NVDriverImage *image) {
     uint32_t depth = 1;
     uint32_t gobWidthInBytes = 64;
     uint32_t gobHeightInBytes = 8;
@@ -285,7 +363,7 @@ int alloc_image(NVDriverContext *context, uint32_t width, uint32_t height, uint8
     while (log2GobsPerBlockZ > 0 && (gobDepthInBytes << (log2GobsPerBlockZ - 1)) >= depth)
         log2GobsPerBlockZ--;
 
-    printf("aligned sizes: %dx%d\n", gobWidthInBytes << log2GobsPerBlockX, gobHeightInBytes << log2GobsPerBlockY );
+    LOG("aligned sizes: %dx%d", gobWidthInBytes << log2GobsPerBlockX, gobHeightInBytes << log2GobsPerBlockY );
 
     //These two seem to be correct, but it was discovered by trial and error so I'm not 100% sure
     uint32_t widthInBytes = ROUND_UP(width * bytesPerPixel, gobWidthInBytes << log2GobsPerBlockX);
@@ -297,17 +375,26 @@ int alloc_image(NVDriverContext *context, uint32_t width, uint32_t height, uint8
     uint32_t alignment = 0x200000;
 
     //this gets us some memory, and the fd to import into cuda
-    int fd = alloc_memory(context, size, alignment, bitsPerChannel);
+    int memFd = -1;
+    bool ret = alloc_memory(context, size, alignment, bitsPerChannel, &memFd);
+    if (!ret) {
+        LOG("alloc_memory failed");
+        return false;
+    }
 
     //now export the dma-buf
     uint32_t pitchInBlocks = widthInBytes / (gobWidthInBytes << log2GobsPerBlockX);
 
     //printf("got gobsPerBlock: %ux%u %u %u %u %d\n", width, height, log2GobsPerBlockX, log2GobsPerBlockY, log2GobsPerBlockZ, pitchInBlocks);
     //duplicate the fd so we don't invalidate it by importing it
-    int fd2 = dup(fd);
+    int memFd2 = dup(memFd);
+    if (memFd2 == -1) {
+        LOG("dup failed");
+        goto err;
+    }
 
     struct NvKmsKapiPrivImportMemoryParams nvkmsParams = {
-        .memFd = fd2,
+        .memFd = memFd2,
         .surfaceParams = {
             .layout = NvKmsSurfaceMemoryLayoutBlockLinear,
             .blockLinear = {
@@ -326,22 +413,33 @@ int alloc_image(NVDriverContext *context, uint32_t width, uint32_t height, uint8
         .nvkms_params_size = sizeof(nvkmsParams)
     };
     int drmret = ioctl(context->drmFd, DRM_IOCTL_NVIDIA_GEM_IMPORT_NVKMS_MEMORY, &params);
+    if (drmret != 0) {
+        LOG("DRM_IOCTL_NVIDIA_GEM_IMPORT_NVKMS_MEMORY failed: %d", drmret);
+        goto err;
+    }
 
     //export dma-buf
     struct drm_prime_handle prime_handle = {
         .handle = params.handle
     };
     drmret = ioctl(context->drmFd, DRM_IOCTL_PRIME_HANDLE_TO_FD, &prime_handle);
+    if (drmret != 0) {
+        LOG("DRM_IOCTL_PRIME_HANDLE_TO_FD failed: %d", drmret);
+        goto err;
+    }
 
     struct drm_gem_close gem_close = {
         .handle = params.handle
     };
     drmret = ioctl(context->drmFd, DRM_IOCTL_GEM_CLOSE, &gem_close);
-
+    if (drmret != 0) {
+        LOG("DRM_IOCTL_GEM_CLOSE failed: %d", drmret);
+        goto prime_err;
+    }
 
     image->width = width;
     image->height = height;
-    image->nvFd = fd;
+    image->nvFd = memFd;
     image->drmFd = prime_handle.fd;
     image->mods = DRM_FORMAT_MOD_NVIDIA_BLOCK_LINEAR_2D(0, context->devInfo.sector_layout, context->devInfo.page_kind_generation, context->devInfo.generic_page_kind, log2GobsPerBlockY);
     image->offset = 0;
@@ -352,11 +450,23 @@ int alloc_image(NVDriverContext *context, uint32_t width, uint32_t height, uint8
     } else if (channels == 2) {
         image->fourcc = bytesPerChannel == 1 ? DRM_FORMAT_RG88 : DRM_FORMAT_RG1616;
     } else {
-        printf("Unknown fourcc\n");
+        LOG("Unknown fourcc");
         return false;
     }
 
     LOG("created image: %dx%d %lx %d %x", width, height, image->mods, widthInBytes, imageSizeInBytes);
 
     return true;
+
+prime_err:
+    if (prime_handle.fd > 0) {
+        close(prime_handle.fd);
+    }
+
+err:
+    if (memFd > 0) {
+        close(memFd);
+    }
+
+    return false;
 }
