@@ -1,0 +1,21 @@
+d src/common/sdk/nvidia/inc/
+d src/nvidia/arch/nvalloc/unix/include/
+d kernel-open/nvidia-drm/
+d kernel-open/common/inc/
+d src/nvidia-modeset/kapi/interface/
+d src/nvidia-modeset/interface/
+
+f class/cl0040.h
+f class/cl0080.h
+f class/cl2080.h
+f nvos.h
+f nv_escape.h
+f nv-ioctl.h
+f nvidia-drm-ioctl.h
+f ctrl/ctrl0000/ctrl0000gpu.h
+f ctrl/ctrl0000/ctrl0000unix.h
+
+#define NVKMS_API_H
+
+f nvkms-api-types.h
+f nvkms-kapi-private.h
