@@ -168,7 +168,7 @@ bool init_nvdriver(NVDriverContext *context, int drmFd) {
         return false;
     }
 
-    LOG("Got dev info: %x", context->devInfo.generic_page_kind);
+    LOG("Got dev info: %x %x %x %x", context->devInfo.gpu_id, context->devInfo.sector_layout, context->devInfo.page_kind_generation, context->devInfo.generic_page_kind);
 
     int nvctlFd = -1, nv0Fd = -1;
 
@@ -291,7 +291,6 @@ bool alloc_memory(NVDriverContext *context, uint32_t size, uint32_t alignment, u
                  DRF_DEF(OS32, _ATTR2, _GPU_CACHEABLE, _YES) |
                  DRF_DEF(OS32, _ATTR2, _PAGE_SIZE_HUGE, _2MB)
     };
-    LOG("Allocating object");
     bool ret = nv_alloc_object(context->nvctlFd, context->clientObject, context->deviceObject, &bufferObject, NV01_MEMORY_LOCAL_USER, &memParams);
     if (!ret) {
         LOG("nv_alloc_object NV01_MEMORY_LOCAL_USER failed");
@@ -363,16 +362,19 @@ bool alloc_image(NVDriverContext *context, uint32_t width, uint32_t height, uint
     while (log2GobsPerBlockZ > 0 && (gobDepthInBytes << (log2GobsPerBlockZ - 1)) >= depth)
         log2GobsPerBlockZ--;
 
-    LOG("aligned sizes: %dx%d", gobWidthInBytes << log2GobsPerBlockX, gobHeightInBytes << log2GobsPerBlockY );
+    LOG("Calculated GOB size: %dx%d", gobWidthInBytes << log2GobsPerBlockX, gobHeightInBytes << log2GobsPerBlockY );
 
     //These two seem to be correct, but it was discovered by trial and error so I'm not 100% sure
     uint32_t widthInBytes = ROUND_UP(width * bytesPerPixel, gobWidthInBytes << log2GobsPerBlockX);
     uint32_t alignedHeight = ROUND_UP(height, gobHeightInBytes << log2GobsPerBlockY);
 
+
     uint32_t granularity = 65536;
     uint32_t imageSizeInBytes = widthInBytes * alignedHeight;
     uint32_t size = ROUND_UP(imageSizeInBytes, granularity);
     uint32_t alignment = 0x200000;
+
+    LOG("Aligned image size: %dx%d = %d (%d)", widthInBytes, alignedHeight, imageSizeInBytes, size);
 
     //this gets us some memory, and the fd to import into cuda
     int memFd = -1;

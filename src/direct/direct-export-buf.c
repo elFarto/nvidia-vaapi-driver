@@ -69,11 +69,6 @@ void direct_releaseExporter(NVDriver *drv) {
     free_nvdriver(&drv->driverContext);
 }
 
-static bool exportBackingImage(NVDriver *drv, BackingImage *img) {
-    //backing image is already exported, we don't need to do anything here
-    return true;
-}
-
 static void import_to_cuda(NVDriver *drv, NVDriverImage *image, int bpc, int channels, NVCudaImage *cudaImage, CUarray *array) {
     CUDA_EXTERNAL_MEMORY_HANDLE_DESC extMemDesc = {
         .type = CU_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD,
@@ -112,9 +107,11 @@ BackingImage *direct_allocateBackingImage(NVDriver *drv, const NVSurface *surfac
 
     BackingImage *backingImage = calloc(1, sizeof(BackingImage));
 
+    LOG("Allocating BackingImages: %p %dx%d", backingImage, surface->width, surface->height);
     alloc_image(&drv->driverContext, surface->width, surface->height, 1, 8, &driverImages[0]);
     alloc_image(&drv->driverContext, surface->width>>1, surface->height>>1, 2, 8, &driverImages[1]);
 
+    LOG("Importing images");
     import_to_cuda(drv, &driverImages[0], 8, 1, &backingImage->cudaImages[0], &backingImage->arrays[0]);
     import_to_cuda(drv, &driverImages[1], 8, 2, &backingImage->cudaImages[1], &backingImage->arrays[1]);
 
@@ -139,6 +136,7 @@ BackingImage *direct_allocateBackingImage(NVDriver *drv, const NVSurface *surfac
 }
 
 static void destroyBackingImage(NVDriver *drv, BackingImage *img) {
+    LOG("Destroying BackingImage: %p", img);
     if (img->surface != NULL) {
         img->surface->backingImage = NULL;
     }
