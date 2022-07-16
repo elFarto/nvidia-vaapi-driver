@@ -1,3 +1,12 @@
 *.o
 samples/*.mp4
 subprojects/*/
+videos
+va-api-nvidia.cflags
+va-api-nvidia.config
+va-api-nvidia.creator
+va-api-nvidia.creator.user
+va-api-nvidia.cxxflags
+va-api-nvidia.files
+va-api-nvidia.includes
+meson.build.user
