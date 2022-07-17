@@ -14,6 +14,9 @@ f nv-ioctl.h
 f nvidia-drm-ioctl.h
 f ctrl/ctrl0000/ctrl0000gpu.h
 f ctrl/ctrl0000/ctrl0000unix.h
+f ctrl/ctrl0000/ctrl0000system.h
+//f ctrl/ctrl0080/ctrl0080dma.h
+//f ctrl/ctrl2080/ctrl2080mc.h
 
 #define NVKMS_API_H
 
