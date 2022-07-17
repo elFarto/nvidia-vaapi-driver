@@ -130,6 +130,19 @@ bool nv_export_object_to_fd(int fd, int export_fd, NvHandle hClient, NvHandle hD
     return nv_rm_control(fd, hClient, hClient, NV0000_CTRL_CMD_OS_UNIX_EXPORT_OBJECT_TO_FD, 0, sizeof(params), &params);
 }
 
+bool nv_get_versions(int fd, NvHandle hClient, char **driverVersion) {
+    NV0000_CTRL_SYSTEM_GET_BUILD_VERSION_V2_PARAMS params = { 0 };
+    bool ret = nv_rm_control(fd, hClient, hClient, NV0000_CTRL_CMD_SYSTEM_GET_BUILD_VERSION_V2, 0, sizeof(params), &params);
+    if (!ret) {
+        LOG("NV0000_CTRL_CMD_SYSTEM_GET_BUILD_VERSION_V2 failed");
+        return false;
+    }
+
+    *driverVersion = strdup(params.driverVersionBuffer);
+
+    return true;
+}
+
 bool nv0_register_fd(int nv0_fd, int nvctl_fd) {
     int ret = ioctl(nv0_fd, _IOC(_IOC_READ|_IOC_WRITE, NV_IOCTL_MAGIC, NV_ESC_REGISTER_FD, sizeof(int)), &nvctl_fd);
     return ret == 0;
@@ -202,8 +215,7 @@ bool init_nvdriver(NVDriverContext *context, int drmFd) {
 
     //allocate the parent memory object
     NV0080_ALLOC_PARAMETERS deviceParams = {
-       .hClientShare = context->clientObject,
-       .vaMode = 2
+       .hClientShare = context->clientObject
     };
 
     //allocate the device object
@@ -228,9 +240,26 @@ bool init_nvdriver(NVDriverContext *context, int drmFd) {
         goto err;
     }
 
+    char *ver;
+    nv_get_versions(nvctlFd, context->clientObject, &ver);
+    LOG("NVIDIA kernel driver version: %s", ver);
+    context->driverMajorVersion = atoi(ver);
+    free(ver);
+
+    //figure out what page sizes are available
+    //we don't actually need this at the moment
+//    NV0080_CTRL_DMA_ADV_SCHED_GET_VA_CAPS_PARAMS vaParams = {0};
+//    ret = nv_rm_control(nvctlFd, context->clientObject, context->deviceObject, NV0080_CTRL_CMD_DMA_ADV_SCHED_GET_VA_CAPS, 0, sizeof(vaParams), &vaParams);
+//    if (!ret) {
+//        LOG("NV0080_CTRL_CMD_DMA_ADV_SCHED_GET_VA_CAPS failed");
+//        goto err;
+//    }
+//    LOG("Got big page size: %d, huge page size: %d", vaParams.bigPageSize, vaParams.hugePageSize);
+
     context->drmFd = drmFd;
     context->nvctlFd = nvctlFd;
     context->nv0Fd = nv0Fd;
+    //context->hasHugePage = vaParams.hugePageSize != 0;
 
     return true;
 err:
@@ -264,32 +293,39 @@ bool free_nvdriver(NVDriverContext *context) {
     return true;
 }
 
-bool alloc_memory(NVDriverContext *context, uint32_t size, uint32_t alignment, uint32_t bpc, int *fd) {
+bool alloc_memory(NVDriverContext *context, uint32_t size, int *fd) {
     //allocate the buffer
     int nvctlFd2 = -1;
     NvHandle bufferObject = {0};
+
+    //we don't have huge pages available on all hardware
+    //turns out we don't need to know that anyway, although this will probably result is less optimal page size
+    /*
+    NvU32 pageSizeAttr = context->hasHugePage ? DRF_DEF(OS32, _ATTR, _PAGE_SIZE, _HUGE)
+                                              : DRF_DEF(OS32, _ATTR, _PAGE_SIZE, _BIG);
+    NvU32 pageSizeAttr2 = context->hasHugePage ? DRF_DEF(OS32, _ATTR2, _PAGE_SIZE_HUGE, _2MB)
+                                               : 0;*/
+
     NV_MEMORY_ALLOCATION_PARAMS memParams = {
         .owner = context->clientObject,
         .type = NVOS32_TYPE_IMAGE,
         .flags = NVOS32_ALLOC_FLAGS_IGNORE_BANK_PLACEMENT |
-                 NVOS32_ALLOC_FLAGS_ALIGNMENT_FORCE |
+                 //NVOS32_ALLOC_FLAGS_ALIGNMENT_FORCE | //this doesn't seem to be needed
                  NVOS32_ALLOC_FLAGS_MAP_NOT_REQUIRED |
                  NVOS32_ALLOC_FLAGS_PERSISTENT_VIDMEM,
 
-        .attr = //((bpc == 8 ? DRF_DEF(OS32, _ATTR, _DEPTH, _8)
-                //           : DRF_DEF(OS32, _ATTR, _DEPTH, _16))) |
+        .attr = //pageSizeAttr |
                 DRF_DEF(OS32, _ATTR, _DEPTH, _UNKNOWN) |
                 DRF_DEF(OS32, _ATTR, _FORMAT, _BLOCK_LINEAR) |
-                DRF_DEF(OS32, _ATTR, _PAGE_SIZE, _HUGE) |
                 DRF_DEF(OS32, _ATTR, _PHYSICALITY, _CONTIGUOUS),
         .format = 0,
         .width = 0,
         .height = 0,
         .size = size,
-        .alignment = alignment,
-        .attr2 = DRF_DEF(OS32, _ATTR2, _ZBC, _PREFER_NO_ZBC) |
-                 DRF_DEF(OS32, _ATTR2, _GPU_CACHEABLE, _YES) |
-                 DRF_DEF(OS32, _ATTR2, _PAGE_SIZE_HUGE, _2MB)
+        .alignment = 0, //see flags above
+        .attr2 = //pageSizeAttr2 |
+                 DRF_DEF(OS32, _ATTR2, _ZBC, _PREFER_NO_ZBC) |
+                 DRF_DEF(OS32, _ATTR2, _GPU_CACHEABLE, _YES)
     };
     bool ret = nv_alloc_object(context->nvctlFd, context->clientObject, context->deviceObject, &bufferObject, NV01_MEMORY_LOCAL_USER, &memParams);
     if (!ret) {
@@ -369,16 +405,16 @@ bool alloc_image(NVDriverContext *context, uint32_t width, uint32_t height, uint
     uint32_t alignedHeight = ROUND_UP(height, gobHeightInBytes << log2GobsPerBlockY);
 
 
-    uint32_t granularity = 65536;
+    //uint32_t granularity = 1;//65536;
     uint32_t imageSizeInBytes = widthInBytes * alignedHeight;
-    uint32_t size = ROUND_UP(imageSizeInBytes, granularity);
-    uint32_t alignment = 0x200000;
+    uint32_t size = imageSizeInBytes;//ROUND_UP(imageSizeInBytes, granularity);
+    //uint32_t alignment = 0x200000;
 
     LOG("Aligned image size: %dx%d = %d (%d)", widthInBytes, alignedHeight, imageSizeInBytes, size);
 
     //this gets us some memory, and the fd to import into cuda
     int memFd = -1;
-    bool ret = alloc_memory(context, size, alignment, bitsPerChannel, &memFd);
+    bool ret = alloc_memory(context, size, &memFd);
     if (!ret) {
         LOG("alloc_memory failed");
         return false;
@@ -412,11 +448,11 @@ bool alloc_image(NVDriverContext *context, uint32_t width, uint32_t height, uint
     struct drm_nvidia_gem_import_nvkms_memory_params params = {
         .mem_size = imageSizeInBytes,
         .nvkms_params_ptr = (uint64_t) &nvkmsParams,
-        .nvkms_params_size = sizeof(nvkmsParams)
+        .nvkms_params_size = context->driverMajorVersion == 470 ? 0x20 : sizeof(nvkmsParams) //needs to be 0x20 in the 470 series driver
     };
     int drmret = ioctl(context->drmFd, DRM_IOCTL_NVIDIA_GEM_IMPORT_NVKMS_MEMORY, &params);
     if (drmret != 0) {
-        LOG("DRM_IOCTL_NVIDIA_GEM_IMPORT_NVKMS_MEMORY failed: %d", drmret);
+        LOG("DRM_IOCTL_NVIDIA_GEM_IMPORT_NVKMS_MEMORY failed: %d %d", drmret);
         goto err;
     }
 

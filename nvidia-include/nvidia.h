@@ -9,6 +9,7 @@
 #include <nvidia-drm-ioctl.h>
 #include <ctrl/ctrl0000/ctrl0000gpu.h>
 #include <ctrl/ctrl0000/ctrl0000unix.h>
+#include <ctrl/ctrl0000/ctrl0000system.h>
 #define NVKMS_API_H
 #include <nvkms-api-types.h>
 #include <nvkms-kapi-private.h>
