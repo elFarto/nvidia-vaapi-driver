@@ -131,14 +131,22 @@ bool nv_export_object_to_fd(int fd, int export_fd, NvHandle hClient, NvHandle hD
 }
 
 bool nv_get_versions(int fd, NvHandle hClient, char **driverVersion) {
-    NV0000_CTRL_SYSTEM_GET_BUILD_VERSION_V2_PARAMS params = { 0 };
-    bool ret = nv_rm_control(fd, hClient, hClient, NV0000_CTRL_CMD_SYSTEM_GET_BUILD_VERSION_V2, 0, sizeof(params), &params);
+    char driverVersionBuffer[64];
+    char versionBuffer[64];
+    char titleBuffer[64];
+    NV0000_CTRL_SYSTEM_GET_BUILD_VERSION_PARAMS params = {
+        .sizeOfStrings = 64,
+        .pDriverVersionBuffer = driverVersionBuffer,
+        .pVersionBuffer = versionBuffer,
+        .pTitleBuffer = titleBuffer
+    };
+    bool ret = nv_rm_control(fd, hClient, hClient, NV0000_CTRL_CMD_SYSTEM_GET_BUILD_VERSION, 0, sizeof(params), &params);
     if (!ret) {
-        LOG("NV0000_CTRL_CMD_SYSTEM_GET_BUILD_VERSION_V2 failed");
+        LOG("NV0000_CTRL_CMD_SYSTEM_GET_BUILD_VERSION failed");
         return false;
     }
 
-    *driverVersion = strdup(params.driverVersionBuffer);
+    *driverVersion = strdup(driverVersionBuffer);
 
     return true;
 }
