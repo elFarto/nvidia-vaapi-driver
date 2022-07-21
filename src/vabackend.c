@@ -1218,19 +1218,32 @@ static VAStatus nvPutSurface(
 
     int size = surfaceObj->width * surfaceObj->height * 4;
     char *data = (char*) malloc(size);
-    for (uint32_t y = 0; y < surfaceObj->height; y++) {
-        for (uint32_t x = 0; x < surfaceObj->width; x++) {
-            int yi = y * surfaceObj->width + x;
-            int ui = (y/2) * surfaceObj->width + (x&~1);
+
+    for (uint32_t y = 0; y < surfaceObj->height; y+=2) {
+        for (uint32_t x = 0; x < surfaceObj->width; x+=2) {
+            int yi[4] = {
+                y * surfaceObj->width + x,
+                y * surfaceObj->width + x+1,
+                (y+1) * surfaceObj->width + x,
+                (y+1) * surfaceObj->width + x+1
+            };
+
+            int ui = (y>>1) * surfaceObj->width + x;
             int vi = ui + 1;
 
-            float b = 1.164f * (luma[yi] - 16) + 2.018f * (chroma[ui] - 128);
-            float g = 1.164f * (luma[yi] - 16) - 0.813f * (chroma[vi] - 128) - 0.391f * (chroma[ui] - 128);
-            float r = 1.164f * (luma[yi] - 16) + 1.596f * (chroma[vi] - 128);
+            float bc = 2.018f * (chroma[ui] - 128);
+            float gc = 0.813f * (chroma[vi] - 128) - 0.391f * (chroma[ui] - 128);
+            float rc = 1.596f * (chroma[vi] - 128);
 
-            data[yi*4] = clamp(b, 0, 255);
-            data[yi*4+1] = clamp(g, 0, 255);
-            data[yi*4+2]= clamp(r, 0, 255);
+            for (int c = 0; c < 4; c++) {
+                float b = 1.164f * (luma[yi[c]] - 16) + bc;
+                float g = 1.164f * (luma[yi[c]] - 16) - gc;
+                float r = 1.164f * (luma[yi[c]] - 16) + rc;
+
+                data[yi[c]*4]   = clamp(b, 0, 255);
+                data[yi[c]*4+1] = clamp(g, 0, 255);
+                data[yi[c]*4+2] = clamp(r, 0, 255);
+            }
         }
     }
 
@@ -1249,6 +1262,7 @@ static VAStatus nvPutSurface(
 
     free(luma);
     free(chroma);
+    //data is freed by XDestroyImage
 
     return VA_STATUS_SUCCESS;// VA_STATUS_ERROR_UNIMPLEMENTED;
 }
@@ -2080,10 +2094,11 @@ VAStatus __vaDriverInit_1_0(VADriverContextP ctx)
     VTABLE(ctx, QueryProcessingRate);
     VTABLE(ctx, ExportSurfaceHandle);
 
-    ctx->vtable_vpp->vaQueryVideoProcFilters = nvQueryVideoProcFilters;
-    ctx->vtable_vpp->vaQueryVideoProcFilterCaps = nvQueryVideoProcFilterCaps;
-    ctx->vtable_vpp->vaQueryVideoProcPipelineCaps = nvQueryVideoProcPipelineCaps;
+#define VPPTABLE(ctx, func) ctx->vtable_vpp->va ## func = nv ## func
 
+    VPPTABLE(ctx, QueryVideoProcFilters);
+    VPPTABLE(ctx, QueryVideoProcFilterCaps);
+    VPPTABLE(ctx, QueryVideoProcPipelineCaps);
 
     return VA_STATUS_SUCCESS;
 }
