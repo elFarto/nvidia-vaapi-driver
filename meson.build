@@ -20,6 +20,7 @@ gst_codecs_deps = dependency('gstreamer-codecparsers-1.0')
 ffnvcodec_deps = dependency('ffnvcodec', version: '>= 11.1.5.1')
 libva_deps = dependency('libva', version: '>= 1.8.0')
 thread_dep = dependency('threads')
+x11_dep = cc.find_library('X11')
 
 nvidia_incdir = include_directories('nvidia-include')
 
@@ -50,6 +51,7 @@ shared_library(
         m_dep,
         dl_dep,
         thread_dep,
+        x11_dep
     ],
     include_directories: nvidia_incdir,
     install: true,

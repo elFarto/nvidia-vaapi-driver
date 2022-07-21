@@ -12,6 +12,7 @@
 #include <sys/param.h>
 #include <sys/ioctl.h>
 
+#include <va/va_backend_vpp.h>
 #include <va/va_backend.h>
 #include <va/va_drmcommon.h>
 
@@ -43,6 +44,9 @@ static int gpu = -1;
 static enum {
     EGL, DIRECT
 } backend = EGL;
+
+#include <errno.h>
+#include <execinfo.h>
 
 __attribute__ ((constructor))
 static void init() {
@@ -404,6 +408,7 @@ static VAStatus nvQueryConfigProfiles(
     CHECK_CUDA_RESULT(cu->cuCtxPushCurrent(drv->cudaContext));
 
     int profiles = 0;
+    profile_list[profiles++] = VAProfileNone;
     if (doesGPUSupportCodec(cudaVideoCodec_MPEG2, 8, cudaVideoChromaFormat_420, NULL, NULL)) {
         profile_list[profiles++] = VAProfileMPEG2Simple;
         profile_list[profiles++] = VAProfileMPEG2Main;
@@ -445,7 +450,7 @@ static VAStatus nvQueryConfigProfiles(
 //    if (doesGPUSupportCodec(cudaVideoCodec_HEVC, 12, cudaVideoChromaFormat_420, NULL, NULL)) {
 //        profile_list[profiles++] = VAProfileHEVCMain422_12;
 //    }
-//    if (doesGPUSupportCodec(cudaVideoCodec_HEVC, 8, cudaVideoChromaFormat_420, NULL, NULL)) {
+//    if (doesGPUSupportCodec(cudaVideoCodec_HEVC, 8, cudaVideoChromaFormat_444, NULL, NULL)) {
 //        profile_list[profiles++] = VAProfileHEVCMain444;
 //    }
 //    if (doesGPUSupportCodec(cudaVideoCodec_HEVC, 10, cudaVideoChromaFormat_420, NULL, NULL)) {
@@ -481,7 +486,7 @@ static VAStatus nvQueryConfigProfiles(
 
     //now filter out the codecs we don't support
     for (int i = 0; i < profiles; i++) {
-        if (vaToCuCodec(profile_list[i]) == cudaVideoCodec_NONE) {
+        if (profile_list[i] != VAProfileNone && vaToCuCodec(profile_list[i]) == cudaVideoCodec_NONE) {
             //LOG("Removing profile: %d", profile_list[i])
             for (int x = i; x < profiles-1; x++) {
                 profile_list[x] = profile_list[x+1];
@@ -505,7 +510,12 @@ static VAStatus nvQueryConfigEntrypoints(
         int *num_entrypoints			/* out */
     )
 {
-    entrypoint_list[0] = VAEntrypointVLD;
+    if (profile != VAProfileNone) {
+        entrypoint_list[0] = VAEntrypointVLD;
+    } else {
+        entrypoint_list[0] = VAEntrypointVideoProc;
+    }
+
     *num_entrypoints = 1;
 
     return VA_STATUS_SUCCESS;
@@ -520,7 +530,8 @@ static VAStatus nvGetConfigAttributes(
     )
 {
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
-    if (vaToCuCodec(profile) == cudaVideoCodec_NONE) {
+    if ((entrypoint == VAEntrypointVLD && vaToCuCodec(profile) == cudaVideoCodec_NONE) ||
+        (entrypoint == VAEntrypointVideoProc && profile != VAProfileNone)) {
         return VA_STATUS_ERROR_UNSUPPORTED_PROFILE;
     }
 
@@ -536,11 +547,20 @@ static VAStatus nvGetConfigAttributes(
         }
         else if (attrib_list[i].type == VAConfigAttribMaxPictureWidth)
         {
-            doesGPUSupportCodec(vaToCuCodec(profile), 8, cudaVideoChromaFormat_420, &attrib_list[i].value, NULL);
+            if (entrypoint != VAEntrypointVideoProc) {
+                doesGPUSupportCodec(vaToCuCodec(profile), 8, cudaVideoChromaFormat_420, &attrib_list[i].value, NULL);
+            } else {
+                LOG("here width");
+            }
+
         }
         else if (attrib_list[i].type == VAConfigAttribMaxPictureHeight)
         {
-            doesGPUSupportCodec(vaToCuCodec(profile), 8, cudaVideoChromaFormat_420, NULL, &attrib_list[i].value);
+            if (entrypoint != VAEntrypointVideoProc) {
+                doesGPUSupportCodec(vaToCuCodec(profile), 8, cudaVideoChromaFormat_420, NULL, &attrib_list[i].value);
+            } else {
+                LOG("here height");
+            }
         }
         else
         {
@@ -561,18 +581,21 @@ static VAStatus nvCreateConfig(
     )
 {
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
-    LOG("got profile: %d with %d attributes", profile, num_attribs);
+    LOG("got profile: %d (%d) with %d attributes", profile, entrypoint, num_attribs);
+
+    if (entrypoint == VAEntrypointVideoProc && profile == VAProfileNone) {
+        //allowed
+    } else if (entrypoint != VAEntrypointVLD) {
+        LOG("Entrypoint not supported: %d", entrypoint);
+        return VA_STATUS_ERROR_UNSUPPORTED_ENTRYPOINT;
+    }
+
     cudaVideoCodec cudaCodec = vaToCuCodec(profile);
 
-    if (cudaCodec == cudaVideoCodec_NONE) {
+    if (entrypoint != VAEntrypointVideoProc && cudaCodec == cudaVideoCodec_NONE) {
         //we don't support this yet
         LOG("Profile not supported: %d", profile);
         return VA_STATUS_ERROR_UNSUPPORTED_PROFILE;
-    }
-
-    if (entrypoint != VAEntrypointVLD) {
-        LOG("Entrypoint not supported: %d", entrypoint);
-        return VA_STATUS_ERROR_UNSUPPORTED_ENTRYPOINT;
     }
 
     Object obj = allocateObject(drv, OBJECT_TYPE_CONFIG, sizeof(NVConfig));
@@ -1107,6 +1130,68 @@ static VAStatus nvQuerySurfaceError(
     return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
+#include <X11/Xlib.h>
+#include <X11/Xutil.h>
+#include <math.h>
+
+static void cuArrayToNV12(NVSurface *surfaceObj, uint8_t **luma, uint8_t **chroma) {
+    int bytesPerPixel = 1;
+    if (surfaceObj->format != cudaVideoSurfaceFormat_NV12) {
+        bytesPerPixel = 2;
+    }
+
+    *luma = malloc(surfaceObj->width * surfaceObj->height * bytesPerPixel);
+    *chroma = malloc(surfaceObj->width * (surfaceObj->height/2) * bytesPerPixel);
+
+    //luma
+    CUDA_MEMCPY2D memcpy2d = {
+      .srcXInBytes = 0, .srcY = 0,
+      .srcMemoryType = CU_MEMORYTYPE_ARRAY,
+      .srcArray = surfaceObj->backingImage->arrays[0],
+
+      .dstXInBytes = 0, .dstY = 0,
+      .dstMemoryType = CU_MEMORYTYPE_HOST,
+      .dstHost = *luma,
+      .dstPitch = surfaceObj->width * bytesPerPixel,
+
+      .WidthInBytes = surfaceObj->width * bytesPerPixel,
+      .Height = surfaceObj->height
+    };
+
+    CUresult result = cu->cuMemcpy2D(&memcpy2d);
+    if (result != CUDA_SUCCESS)
+    {
+            LOG("cuArrayToNV12 luma failed: %d", result);
+            return;
+    }
+
+    //chroma
+    CUDA_MEMCPY2D memcpy2dChroma = {
+      .srcXInBytes = 0, .srcY = 0,
+      .srcMemoryType = CU_MEMORYTYPE_ARRAY,
+      .srcArray = surfaceObj->backingImage->arrays[1],
+
+      .dstXInBytes = 0, .dstY = 0,
+      .dstMemoryType = CU_MEMORYTYPE_HOST,
+      .dstHost = *chroma,
+      .dstPitch = surfaceObj->width * bytesPerPixel,
+
+      .WidthInBytes = surfaceObj->width * bytesPerPixel,
+      .Height = (surfaceObj->height>>1)
+    };
+
+    result = cu->cuMemcpy2D(&memcpy2dChroma);
+    if (result != CUDA_SUCCESS)
+    {
+            LOG("cuArrayToNV12 chroma failed: %d", result);
+            return;
+    }
+}
+
+static float clamp(float a, float b, float c) {
+    return a < b ? b : a > c ? c : a;
+}
+
 static VAStatus nvPutSurface(
         VADriverContextP ctx,
         VASurfaceID surface,
@@ -1124,8 +1209,48 @@ static VAStatus nvPutSurface(
         unsigned int flags /* de-interlacing flags */
     )
 {
-    LOG("In %s", __func__);
-    return VA_STATUS_ERROR_UNIMPLEMENTED;
+    LOG("src: %dx%d - %dx%d, dest: %dx%d - %dx%d", srcx, srcy, srcw, srch, destx, desty, destw, desth);
+    NVDriver *drv = (NVDriver*) ctx->pDriverData;
+    NVSurface *surfaceObj = (NVSurface*) getObject(drv, surface)->obj;
+
+    uint8_t *luma, *chroma;
+    cuArrayToNV12(surfaceObj, &luma, &chroma);
+
+    int size = surfaceObj->width * surfaceObj->height * 4;
+    char *data = (char*) malloc(size);
+    for (uint32_t y = 0; y < surfaceObj->height; y++) {
+        for (uint32_t x = 0; x < surfaceObj->width; x++) {
+            int yi = y * surfaceObj->width + x;
+            int ui = (y/2) * surfaceObj->width + (x&~1);
+            int vi = ui + 1;
+
+            float b = 1.164f * (luma[yi] - 16) + 2.018f * (chroma[ui] - 128);
+            float g = 1.164f * (luma[yi] - 16) - 0.813f * (chroma[vi] - 128) - 0.391f * (chroma[ui] - 128);
+            float r = 1.164f * (luma[yi] - 16) + 1.596f * (chroma[vi] - 128);
+
+            data[yi*4] = clamp(b, 0, 255);
+            data[yi*4+1] = clamp(g, 0, 255);
+            data[yi*4+2]= clamp(r, 0, 255);
+        }
+    }
+
+    Display *display = XOpenDisplay( NULL );
+    int screen = DefaultScreen(display);
+    GC gc = XDefaultGC(display, screen);
+    Visual *visual =  DefaultVisual(display, screen);
+    int depth = DefaultDepth(display, screen);
+
+    XImage *img = XCreateImage(display, visual, depth, ZPixmap, 0, data, surfaceObj->width, surfaceObj->height, 8, 0);
+
+    XPutImage(display, (Drawable) draw, gc, img, srcx, srcy, destx, desty, destw, desth);
+
+    XDestroyImage(img);
+    XCloseDisplay(display);
+
+    free(luma);
+    free(chroma);
+
+    return VA_STATUS_SUCCESS;// VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
 static VAStatus nvQueryImageFormats(
@@ -1506,6 +1631,31 @@ static VAStatus nvQuerySurfaceAttributes(
 
     if (attrib_list == NULL) {
             *num_attribs = 5;
+    } else if (cfg->profile == VAProfileNone) {
+        attrib_list[0].type = VASurfaceAttribPixelFormat;
+        attrib_list[0].flags = 0;
+        attrib_list[0].value.type = VAGenericValueTypeInteger;
+        attrib_list[0].value.value.i = VA_FOURCC_NV12;
+
+        attrib_list[1].type = VASurfaceAttribMinWidth;
+        attrib_list[1].flags = 0;
+        attrib_list[1].value.type = VAGenericValueTypeInteger;
+        attrib_list[1].value.value.i = 64;
+
+        attrib_list[2].type = VASurfaceAttribMinHeight;
+        attrib_list[2].flags = 0;
+        attrib_list[2].value.type = VAGenericValueTypeInteger;
+        attrib_list[2].value.value.i = 64;
+
+        attrib_list[3].type = VASurfaceAttribMaxWidth;
+        attrib_list[3].flags = 0;
+        attrib_list[3].value.type = VAGenericValueTypeInteger;
+        attrib_list[3].value.value.i = 8192;
+
+        attrib_list[4].type = VASurfaceAttribMaxHeight;
+        attrib_list[4].flags = 0;
+        attrib_list[4].value.type = VAGenericValueTypeInteger;
+        attrib_list[4].value.value.i = 8192;
     } else {
         CUVIDDECODECAPS videoDecodeCaps = {
             .eCodecType      = cfg->cudaCodec,
@@ -1755,6 +1905,43 @@ static VAStatus nvTerminate( VADriverContextP ctx )
 extern const NVBackend DIRECT_BACKEND;
 extern const NVBackend EGL_BACKEND;
 
+VAStatus nvQueryVideoProcFilters(
+    VADriverContextP    ctx,
+    VAContextID         context,
+    VAProcFilterType   *filters,
+    unsigned int       *num_filters
+) {
+    LOG("here");
+
+    *num_filters = 0;
+    return VA_STATUS_SUCCESS;
+}
+
+VAStatus nvQueryVideoProcFilterCaps(
+    VADriverContextP    ctx,
+    VAContextID         context,
+    VAProcFilterType    type,
+    void               *filter_caps,
+    unsigned int       *num_filter_caps
+) {
+    LOG("here");
+
+    *num_filter_caps = 0;
+    return VA_STATUS_SUCCESS;
+}
+
+VAStatus nvQueryVideoProcPipelineCaps(
+    VADriverContextP    ctx,
+    VAContextID         context,
+    VABufferID         *filters,
+    unsigned int        num_filters,
+    VAProcPipelineCaps *pipeline_caps
+        ) {
+    LOG("here");
+
+    return VA_STATUS_SUCCESS;
+}
+
 __attribute__((visibility("default")))
 VAStatus __vaDriverInit_1_0(VADriverContextP ctx)
 {
@@ -1809,7 +1996,7 @@ VAStatus __vaDriverInit_1_0(VADriverContextP ctx)
     }
 
     ctx->max_profiles = MAX_PROFILES;
-    ctx->max_entrypoints = 1;
+    ctx->max_entrypoints = 2;
     ctx->max_attributes = 1;
     ctx->max_display_attributes = 1;
     ctx->max_image_formats = 3;
@@ -1892,6 +2079,11 @@ VAStatus __vaDriverInit_1_0(VADriverContextP ctx)
     VTABLE(ctx, CreateBuffer2);
     VTABLE(ctx, QueryProcessingRate);
     VTABLE(ctx, ExportSurfaceHandle);
+
+    ctx->vtable_vpp->vaQueryVideoProcFilters = nvQueryVideoProcFilters;
+    ctx->vtable_vpp->vaQueryVideoProcFilterCaps = nvQueryVideoProcFilterCaps;
+    ctx->vtable_vpp->vaQueryVideoProcPipelineCaps = nvQueryVideoProcPipelineCaps;
+
 
     return VA_STATUS_SUCCESS;
 }
