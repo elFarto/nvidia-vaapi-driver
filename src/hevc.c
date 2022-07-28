@@ -315,6 +315,7 @@ const DECLARE_CODEC(hevcCodec) = {
         [VASliceParameterBufferType] = copyHEVCSliceParam,
         [VASliceDataBufferType] = copyHEVCSliceData,
     },
+    .entrypoint = VAEntrypointVLD,
     .supportedProfileCount = ARRAY_SIZE(hevcSupportedProfiles),
     .supportedProfiles = hevcSupportedProfiles,
 };

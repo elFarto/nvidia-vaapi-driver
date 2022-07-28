@@ -154,6 +154,7 @@ const DECLARE_CODEC(mpeg2Codec) = {
         [VASliceParameterBufferType] = copyMPEG2SliceParam,
         [VASliceDataBufferType] = copyMPEG2SliceData,
     },
+    .entrypoint = VAEntrypointVLD,
     .supportedProfileCount = ARRAY_SIZE(mpeg2SupportedProfiles),
     .supportedProfiles = mpeg2SupportedProfiles,
 };

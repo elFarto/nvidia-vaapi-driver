@@ -111,6 +111,7 @@ const DECLARE_CODEC(vc1Codec) = {
         [VASliceDataBufferType] = copyVC1SliceData,
         [VABitPlaneBufferType] = copyVC1BitPlane,
     },
+    .entrypoint = VAEntrypointVLD,
     .supportedProfileCount = ARRAY_SIZE(vc1SupportedProfiles),
     .supportedProfiles = vc1SupportedProfiles,
 };

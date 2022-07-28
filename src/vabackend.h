@@ -184,6 +184,7 @@ typedef cudaVideoCodec (*ComputeCudaCodec)(VAProfile);
 struct _NVCodec {
     ComputeCudaCodec    computeCudaCodec;
     HandlerFunc         handlers[VABufferTypeMax];
+    VAEntrypoint        entrypoint;
     int                 supportedProfileCount;
     const VAProfile     *supportedProfiles;
 };

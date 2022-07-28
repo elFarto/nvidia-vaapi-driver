@@ -67,6 +67,7 @@ const DECLARE_CODEC(vp8Codec) = {
         [VASliceParameterBufferType] = copyVP8SliceParam,
         [VASliceDataBufferType] = copyVP8SliceData,
     },
+    .entrypoint = VAEntrypointVLD,
     .supportedProfileCount = ARRAY_SIZE(vp8SupportedProfiles),
     .supportedProfiles = vp8SupportedProfiles,
 };

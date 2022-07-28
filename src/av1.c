@@ -342,6 +342,7 @@ const DECLARE_CODEC(av1Codec) = {
         [VASliceParameterBufferType] = copyAV1SliceParam,
         [VASliceDataBufferType] = copyAV1SliceData
     },
+    .entrypoint = VAEntrypointVLD,
     .supportedProfileCount = ARRAY_SIZE(av1SupportedProfiles),
     .supportedProfiles = av1SupportedProfiles,
 };

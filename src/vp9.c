@@ -164,6 +164,7 @@ const DECLARE_CODEC(vp9Codec) = {
         [VASliceParameterBufferType] = copyVP9SliceParam,
         [VASliceDataBufferType] = copyVP9SliceData,
     },
+    .entrypoint = VAEntrypointVLD,
     .supportedProfileCount = ARRAY_SIZE(vp9SupportedProfiles),
     .supportedProfiles = vp9SupportedProfiles,
 };

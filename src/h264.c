@@ -139,6 +139,7 @@ const DECLARE_CODEC(h264Codec) = {
         [VASliceParameterBufferType] = copyH264SliceParam,
         [VASliceDataBufferType] = copyH264SliceData,
     },
+    .entrypoint = VAEntrypointVLD,
     .supportedProfileCount = ARRAY_SIZE(h264SupportedProfiles),
     .supportedProfiles = h264SupportedProfiles,
 };

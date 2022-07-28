@@ -258,34 +258,37 @@ static void deleteObject(NVDriver *drv, VAGenericID id) {
 }
 
 static bool destroyContext(NVDriver *drv, NVContext *nvCtx) {
-    CHECK_CUDA_RESULT(cu->cuCtxPushCurrent(drv->cudaContext));
-
-    //TODO need to check the thread is actually valid
-    LOG("Signaling resolve thread to exit");
-    struct timespec timeout;
-    clock_gettime(CLOCK_REALTIME, &timeout);
-    timeout.tv_sec += 5;
-    nvCtx->exiting = true;
-    pthread_cond_signal(&nvCtx->resolveCondition);
-    LOG("Waiting for resolve thread to exit");
-    int ret = pthread_timedjoin_np(nvCtx->resolveThread, NULL, &timeout);
-    LOG("pthread_timedjoin_np finished with %d", ret);
-
     freeBuffer(&nvCtx->sliceOffsets);
     freeBuffer(&nvCtx->buf);
 
-    bool successful = true;
-    if (nvCtx->decoder != NULL) {
-      CUresult result = cv->cuvidDestroyDecoder(nvCtx->decoder);
-      if (result != CUDA_SUCCESS) {
-          LOG("cuvidDestroyDecoder failed: %d", result);
-          successful = false;
-      }
-    }
-    nvCtx->decoder = NULL;
-    CHECK_CUDA_RESULT(cu->cuCtxPopCurrent(NULL));
+    if (nvCtx->entrypoint == VAEntrypointVLD) {
+        CHECK_CUDA_RESULT(cu->cuCtxPushCurrent(drv->cudaContext));
 
-    return successful;
+        LOG("Signaling resolve thread to exit");
+        struct timespec timeout;
+        clock_gettime(CLOCK_REALTIME, &timeout);
+        timeout.tv_sec += 5;
+        nvCtx->exiting = true;
+        pthread_cond_signal(&nvCtx->resolveCondition);
+        LOG("Waiting for resolve thread to exit");
+        int ret = pthread_timedjoin_np(nvCtx->resolveThread, NULL, &timeout);
+        LOG("pthread_timedjoin_np finished with %d", ret);
+
+        bool successful = true;
+        if (nvCtx->decoder != NULL) {
+          CUresult result = cv->cuvidDestroyDecoder(nvCtx->decoder);
+          if (result != CUDA_SUCCESS) {
+              LOG("cuvidDestroyDecoder failed: %d", result);
+              successful = false;
+          }
+        }
+        nvCtx->decoder = NULL;
+
+        CHECK_CUDA_RESULT(cu->cuCtxPopCurrent(NULL));
+        return successful;
+    }
+
+    return true;
 }
 
 static void deleteAllObjects(NVDriver *drv) {
@@ -692,6 +695,10 @@ static VAStatus nvCreateSurfaces2(
     } else if (format == VA_RT_FORMAT_YUV420_12) {
         nvFormat = cudaVideoSurfaceFormat_P016;
         bitdepth = 12;
+    } else if (format == VA_RT_FORMAT_RGB32) {
+        LOG("creating RGB surface");
+        nvFormat = -1;
+        bitdepth = 8;
     } else {
         LOG("Unknown format: %X", format);
         return VA_STATUS_ERROR_UNSUPPORTED_RT_FORMAT;
@@ -781,7 +788,7 @@ static VAStatus nvCreateContext(
     const NVCodec *selectedCodec = NULL;
     for (const NVCodec *c = __start_nvd_codecs; c < __stop_nvd_codecs; c++) {
         for (int i = 0; i < c->supportedProfileCount; i++) {
-            if (c->supportedProfiles[i] == cfg->profile) {
+            if (c->entrypoint == cfg->entrypoint && c->supportedProfiles[i] == cfg->profile) {
                 selectedCodec = c;
                 break;
             }
@@ -792,66 +799,98 @@ static VAStatus nvCreateContext(
         return VA_STATUS_ERROR_UNSUPPORTED_PROFILE; //TODO not sure this is the correct error
     }
 
-    CUVIDDECODECREATEINFO vdci;
-    memset(&vdci, 0, sizeof(CUVIDDECODECREATEINFO));
-    vdci.ulWidth  = vdci.ulMaxWidth  = vdci.ulTargetWidth  = picture_width;
-    vdci.ulHeight = vdci.ulMaxHeight = vdci.ulTargetHeight = picture_height;
-    vdci.CodecType = cfg->cudaCodec;
-    vdci.ulCreationFlags = cudaVideoCreate_PreferCUVID;
-    vdci.ulIntraDecodeOnly = 0; //TODO (flag & VA_PROGRESSIVE) != 0
-    vdci.display_area.right = picture_width;
-    vdci.display_area.bottom = picture_height;
-    vdci.ChromaFormat = cfg->chromaFormat;
-    vdci.OutputFormat = cfg->surfaceFormat;
-    vdci.bitDepthMinus8 = cfg->bitDepth - 8;
+    if (cfg->entrypoint == VAEntrypointVLD) {
+        CUVIDDECODECREATEINFO vdci;
+        memset(&vdci, 0, sizeof(CUVIDDECODECREATEINFO));
+        vdci.ulWidth  = vdci.ulMaxWidth  = vdci.ulTargetWidth  = picture_width;
+        vdci.ulHeight = vdci.ulMaxHeight = vdci.ulTargetHeight = picture_height;
+        vdci.CodecType = cfg->cudaCodec;
+        vdci.ulCreationFlags = cudaVideoCreate_PreferCUVID;
+        vdci.ulIntraDecodeOnly = 0; //TODO (flag & VA_PROGRESSIVE) != 0
+        vdci.display_area.right = picture_width;
+        vdci.display_area.bottom = picture_height;
+        vdci.ChromaFormat = cfg->chromaFormat;
+        vdci.OutputFormat = cfg->surfaceFormat;
+        vdci.bitDepthMinus8 = cfg->bitDepth - 8;
 
-    vdci.DeinterlaceMode = cudaVideoDeinterlaceMode_Adaptive;
-    //we only ever map one frame at a time, so we can set this to 1
-    //it isn't particually efficient to do this, but it is simple
-    vdci.ulNumOutputSurfaces = 1;
-    //just allocate as many surfaces as have been created since we can never have as much information as the decode to guess correctly
-    vdci.ulNumDecodeSurfaces = drv->surfaceCount != 0 ? drv->surfaceCount : num_render_targets;
-    //reset this to 0 as there are some cases where the context will be destroyed but not terminated, meaning if it's initialised again
-    //we'll have even more surfaces
-    drv->surfaceCount = 0;
+        vdci.DeinterlaceMode = cudaVideoDeinterlaceMode_Adaptive;
+        //we only ever map one frame at a time, so we can set this to 1
+        //it isn't particually efficient to do this, but it is simple
+        vdci.ulNumOutputSurfaces = 1;
+        //just allocate as many surfaces as have been created since we can never have as much information as the decode to guess correctly
+        vdci.ulNumDecodeSurfaces = drv->surfaceCount != 0 ? drv->surfaceCount : num_render_targets;
+        //reset this to 0 as there are some cases where the context will be destroyed but not terminated, meaning if it's initialised again
+        //we'll have even more surfaces
+        drv->surfaceCount = 0;
 
-    CHECK_CUDA_RESULT(cv->cuvidCtxLockCreate(&vdci.vidLock, drv->cudaContext));
+        CHECK_CUDA_RESULT(cv->cuvidCtxLockCreate(&vdci.vidLock, drv->cudaContext));
 
-    CUvideodecoder decoder;
-    CUresult result = cv->cuvidCreateDecoder(&decoder, &vdci);
+        CUvideodecoder decoder;
+        CUresult result = cv->cuvidCreateDecoder(&decoder, &vdci);
 
-    if (result != CUDA_SUCCESS) {
-        LOG("cuvidCreateDecoder failed: %d", result);
-        return VA_STATUS_ERROR_ALLOCATION_FAILED;
+        if (result != CUDA_SUCCESS) {
+            LOG("cuvidCreateDecoder failed: %d", result);
+            return VA_STATUS_ERROR_ALLOCATION_FAILED;
+        }
+
+        Object contextObj = allocateObject(drv, OBJECT_TYPE_CONTEXT, sizeof(NVContext));
+        NVContext *nvCtx = (NVContext*) contextObj->obj;
+        nvCtx->drv = drv;
+        nvCtx->decoder = decoder;
+        nvCtx->profile = cfg->profile;
+        nvCtx->entrypoint = cfg->entrypoint;
+        nvCtx->width = picture_width;
+        nvCtx->height = picture_height;
+        nvCtx->codec = selectedCodec;
+
+        pthread_mutexattr_t attrib;
+        pthread_mutexattr_init(&attrib);
+        pthread_mutexattr_settype(&attrib, PTHREAD_MUTEX_RECURSIVE);
+        pthread_mutex_init(&nvCtx->surfaceCreationMutex, &attrib);
+
+        pthread_mutex_init(&nvCtx->resolveMutex, NULL);
+        pthread_cond_init(&nvCtx->resolveCondition, NULL);
+        int err = pthread_create(&nvCtx->resolveThread, NULL, &resolveSurfaces, nvCtx);
+        if (err != 0) {
+            LOG("Unable to create resolve thread: %d", err);
+            deleteObject(drv, contextObj->id);
+            return VA_STATUS_ERROR_OPERATION_FAILED;
+        }
+
+        *context = contextObj->id;
+
+        return VA_STATUS_SUCCESS;
+    } else if (cfg->entrypoint == VAEntrypointVideoProc) {
+        Object contextObj = allocateObject(drv, OBJECT_TYPE_CONTEXT, sizeof(NVContext));
+        NVContext *nvCtx = (NVContext*) contextObj->obj;
+        nvCtx->drv = drv;
+        nvCtx->decoder = NULL;
+        nvCtx->profile = cfg->profile;
+        nvCtx->entrypoint = cfg->entrypoint;
+        nvCtx->width = picture_width;
+        nvCtx->height = picture_height;
+        nvCtx->codec = selectedCodec;
+
+//        pthread_mutexattr_t attrib;
+//        pthread_mutexattr_init(&attrib);
+//        pthread_mutexattr_settype(&attrib, PTHREAD_MUTEX_RECURSIVE);
+//        pthread_mutex_init(&nvCtx->surfaceCreationMutex, &attrib);
+
+//        pthread_mutex_init(&nvCtx->resolveMutex, NULL);
+//        pthread_cond_init(&nvCtx->resolveCondition, NULL);
+//        int err = pthread_create(&nvCtx->resolveThread, NULL, &resolveSurfaces, nvCtx);
+//        if (err != 0) {
+//            LOG("Unable to create resolve thread: %d", err);
+//            deleteObject(drv, contextObj->id);
+//            return VA_STATUS_ERROR_OPERATION_FAILED;
+//        }
+
+        *context = contextObj->id;
+
+        return VA_STATUS_SUCCESS;
     }
 
-    Object contextObj = allocateObject(drv, OBJECT_TYPE_CONTEXT, sizeof(NVContext));
-    NVContext *nvCtx = (NVContext*) contextObj->obj;
-    nvCtx->drv = drv;
-    nvCtx->decoder = decoder;
-    nvCtx->profile = cfg->profile;
-    nvCtx->entrypoint = cfg->entrypoint;
-    nvCtx->width = picture_width;
-    nvCtx->height = picture_height;
-    nvCtx->codec = selectedCodec;
-
-    pthread_mutexattr_t attrib;
-    pthread_mutexattr_init(&attrib);
-    pthread_mutexattr_settype(&attrib, PTHREAD_MUTEX_RECURSIVE);
-    pthread_mutex_init(&nvCtx->surfaceCreationMutex, &attrib);
-
-    pthread_mutex_init(&nvCtx->resolveMutex, NULL);
-    pthread_cond_init(&nvCtx->resolveCondition, NULL);
-    int err = pthread_create(&nvCtx->resolveThread, NULL, &resolveSurfaces, nvCtx);
-    if (err != 0) {
-        LOG("Unable to create resolve thread: %d", err);
-        deleteObject(drv, contextObj->id);
-        return VA_STATUS_ERROR_OPERATION_FAILED;
-    }
-
-    *context = contextObj->id;
-
-    return VA_STATUS_SUCCESS;
+    return VA_STATUS_ERROR_INVALID_CONFIG;
 }
 
 static VAStatus nvDestroyContext(
@@ -1001,12 +1040,18 @@ static VAStatus nvBeginPicture(
     surf->resolving = 1;
     pthread_mutex_unlock(&surf->mutex);
 
-    memset(&nvCtx->pPicParams, 0, sizeof(CUVIDPICPARAMS));
-    nvCtx->renderTargets = surf;
-    nvCtx->renderTargets->progressiveFrame = true; //assume we're producing progressive frame unless the codec says otherwise
-    nvCtx->pPicParams.CurrPicIdx = nvCtx->renderTargets->pictureIdx;
+    if (nvCtx->entrypoint == VAEntrypointVLD) {
+        memset(&nvCtx->pPicParams, 0, sizeof(CUVIDPICPARAMS));
+        nvCtx->renderTargets = surf;
+        nvCtx->renderTargets->progressiveFrame = true; //assume we're producing progressive frame unless the codec says otherwise
+        nvCtx->pPicParams.CurrPicIdx = nvCtx->renderTargets->pictureIdx;
 
-    return VA_STATUS_SUCCESS;
+        return VA_STATUS_SUCCESS;
+    } else if (nvCtx->entrypoint == VAEntrypointVLD) {
+        return VA_STATUS_SUCCESS;
+    }
+
+    return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
 static VAStatus nvRenderPicture(
@@ -1047,39 +1092,46 @@ static VAStatus nvEndPicture(
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
     NVContext *nvCtx = (NVContext*) getObject(drv, context)->obj;
 
-    CUVIDPICPARAMS *picParams = &nvCtx->pPicParams;
+    if (nvCtx->entrypoint == VAEntrypointVLD) {
+        CUVIDPICPARAMS *picParams = &nvCtx->pPicParams;
 
-    picParams->pBitstreamData = nvCtx->buf.buf;
-    picParams->pSliceDataOffsets = nvCtx->sliceOffsets.buf;
-    nvCtx->buf.size = 0;
-    nvCtx->sliceOffsets.size = 0;
+        picParams->pBitstreamData = nvCtx->buf.buf;
+        picParams->pSliceDataOffsets = nvCtx->sliceOffsets.buf;
+        nvCtx->buf.size = 0;
+        nvCtx->sliceOffsets.size = 0;
 
-    CUresult result = cv->cuvidDecodePicture(nvCtx->decoder, picParams);
-    if (result != CUDA_SUCCESS)
-    {
-        LOG("cuvidDecodePicture failed: %d", result);
-        return VA_STATUS_ERROR_DECODING_ERROR;
+        CUresult result = cv->cuvidDecodePicture(nvCtx->decoder, picParams);
+        if (result != CUDA_SUCCESS)
+        {
+            LOG("cuvidDecodePicture failed: %d", result);
+            return VA_STATUS_ERROR_DECODING_ERROR;
+        }
+        LOG("Decoded frame successfully to idx: %d (%p)", picParams->CurrPicIdx, nvCtx->renderTargets);
+
+        NVSurface *surface = nvCtx->renderTargets;
+
+        surface->context = nvCtx;
+        surface->topFieldFirst = !picParams->bottom_field_flag;
+        surface->secondField = picParams->second_field;
+
+        //TODO check we're not overflowing the queue
+        pthread_mutex_lock(&nvCtx->resolveMutex);
+        nvCtx->surfaceQueue[nvCtx->surfaceQueueWriteIdx++] = nvCtx->renderTargets;
+        if (nvCtx->surfaceQueueWriteIdx >= SURFACE_QUEUE_SIZE) {
+            nvCtx->surfaceQueueWriteIdx = 0;
+        }
+        pthread_mutex_unlock(&nvCtx->resolveMutex);
+
+        //Wake up the resolve thread
+        pthread_cond_signal(&nvCtx->resolveCondition);
+
+        return VA_STATUS_SUCCESS;
+    } else if (nvCtx->entrypoint == VAEntrypointVideoProc) {
+        LOG("Here VAEntrypointVideoProc");
+        return VA_STATUS_SUCCESS;
     }
-    LOG("Decoded frame successfully to idx: %d (%p)", picParams->CurrPicIdx, nvCtx->renderTargets);
 
-    NVSurface *surface = nvCtx->renderTargets;
-
-    surface->context = nvCtx;
-    surface->topFieldFirst = !picParams->bottom_field_flag;
-    surface->secondField = picParams->second_field;
-
-    //TODO check we're not overflowing the queue
-    pthread_mutex_lock(&nvCtx->resolveMutex);
-    nvCtx->surfaceQueue[nvCtx->surfaceQueueWriteIdx++] = nvCtx->renderTargets;
-    if (nvCtx->surfaceQueueWriteIdx >= SURFACE_QUEUE_SIZE) {
-        nvCtx->surfaceQueueWriteIdx = 0;
-    }
-    pthread_mutex_unlock(&nvCtx->resolveMutex);
-
-    //Wake up the resolve thread
-    pthread_cond_signal(&nvCtx->resolveCondition);
-
-    return VA_STATUS_SUCCESS;
+    return VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
 static VAStatus nvSyncSurface(
@@ -1213,56 +1265,73 @@ static VAStatus nvPutSurface(
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
     NVSurface *surfaceObj = (NVSurface*) getObject(drv, surface)->obj;
 
-    uint8_t *luma, *chroma;
-    cuArrayToNV12(surfaceObj, &luma, &chroma);
+    //this doesn't work, i guess CUDA doesn't like pixmaps
+    //EGLDisplay dpy = eglGetDisplay(NULL);
+    //eglInitialize(dpy, NULL, NULL);
+    //EGLImage img = eglCreateImage(dpy, EGL_NO_CONTEXT, EGL_NATIVE_PIXMAP_KHR, draw, NULL);
+    //CUgraphicsResource gr;
+    //CHECK_CUDA_RESULT(drv->cu->cuGraphicsEGLRegisterImage(&gr, img, 0));
 
-    int size = surfaceObj->width * surfaceObj->height * 4;
-    char *data = (char*) malloc(size);
+//    uint8_t *luma, *chroma;
+//    cuArrayToNV12(surfaceObj, &luma, &chroma);
 
-    for (uint32_t y = 0; y < surfaceObj->height; y+=2) {
-        for (uint32_t x = 0; x < surfaceObj->width; x+=2) {
-            int yi[4] = {
-                y * surfaceObj->width + x,
-                y * surfaceObj->width + x+1,
-                (y+1) * surfaceObj->width + x,
-                (y+1) * surfaceObj->width + x+1
-            };
+//    int size = surfaceObj->width * surfaceObj->height * 4;
+//    char *data = (char*) malloc(size);
 
-            int ui = (y>>1) * surfaceObj->width + x;
-            int vi = ui + 1;
+//    for (uint32_t y = 0; y < surfaceObj->height; y+=2) {
+//        for (uint32_t x = 0; x < surfaceObj->width; x+=2) {
+//            int yi[4] = {
+//                y * surfaceObj->width + x,
+//                y * surfaceObj->width + x+1,
+//                (y+1) * surfaceObj->width + x,
+//                (y+1) * surfaceObj->width + x+1
+//            };
 
-            float bc = 2.018f * (chroma[ui] - 128);
-            float gc = 0.813f * (chroma[vi] - 128) - 0.391f * (chroma[ui] - 128);
-            float rc = 1.596f * (chroma[vi] - 128);
+//            int ui = (y>>1) * surfaceObj->width + x;
+//            int vi = ui + 1;
 
-            for (int c = 0; c < 4; c++) {
-                float b = 1.164f * (luma[yi[c]] - 16) + bc;
-                float g = 1.164f * (luma[yi[c]] - 16) - gc;
-                float r = 1.164f * (luma[yi[c]] - 16) + rc;
+//            float Cr = chroma[vi] - 128;
+//            float Cb = chroma[ui] - 128;
 
-                data[yi[c]*4]   = clamp(b, 0, 255);
-                data[yi[c]*4+1] = clamp(g, 0, 255);
-                data[yi[c]*4+2] = clamp(r, 0, 255);
-            }
-        }
-    }
+//            //BT.709 to RGB
+//            float rc = Cr * 1.5748f;
+//            float gc = Cb * -0.187324f + Cr * -0.468124f;
+//            float bc = Cb * 1.8556f;
 
-    Display *display = XOpenDisplay( NULL );
-    int screen = DefaultScreen(display);
-    GC gc = XDefaultGC(display, screen);
-    Visual *visual =  DefaultVisual(display, screen);
-    int depth = DefaultDepth(display, screen);
+//            for (int c = 0; c < 4; c++) {
+//                float Y = luma[yi[c]];
 
-    XImage *img = XCreateImage(display, visual, depth, ZPixmap, 0, data, surfaceObj->width, surfaceObj->height, 8, 0);
+//                float r = Y + rc;
+//                float g = Y + gc;
+//                float b = Y + bc;
 
-    XPutImage(display, (Drawable) draw, gc, img, srcx, srcy, destx, desty, destw, desth);
+//                float Rfull = (r - 16) * 1.164383562f;
+//                float Gfull = (g - 16) * 1.164383562f;
+//                float Bfull = (b - 16) * 1.164383562f;
 
-    XDestroyImage(img);
-    XCloseDisplay(display);
+//                data[yi[c]*4+2] = clamp(Rfull, 0, 255);
+//                data[yi[c]*4+1] = clamp(Gfull, 0, 255);
+//                data[yi[c]*4]   = clamp(Bfull, 0, 255);
+//            }
+//        }
+//    }
 
-    free(luma);
-    free(chroma);
-    //data is freed by XDestroyImage
+//    Display *display = XOpenDisplay( NULL );
+//    int screen = DefaultScreen(display);
+//    GC gc = XDefaultGC(display, screen);
+//    Visual *visual =  DefaultVisual(display, screen);
+//    int depth = DefaultDepth(display, screen);
+
+//    XImage *img = XCreateImage(display, visual, depth, ZPixmap, 0, data, surfaceObj->width, surfaceObj->height, 8, 0);
+
+//    XPutImage(display, (Drawable) draw, gc, img, srcx, srcy, destx, desty, destw, desth);
+
+//    XDestroyImage(img);
+//    XCloseDisplay(display);
+
+//    free(luma);
+//    free(chroma);
+//    //data is freed by XDestroyImage
 
     return VA_STATUS_SUCCESS;// VA_STATUS_ERROR_UNIMPLEMENTED;
 }

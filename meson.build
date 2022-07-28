@@ -42,6 +42,7 @@ shared_library(
         'src/vp8.c',
         'src/vp9.c',
         'src/list.c',
+        'src/vpp.c',
     ],
     dependencies: [
         libva_deps,
