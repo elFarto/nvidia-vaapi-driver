@@ -113,6 +113,23 @@ bool nv_attach_gpus(int fd, int gpu) {
     return ret == 0;
 }
 
+bool nv_dup_object(int fd, NvHandle hClientSrc, NvHandle hObjectSrc, NvHandle hClient, NvHandle hParent, NvHandle *hObject) {
+    NVOS55_PARAMETERS params = {
+        .hClientSrc = hClientSrc,
+        .hObjectSrc = hObjectSrc,
+        .hClient = hClient,
+        .hObject = 0,
+        .hParent = hParent,
+        .flags = 0
+    };
+
+    int ret = ioctl(fd, _IOC(_IOC_READ|_IOC_WRITE, NV_IOCTL_MAGIC, NV_ESC_RM_DUP_OBJECT, sizeof(params)), &params);
+
+    *hObject = params.hObject;
+
+    return ret == 0;
+}
+
 bool nv_export_object_to_fd(int fd, int export_fd, NvHandle hClient, NvHandle hDevice, NvHandle hParent, NvHandle hObject) {
     NV0000_CTRL_OS_UNIX_EXPORT_OBJECT_TO_FD_PARAMS params = {
         .fd = export_fd,
@@ -181,6 +198,10 @@ bool get_device_uuid(NVDriverContext *context, char uuid[16]) {
     }
 
     return true;
+}
+
+bool dup_object(NVDriverContext *context, NvHandle hClientSrc, NvHandle hObjectSrc, NvHandle *hObject) {
+    return nv_dup_object(context->nvctlFd, hClientSrc, hObjectSrc, context->clientObject, context->deviceObject, hObject);
 }
 
 bool init_nvdriver(NVDriverContext *context, int drmFd) {
@@ -383,6 +404,44 @@ bool alloc_memory(NVDriverContext *context, uint32_t size, int *fd) {
     }
 
     return false;
+}
+
+bool export_object(NVDriverContext *context, int *fd, uint32_t object) {
+    //open a new handle to return
+    int nvctlFd2 = open("/dev/nvidiactl", O_RDWR|O_CLOEXEC);
+    if (nvctlFd2 == -1) {
+        LOG("open /dev/nvidiactl failed");
+        return false;
+    }
+
+    //attach the new fd to the correct gpus
+    int ret = nv_attach_gpus(nvctlFd2, context->devInfo.gpu_id);
+    if (!ret) {
+        LOG("nv_attach_gpus failed");
+        goto err;
+    }
+
+    //actually export the object
+    ret = nv_export_object_to_fd(context->nvctlFd, nvctlFd2, context->clientObject, context->deviceObject, context->deviceObject, object);
+    if (!ret) {
+        LOG("nv_export_object_to_fd failed");
+        goto err;
+    }
+
+    ret = nv_free_object(context->nvctlFd, context->clientObject, object);
+    if (!ret) {
+        LOG("nv_free_object failed");
+        goto err;
+    }
+
+    *fd = nvctlFd2;
+    return true;
+err:
+   LOG("error");
+   if (nvctlFd2 > 0) {
+       close(nvctlFd2);
+   }
+   return false;
 }
 
 bool alloc_image(NVDriverContext *context, uint32_t width, uint32_t height, uint8_t channels, uint8_t bitsPerChannel, NVDriverImage *image) {

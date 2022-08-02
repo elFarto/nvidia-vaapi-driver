@@ -28,6 +28,8 @@
 
 #include <time.h>
 
+#include "x11.h"
+
 pthread_mutex_t concurrency_mutex = PTHREAD_MUTEX_INITIALIZER;
 static uint32_t instances;
 static uint32_t max_instances = 0;
@@ -212,7 +214,7 @@ static Object getObject(NVDriver *drv, VAGenericID id) {
     return ret;
 }
 
-static void* getObjectPtr(NVDriver *drv, VAGenericID id) {
+void* getObjectPtr(NVDriver *drv, VAGenericID id) {
     if (id != VA_INVALID_ID) {
         Object o = getObject(drv, id);
         if (o != NULL) {
@@ -1180,160 +1182,6 @@ static VAStatus nvQuerySurfaceError(
 {
     LOG("In %s", __func__);
     return VA_STATUS_ERROR_UNIMPLEMENTED;
-}
-
-#include <X11/Xlib.h>
-#include <X11/Xutil.h>
-#include <math.h>
-
-static void cuArrayToNV12(NVSurface *surfaceObj, uint8_t **luma, uint8_t **chroma) {
-    int bytesPerPixel = 1;
-    if (surfaceObj->format != cudaVideoSurfaceFormat_NV12) {
-        bytesPerPixel = 2;
-    }
-
-    *luma = malloc(surfaceObj->width * surfaceObj->height * bytesPerPixel);
-    *chroma = malloc(surfaceObj->width * (surfaceObj->height/2) * bytesPerPixel);
-
-    //luma
-    CUDA_MEMCPY2D memcpy2d = {
-      .srcXInBytes = 0, .srcY = 0,
-      .srcMemoryType = CU_MEMORYTYPE_ARRAY,
-      .srcArray = surfaceObj->backingImage->arrays[0],
-
-      .dstXInBytes = 0, .dstY = 0,
-      .dstMemoryType = CU_MEMORYTYPE_HOST,
-      .dstHost = *luma,
-      .dstPitch = surfaceObj->width * bytesPerPixel,
-
-      .WidthInBytes = surfaceObj->width * bytesPerPixel,
-      .Height = surfaceObj->height
-    };
-
-    CUresult result = cu->cuMemcpy2D(&memcpy2d);
-    if (result != CUDA_SUCCESS)
-    {
-            LOG("cuArrayToNV12 luma failed: %d", result);
-            return;
-    }
-
-    //chroma
-    CUDA_MEMCPY2D memcpy2dChroma = {
-      .srcXInBytes = 0, .srcY = 0,
-      .srcMemoryType = CU_MEMORYTYPE_ARRAY,
-      .srcArray = surfaceObj->backingImage->arrays[1],
-
-      .dstXInBytes = 0, .dstY = 0,
-      .dstMemoryType = CU_MEMORYTYPE_HOST,
-      .dstHost = *chroma,
-      .dstPitch = surfaceObj->width * bytesPerPixel,
-
-      .WidthInBytes = surfaceObj->width * bytesPerPixel,
-      .Height = (surfaceObj->height>>1)
-    };
-
-    result = cu->cuMemcpy2D(&memcpy2dChroma);
-    if (result != CUDA_SUCCESS)
-    {
-            LOG("cuArrayToNV12 chroma failed: %d", result);
-            return;
-    }
-}
-
-static float clamp(float a, float b, float c) {
-    return a < b ? b : a > c ? c : a;
-}
-
-static VAStatus nvPutSurface(
-        VADriverContextP ctx,
-        VASurfaceID surface,
-        void* draw, /* Drawable of window system */
-        short srcx,
-        short srcy,
-        unsigned short srcw,
-        unsigned short srch,
-        short destx,
-        short desty,
-        unsigned short destw,
-        unsigned short desth,
-        VARectangle *cliprects, /* client supplied clip list */
-        unsigned int number_cliprects, /* number of clip rects in the clip list */
-        unsigned int flags /* de-interlacing flags */
-    )
-{
-    LOG("src: %dx%d - %dx%d, dest: %dx%d - %dx%d", srcx, srcy, srcw, srch, destx, desty, destw, desth);
-    NVDriver *drv = (NVDriver*) ctx->pDriverData;
-    NVSurface *surfaceObj = (NVSurface*) getObject(drv, surface)->obj;
-
-    //this doesn't work, i guess CUDA doesn't like pixmaps
-    //EGLDisplay dpy = eglGetDisplay(NULL);
-    //eglInitialize(dpy, NULL, NULL);
-    //EGLImage img = eglCreateImage(dpy, EGL_NO_CONTEXT, EGL_NATIVE_PIXMAP_KHR, draw, NULL);
-    //CUgraphicsResource gr;
-    //CHECK_CUDA_RESULT(drv->cu->cuGraphicsEGLRegisterImage(&gr, img, 0));
-
-//    uint8_t *luma, *chroma;
-//    cuArrayToNV12(surfaceObj, &luma, &chroma);
-
-//    int size = surfaceObj->width * surfaceObj->height * 4;
-//    char *data = (char*) malloc(size);
-
-//    for (uint32_t y = 0; y < surfaceObj->height; y+=2) {
-//        for (uint32_t x = 0; x < surfaceObj->width; x+=2) {
-//            int yi[4] = {
-//                y * surfaceObj->width + x,
-//                y * surfaceObj->width + x+1,
-//                (y+1) * surfaceObj->width + x,
-//                (y+1) * surfaceObj->width + x+1
-//            };
-
-//            int ui = (y>>1) * surfaceObj->width + x;
-//            int vi = ui + 1;
-
-//            float Cr = chroma[vi] - 128;
-//            float Cb = chroma[ui] - 128;
-
-//            //BT.709 to RGB
-//            float rc = Cr * 1.5748f;
-//            float gc = Cb * -0.187324f + Cr * -0.468124f;
-//            float bc = Cb * 1.8556f;
-
-//            for (int c = 0; c < 4; c++) {
-//                float Y = luma[yi[c]];
-
-//                float r = Y + rc;
-//                float g = Y + gc;
-//                float b = Y + bc;
-
-//                float Rfull = (r - 16) * 1.164383562f;
-//                float Gfull = (g - 16) * 1.164383562f;
-//                float Bfull = (b - 16) * 1.164383562f;
-
-//                data[yi[c]*4+2] = clamp(Rfull, 0, 255);
-//                data[yi[c]*4+1] = clamp(Gfull, 0, 255);
-//                data[yi[c]*4]   = clamp(Bfull, 0, 255);
-//            }
-//        }
-//    }
-
-//    Display *display = XOpenDisplay( NULL );
-//    int screen = DefaultScreen(display);
-//    GC gc = XDefaultGC(display, screen);
-//    Visual *visual =  DefaultVisual(display, screen);
-//    int depth = DefaultDepth(display, screen);
-
-//    XImage *img = XCreateImage(display, visual, depth, ZPixmap, 0, data, surfaceObj->width, surfaceObj->height, 8, 0);
-
-//    XPutImage(display, (Drawable) draw, gc, img, srcx, srcy, destx, desty, destw, desth);
-
-//    XDestroyImage(img);
-//    XCloseDisplay(display);
-
-//    free(luma);
-//    free(chroma);
-//    //data is freed by XDestroyImage
-
-    return VA_STATUS_SUCCESS;// VA_STATUS_ERROR_UNIMPLEMENTED;
 }
 
 static VAStatus nvQueryImageFormats(

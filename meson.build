@@ -21,8 +21,16 @@ ffnvcodec_deps = dependency('ffnvcodec', version: '>= 11.1.5.1')
 libva_deps = dependency('libva', version: '>= 1.8.0')
 thread_dep = dependency('threads')
 x11_dep = cc.find_library('X11')
+xcb_dep = dependency('xcb')
 
 nvidia_incdir = include_directories('nvidia-include')
+
+ld = find_program('ld')
+cudaShader = custom_target('objectify-data',
+    output : 'YUVtoRGB.ptx.o',
+    input : 'src/YUVtoRGB.ptx',
+    command : [ ld, '--relocatable', '--format', 'binary', '--output', '@OUTPUT@', '@INPUT@' ],
+)
 
 shared_library(
     'nvidia_drv_video',
@@ -43,6 +51,8 @@ shared_library(
         'src/vp9.c',
         'src/list.c',
         'src/vpp.c',
+        'src/x11.c',
+        cudaShader
     ],
     dependencies: [
         libva_deps,
@@ -52,7 +62,8 @@ shared_library(
         m_dep,
         dl_dep,
         thread_dep,
-        x11_dep
+        x11_dep,
+        xcb_dep
     ],
     include_directories: nvidia_incdir,
     install: true,

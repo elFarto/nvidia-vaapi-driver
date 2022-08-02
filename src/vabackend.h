@@ -191,6 +191,7 @@ struct _NVCodec {
 
 typedef struct _NVCodec NVCodec;
 
+void* getObjectPtr(NVDriver *drv, VAGenericID id);
 void appendBuffer(AppendableBuffer *ab, const void *buf, uint64_t size);
 int pictureIdxFromSurfaceId(NVDriver *ctx, VASurfaceID surf);
 NVSurface* nvSurfaceFromSurfaceId(NVDriver *drv, VASurfaceID surf);
