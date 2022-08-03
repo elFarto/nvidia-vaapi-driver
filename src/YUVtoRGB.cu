@@ -1,12 +1,10 @@
 #include <stdint.h>
 
-extern "C" __global__ void convert_nv12_bt701_block_linear(uint8_t *out, uint8_t *luma, uint8_t *chroma, uint32_t width, uint32_t height) {
+extern "C" __global__ void convert_nv12_bt701_block_linear(uint8_t *out, uint8_t *luma, uint8_t *chroma, uint32_t width, uint32_t height, uint32_t log2GobsPerBlockX, uint32_t log2GobsPerBlockY) {
 
     //TODO these need to be passed in
     uint32_t gobWidth    = 16;//px TODO calculate these from hardware
     uint32_t gobHeight   = 8;//px
-    uint32_t log2GobsPerBlockX = 2;
-    uint32_t log2GobsPerBlockY = 4;
     uint32_t bytesPerPixel = 4;//bpc * channels / 8;
 
     uint32_t blockWidth  = gobWidth * (1<<log2GobsPerBlockX);//px

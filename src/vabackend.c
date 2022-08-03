@@ -39,6 +39,7 @@ static CuvidFunctions *cv;
 
 extern const NVCodec __start_nvd_codecs[];
 extern const NVCodec __stop_nvd_codecs[];
+extern const char _binary_YUVtoRGB_ptx_start[];
 
 static FILE *LOG_OUTPUT;
 
@@ -1823,12 +1824,16 @@ static VAStatus nvTerminate( VADriverContextP ctx )
 
     drv->backend->releaseExporter(drv);
 
+    CHECK_CUDA_RESULT(cu->cuModuleUnload(drv->yuvModule));
+
     CHECK_CUDA_RESULT(cu->cuCtxDestroy(drv->cudaContext));
 
     pthread_mutex_lock(&concurrency_mutex);
     instances--;
     LOG("Now have %d (%d max) instances", instances, max_instances);
     pthread_mutex_unlock(&concurrency_mutex);
+
+
 
     return VA_STATUS_SUCCESS;
 }
@@ -1952,6 +1957,11 @@ VAStatus __vaDriverInit_1_0(VADriverContextP ctx)
     }
 
     CHECK_CUDA_RESULT(cu->cuCtxCreate(&drv->cudaContext, CU_CTX_SCHED_BLOCKING_SYNC, drv->cudaGpuId));
+
+    //load the CUDA module responsible for YUV to RGB conversion
+    //TODO we're sort of relying on there being a trailing \0 somewhere in the binary file
+    CHECK_CUDA_RESULT(cu->cuModuleLoadData(&drv->yuvModule, &_binary_YUVtoRGB_ptx_start));
+    CHECK_CUDA_RESULT(cu->cuModuleGetFunction(&drv->yuvFunction, drv->yuvModule, "convert_nv12_bt701_block_linear"));
 
 #define VTABLE(ctx, func) ctx->vtable->va ## func = nv ## func
 

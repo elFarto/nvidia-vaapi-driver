@@ -136,6 +136,10 @@ typedef struct _NVDriver
     EGLStreamKHR            eglStream;
     CUeglStreamConnection   cuStreamConnection;
     int                     numFramesPresented;
+    //fields for YUVtoRGB module
+    CUmodule                yuvModule;
+    CUfunction              yuvFunction;
+    void                    *xcbConnection
 } NVDriver;
 
 struct _NVCodec;

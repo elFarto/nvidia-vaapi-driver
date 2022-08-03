@@ -25,10 +25,28 @@ xcb_dep = dependency('xcb')
 
 nvidia_incdir = include_directories('nvidia-include')
 
+nvcc_dep = find_program('nvcc', required: false)
+if nvcc_dep.found()
+    cudaShaderPtx = custom_target('nvcc-ptx',
+        output : 'YUVtoRGB.ptx',
+        input : 'src/YUVtoRGB.cu',
+        command : [ nvcc_dep, '-allow-unsupported-compiler', '--ptx', '-o', '@OUTPUT@', '@INPUT@' ],
+    )
+else
+    #if we don't have nvcc just use the prebuilt version over
+    #we have to copy to the same place nvcc would output it's version to as ld uses the
+    #input file name as part of the symbol name, so they need to match
+    cudaShaderPtx = custom_target('nvcc-ptx',
+        output : 'YUVtoRGB.ptx',
+        input : 'src/YUVtoRGB.ptx',
+        command : [ 'cp', '@INPUT@', '@OUTPUT@' ],
+    )
+endif
+
 ld = find_program('ld')
 cudaShader = custom_target('objectify-data',
     output : 'YUVtoRGB.ptx.o',
-    input : 'src/YUVtoRGB.ptx',
+    input : cudaShaderPtx,
     command : [ ld, '--relocatable', '--format', 'binary', '--output', '@OUTPUT@', '@INPUT@' ],
 )
 

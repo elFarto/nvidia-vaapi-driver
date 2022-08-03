@@ -4,7 +4,7 @@
 
 #include <xcb/xcbext.h>
 #include <math.h>
-
+#include <unistd.h>
 
 typedef struct {
     int padding;
@@ -46,19 +46,19 @@ xcb_extension_t xcb_nv_glx = {
  */
 xcb_nv_glx_export_pixmap_response* pixmapToNvHandle(xcb_connection_t *c, int pixmap, int newXid, int client) {
     static const xcb_protocol_request_t xcb_req = {
-        /* count */ 2,
-        /* ext */ &xcb_nv_glx,
-        /* opcode */ 0x2d,
-        /* isvoid */ 0
+        .count = 2,
+        .ext = &xcb_nv_glx,
+        .opcode = 0x2d,
+        .isvoid = 0
     };
 
-    struct iovec xcb_parts[4];
     xcb_nv_glx_export_pixmap_request xcb_out = {
         .pixmap = pixmap,
         .newXid = newXid,
         .client = client,
     };
 
+    struct iovec xcb_parts[4];
     xcb_parts[2].iov_base = (char *) &xcb_out;
     xcb_parts[2].iov_len = sizeof(xcb_out);
     xcb_parts[3].iov_base = 0;
@@ -97,7 +97,7 @@ static CUdeviceptr cuArrayToNV12(NVDriver *drv, NVSurface *surfaceObj) {
     }
 
     CUdeviceptr mem;
-    drv->cu->cuMemAlloc(&mem, surfaceObj->width * (surfaceObj->height + (surfaceObj->height>>1)) * bytesPerPixel);
+    CHECK_CUDA_RESULT(drv->cu->cuMemAlloc(&mem, surfaceObj->width * (surfaceObj->height + (surfaceObj->height>>1)) * bytesPerPixel));
 
     CUdeviceptr luma = mem;
     CUdeviceptr chroma = mem + (surfaceObj->width * surfaceObj->height * bytesPerPixel);
@@ -152,10 +152,8 @@ static CUdeviceptr cuArrayToNV12(NVDriver *drv, NVSurface *surfaceObj) {
 }
 
 
-//ugh horible name, maybe use objcopy?
-extern char _binary____src_YUVtoRGB_ptx_start[];
 
-static void import_pixmap_to_cuda(NVDriver *drv, int fd, uint32_t log2GobsPerBlockX, uint32_t log2GobsPerBlockY, uint32_t width, uint32_t height, int bpc, int channels, NVCudaImage *cudaImage, NVSurface *surface) {
+static void convert_image(NVDriver *drv, int fd, uint32_t log2GobsPerBlockX, uint32_t log2GobsPerBlockY, uint32_t width, uint32_t height, int bpc, int channels, NVCudaImage *cudaImage, NVSurface *surface) {
     uint32_t gobWidth    = 16;//px TODO calculate these from hardware
     uint32_t gobHeight   = 8;//px
     uint32_t blockWidth  = gobWidth * (1<<log2GobsPerBlockX);//px
@@ -165,60 +163,50 @@ static void import_pixmap_to_cuda(NVDriver *drv, int fd, uint32_t log2GobsPerBlo
     uint32_t blocksPerX  = (width/*+blockWidth-1*/)/blockWidth;
     uint32_t blocksPerY  = (height/*+blockHeight-1*/)/blockHeight;
 
+    //TODO not entirely sure about this
     if (blocksPerX == 0) {
         blocksPerX = 1;
     }
     if (blocksPerY == 0) {
         blocksPerY = 1;
     }
-    blocksPerY++;
+    blocksPerY++; //???
     uint32_t blockSize   = blockWidth * blockHeight * bytesPerPixel;
 
     uint32_t size = blocksPerX * blocksPerY * blockSize;
 
+    LOG("importing memory size: %dx%d = %d", width, height, size);
+    //import the fd as external memory
     CUDA_EXTERNAL_MEMORY_HANDLE_DESC extMemDesc = {
         .type = CU_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD,
         .handle.fd = fd,
         .flags = 0,
         .size = size
     };
-
-    LOG("importing memory size: %dx%d = %d", width, height, size);
-
     CHECK_CUDA_RESULT(drv->cu->cuImportExternalMemory(&cudaImage->extMem, &extMemDesc));
 
+    //close the fd representing the object to prevent us leaking it
     close(fd);
 
-    CUdeviceptr ptr;
+    //now get a pointer to the buffer, mapping it as an image doesn't work for some reason
+    CUdeviceptr pixmapPtr;
     CUDA_EXTERNAL_MEMORY_BUFFER_DESC desc = {
         .offset = 0,
         .size = size,
         .flags = 0
     };
-
-    CHECK_CUDA_RESULT(drv->cu->cuExternalMemoryGetMappedBuffer(&ptr, cudaImage->extMem, &desc));
-
-    //TODO we're sort of relying on there being a trailing \0 somewhere in the binary file
-    CUmodule mod;
-    CHECK_CUDA_RESULT(drv->cu->cuModuleLoadData(&mod, &_binary____src_YUVtoRGB_ptx_start));
-
-    CUfunction func;
-    CHECK_CUDA_RESULT(drv->cu->cuModuleGetFunction(&func, mod, "convert_nv12_bt701_block_linear"));
+    CHECK_CUDA_RESULT(drv->cu->cuExternalMemoryGetMappedBuffer(&pixmapPtr, cudaImage->extMem, &desc));
 
     //we shouldn't have to do this as NVDEC will produce this for us, so we should use it directly, rather than reconstructing it
     CUdeviceptr d_luma = cuArrayToNV12(drv, surface);
     CUdeviceptr d_chroma = d_luma + (width*height);
 
-    void *params[] = { &ptr, &d_luma, &d_chroma, &width, &height};
+    //copy/convert the NV12 image to an RGB one
+    void *params[] = { &pixmapPtr, &d_luma, &d_chroma, &width, &height, &log2GobsPerBlockX, &log2GobsPerBlockY};
+    CHECK_CUDA_RESULT(drv->cu->cuLaunchKernel(drv->yuvFunction, blocksPerX, blocksPerY, 1, 4, 16, 1, 0, 0, params, NULL));
 
-    LOG("Block size: %ux%u", blocksPerX, blocksPerY);
-
-    CHECK_CUDA_RESULT(drv->cu->cuLaunchKernel(func, blocksPerX, blocksPerY, 1, 4, 16, 1, 0, 0, params, NULL));
-
-    CHECK_CUDA_RESULT(drv->cu->cuModuleUnload(mod));
-
+    //unmap the external memory of the pixmap
     CHECK_CUDA_RESULT(drv->cu->cuDestroyExternalMemory(cudaImage->extMem));
-
 }
 
 VAStatus nvPutSurface(
@@ -235,22 +223,33 @@ VAStatus nvPutSurface(
         unsigned short desth,
         VARectangle *cliprects, /* client supplied clip list */
         unsigned int number_cliprects, /* number of clip rects in the clip list */
-        unsigned int flags /* de-interlacing flags */
-    )
-{
-    LOG("src: %dx%d - %dx%d, dest: %dx%d - %dx%d", srcx, srcy, srcw, srch, destx, desty, destw, desth);
+        unsigned int flags) { /* de-interlacing flags */
+
+    //TODO? we only support copying the whole image without any scaling
+    if (srcx != 0 || srcy != 0 || destx != 0 || desty != 0 || srcw != destw || srch != desth) {
+        LOG("src: %dx%d - %dx%d, dest: %dx%d - %dx%d", srcx, srcy, srcw, srch, destx, desty, destw, desth);
+        return VA_STATUS_ERROR_INVALID_PARAMETER;
+    }
+
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
     NVSurface *surfaceObj = (NVSurface*) getObjectPtr(drv, surface);
 
-    xcb_connection_t *conn = xcb_connect(NULL, NULL);
+    xcb_connection_t *conn = (xcb_connection_t*) drv->xcbConnection;
+    if (conn == NULL) {
+        conn = xcb_connect(NULL, NULL);
+        if (conn == NULL) {
+            return VA_STATUS_ERROR_OPERATION_FAILED;
+        }
+        drv->xcbConnection = conn;
+    }
 
+    //call NV-GLX to get the object for the pixmap
     int newXid = xcb_generate_id (conn);
     xcb_nv_glx_export_pixmap_response *xcb_ret = pixmapToNvHandle(conn, (int) draw, newXid, drv->driverContext.clientObject);
 
+    //duplicate the object so we can export/import it into CUDA
     uint32_t obj = 0;
     bool ret = dup_object(&drv->driverContext, xcb_ret->hClientSrc, xcb_ret->hObjectSrc, &obj);
-
-    LOG("got obj: %d %x", ret, obj);
 
     if (ret) {
         int fd;
@@ -258,12 +257,9 @@ VAStatus nvPutSurface(
 
         if (ret) {
             NVCudaImage cudaImage;
-            import_pixmap_to_cuda(drv, fd, xcb_ret->log2GobsPerBlockX, xcb_ret->log2GobsPerBlockY, xcb_ret->width, xcb_ret->height, 8, 4, &cudaImage, surfaceObj);
+            convert_image(drv, fd, xcb_ret->log2GobsPerBlockX, xcb_ret->log2GobsPerBlockY, xcb_ret->width, xcb_ret->height, 8, 4, &cudaImage, surfaceObj);
         }
-
-        LOG("Got fd: %d\n", fd);
     }
-    xcb_disconnect(conn);
 
     return VA_STATUS_SUCCESS;// VA_STATUS_ERROR_UNIMPLEMENTED;
 }
