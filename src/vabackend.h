@@ -1,6 +1,8 @@
 #ifndef VABACKEND_H
 #define VABACKEND_H
 
+#include "direct/nv-driver.h"
+
 #include <ffnvcodec/dynlink_loader.h>
 #include <va/va_backend.h>
 #include <EGL/egl.h>
@@ -10,7 +12,7 @@
 
 #include <pthread.h>
 #include "list.h"
-#include "direct/nv-driver.h"
+
 
 #define SURFACE_QUEUE_SIZE 16
 #define MAX_IMAGE_COUNT 64
