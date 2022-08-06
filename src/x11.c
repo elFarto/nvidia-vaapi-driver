@@ -42,7 +42,7 @@ xcb_extension_t xcb_nv_glx = {
 };
 
 /**
- * This method calls a function in the NVIDIA GLX driver that returns the underlying object representing a pixmap.
+ * This method calls a function in the NVIDIA GLX driver that returns the underlying object representing the pixmap.
  */
 xcb_nv_glx_export_pixmap_response* pixmapToNvHandle(xcb_connection_t *c, int pixmap, int newXid, int client) {
     static const xcb_protocol_request_t xcb_req = {
@@ -84,6 +84,13 @@ xcb_nv_glx_export_pixmap_response* pixmapToNvHandle(xcb_connection_t *c, int pix
         LOG("unknown7 0x%x", xcb_ret->unknown7);
         LOG("unknown8 0x%x", xcb_ret->unknown8);
         LOG("unknown9 0x%x", xcb_ret->unknown9);
+        LOG("unknown1 0x%x", xcb_ret->unknown1);
+        LOG("unknown2 0x%x", xcb_ret->unknown2);
+        LOG("unknown2b 0x%x", xcb_ret->unknown2b);
+        LOG("unknown2_1 0x%x", xcb_ret->unknown2_1);
+        LOG("unknown2_2 0x%x", xcb_ret->unknown2_2);
+        LOG("unknown2_3 0x%x", xcb_ret->unknown2_3);
+
     } else {
         LOG("got null response");
     }
@@ -160,22 +167,13 @@ static void convert_image(NVDriver *drv, int fd, uint32_t log2GobsPerBlockX, uin
     uint32_t blockHeight = gobHeight * (1<<log2GobsPerBlockY);//px
     uint32_t bytesPerPixel = bpc * channels / 8;
 
-    uint32_t blocksPerX  = (width/*+blockWidth-1*/)/blockWidth;
-    uint32_t blocksPerY  = (height/*+blockHeight-1*/)/blockHeight;
+    uint32_t gobsPerX = ROUND_UP(width, gobWidth) / gobWidth;
+    uint32_t gobsPerY = ROUND_UP(height, blockHeight) / gobHeight;
 
-    //TODO not entirely sure about this
-    if (blocksPerX == 0) {
-        blocksPerX = 1;
-    }
-    if (blocksPerY == 0) {
-        blocksPerY = 1;
-    }
-    blocksPerY++; //???
-    uint32_t blockSize   = blockWidth * blockHeight * bytesPerPixel;
+    uint32_t gobSize = gobWidth * gobHeight * bytesPerPixel;
+    uint32_t size = gobsPerX * gobsPerY * gobSize;
 
-    uint32_t size = blocksPerX * blocksPerY * blockSize;
-
-    LOG("importing memory size: %dx%d = %d", width, height, size);
+    LOG("importing memory size: %dx%d = %d (%ux%u)", width, height, size, gobsPerX, gobsPerY);
     //import the fd as external memory
     CUDA_EXTERNAL_MEMORY_HANDLE_DESC extMemDesc = {
         .type = CU_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD,
@@ -198,12 +196,16 @@ static void convert_image(NVDriver *drv, int fd, uint32_t log2GobsPerBlockX, uin
     CHECK_CUDA_RESULT(drv->cu->cuExternalMemoryGetMappedBuffer(&pixmapPtr, cudaImage->extMem, &desc));
 
     //we shouldn't have to do this as NVDEC will produce this for us, so we should use it directly, rather than reconstructing it
-    CUdeviceptr d_luma = cuArrayToNV12(drv, surface);
+    CUdeviceptr d_luma = surface->rawImageCopy;
+    if (d_luma == (CUdeviceptr) NULL) {
+        d_luma = cuArrayToNV12(drv, surface);
+        surface->rawImageCopy = d_luma;
+    }
     CUdeviceptr d_chroma = d_luma + (width*height);
 
     //copy/convert the NV12 image to an RGB one
     void *params[] = { &pixmapPtr, &d_luma, &d_chroma, &width, &height, &log2GobsPerBlockX, &log2GobsPerBlockY};
-    CHECK_CUDA_RESULT(drv->cu->cuLaunchKernel(drv->yuvFunction, blocksPerX, blocksPerY, 1, 4, 16, 1, 0, 0, params, NULL));
+    CHECK_CUDA_RESULT(drv->cu->cuLaunchKernel(drv->yuvFunction, gobsPerX, gobsPerY, 1, 1, 1, 1, 0, 0, params, NULL));
 
     //unmap the external memory of the pixmap
     CHECK_CUDA_RESULT(drv->cu->cuDestroyExternalMemory(cudaImage->extMem));

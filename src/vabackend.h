@@ -66,6 +66,7 @@ typedef struct
     int                     resolving;
     pthread_mutex_t         mutex;
     pthread_cond_t          cond;
+    CUdeviceptr             rawImageCopy;
 } NVSurface;
 
 typedef struct
@@ -139,7 +140,7 @@ typedef struct _NVDriver
     //fields for YUVtoRGB module
     CUmodule                yuvModule;
     CUfunction              yuvFunction;
-    void                    *xcbConnection
+    void                    *xcbConnection;
 } NVDriver;
 
 struct _NVCodec;
@@ -168,6 +169,7 @@ typedef struct _NVContext
     int                 surfaceQueueWriteIdx;
     bool                exiting;
     pthread_mutex_t     surfaceCreationMutex;
+    bool                copyMode;
 } NVContext;
 
 typedef struct

@@ -391,9 +391,37 @@ static void* resolveSurfaces(void *param) {
         CHECK_CUDA_RESULT(cv->cuvidMapVideoFrame(ctx->decoder, surface->pictureIdx, &deviceMemory, &pitch, &procParams));
         LOG("Mapped surface %d to %llX (%d)", surface->pictureIdx, deviceMemory, pitch);
 
-        //update cuarray
-        drv->backend->exportCudaPtr(drv, deviceMemory, surface, pitch);
-        LOG("Surface %d exported", surface->pictureIdx);
+        //if export frame
+        if (!ctx->copyMode) {
+            //update cuarray
+            drv->backend->exportCudaPtr(drv, deviceMemory, surface, pitch);
+            LOG("Surface %d exported", surface->pictureIdx);
+        } else {
+            //else if copy frame
+            //alloc buffer if needed
+            size_t size = surface->width * (surface->height + (surface->height >> 1)) * 1; //TODO handle 10 and 12 bit surfaces
+            if (surface->rawImageCopy == (CUdeviceptr) NULL) {
+                LOG("Allocating rawImageCopy buffer: %u", size);
+                CHECK_CUDA_RESULT(cu->cuMemAlloc(&surface->rawImageCopy, size));
+            }
+            //copy buffer
+            CUDA_MEMCPY2D copy = {
+                .srcMemoryType = CU_MEMORYTYPE_DEVICE,
+                .srcDevice = deviceMemory,
+                .srcPitch = pitch,
+                .dstMemoryType = CU_MEMORYTYPE_DEVICE,
+                .dstDevice = surface->rawImageCopy,
+                .Height = surface->height + (surface->height>>1),
+                .WidthInBytes = surface->width * 1 //TODO handle 10 and 12 bit surfaces
+            };
+            CHECK_CUDA_RESULT(cu->cuMemcpy2D(&copy));
+
+            pthread_mutex_lock(&surface->mutex);
+            surface->resolving = 0;
+            pthread_cond_signal(&surface->cond);
+            pthread_mutex_unlock(&surface->mutex);
+        }
+
         //unmap frame
         CHECK_CUDA_RESULT(cv->cuvidUnmapVideoFrame(ctx->decoder, deviceMemory));
     }
@@ -763,6 +791,10 @@ static VAStatus nvDestroySurfaces(
 
         drv->backend->detachBackingImageFromSurface(drv, surface);
 
+        if (surface->rawImageCopy != (CUdeviceptr) NULL) {
+            CHECK_CUDA_RESULT(cu->cuMemFree(surface->rawImageCopy));
+        }
+
         deleteObject(drv, surface_list[i]);
     }
 
@@ -845,6 +877,9 @@ static VAStatus nvCreateContext(
         nvCtx->width = picture_width;
         nvCtx->height = picture_height;
         nvCtx->codec = selectedCodec;
+        //attempt to detect if we're running in Chrome, which will likely want to use vaPutSurface
+        //which requires us to keep the pitch-linear buffer around, rather than exporting it
+        nvCtx->copyMode = (num_render_targets == 0);
 
         pthread_mutexattr_t attrib;
         pthread_mutexattr_init(&attrib);

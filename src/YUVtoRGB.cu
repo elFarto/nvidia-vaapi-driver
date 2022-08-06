@@ -7,25 +7,25 @@ extern "C" __global__ void convert_nv12_bt701_block_linear(uint8_t *out, uint8_t
     uint32_t gobHeight   = 8;//px
     uint32_t bytesPerPixel = 4;//bpc * channels / 8;
 
-    uint32_t blockWidth  = gobWidth * (1<<log2GobsPerBlockX);//px
-    uint32_t blockHeight = gobHeight * (1<<log2GobsPerBlockY);//px
+//    uint32_t blockWidth  = gobWidth * (1<<log2GobsPerBlockX);//px
+//    uint32_t blockHeight = gobHeight * (1<<log2GobsPerBlockY);//px
 
     uint32_t gobSize     = gobWidth * gobHeight * bytesPerPixel;
-    uint32_t gobsPerBlockY = blockHeight / gobHeight;
+    uint32_t gobsPerX    = gridDim.x;
+//    uint32_t gobsPerY    = gridDim.y;
 
-    uint32_t blocksPerX  = (width+blockWidth-1)/blockWidth;
-    uint32_t blockSize   = blockWidth * blockHeight * bytesPerPixel;
+    uint32_t gobX        = blockIdx.x;
+    uint32_t gobY        = blockIdx.y;
 
-    uint32_t blockX      = blockIdx.x;
-    uint32_t blockY      = blockIdx.y;
-    uint32_t gobX        = threadIdx.x;
-    uint32_t gobY        = threadIdx.y;
+    uint32_t gobPixelX   = gobX * gobWidth;
+    uint32_t gobPixelY   = gobY * gobHeight;
 
-    uint32_t blockOffset = ((blockY * blocksPerX) + blockX) * blockSize;
-    uint32_t gobOffset   = ((gobX * gobsPerBlockY) + gobY) * gobSize; //x and y are flipped for GOBs in blocks
+    uint32_t blockY      = gobY / (1<<log2GobsPerBlockY);
 
-    uint32_t gobPixelX   = blockX * blockWidth + gobX * gobWidth;
-    uint32_t gobPixelY   = blockY * blockHeight + gobY * gobHeight;
+    gobY = gobY % (1<<log2GobsPerBlockY);
+
+    uint32_t blockOffset = (blockY * (gobsPerX * (1<<log2GobsPerBlockY) * gobSize));
+    uint32_t gobOffset = ((gobX * (1<<log2GobsPerBlockY)) + gobY) * gobSize;
 
     uint32_t subGobWidth  = 4;//px
     uint32_t subGobHeight = 4;//px
