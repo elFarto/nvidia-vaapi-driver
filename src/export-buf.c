@@ -254,6 +254,8 @@ bool initExporter(NVDriver *drv, void *device) {
     if (eglQueryDmaBufFormatsEXT(drv->eglDisplay, 64, formats, &formatCount)) {
         bool r16 = false, rg1616 = false;
         for (int i = 0; i < formatCount; i++) {
+            const char *fourcc = (const char *)&formats[i];
+            LOG("Found format: %c%c%c%c", fourcc[0], fourcc[1], fourcc[2], fourcc[3]);
             if (formats[i] == DRM_FORMAT_R16) {
                 r16 = true;
             } else if (formats[i] == DRM_FORMAT_RG1616) {
@@ -406,14 +408,15 @@ BackingImage *allocateBackingImage(NVDriver *drv, const NVSurface *surface) {
                                                               CU_EGL_COLOR_FORMAT_YVU420_SEMIPLANAR;
         eglframe.cuFormat = CU_AD_FORMAT_UNSIGNED_INT8;
     } else if (surface->format == cudaVideoSurfaceFormat_P016) {
-        //TODO not working, produces this error in mpv:
-        //EGL_BAD_MATCH error: In eglCreateImageKHR: requested LINUX_DRM_FORMAT is not supported
-        //this error seems to be coming from the NVIDIA EGL driver
-        //this might be caused by the DRM_FORMAT_*'s in nvExportSurfaceHandle
         if (surface->bitDepth == 10) {
             eglframe.eglColorFormat = CU_EGL_COLOR_FORMAT_Y10V10U10_420_SEMIPLANAR;
         } else if (surface->bitDepth == 12) {
-            eglframe.eglColorFormat = CU_EGL_COLOR_FORMAT_Y12V12U12_420_SEMIPLANAR;
+            // Logically, we should use the explicit 12bit format here, but it fails
+            // to export to a dmabuf if we do. In practice, that should be fine as the
+            // data is still stored in 16 bits and they (surely?) aren't going to
+            // zero out the extra bits.
+            // eglframe.eglColorFormat = CU_EGL_COLOR_FORMAT_Y12V12U12_420_SEMIPLANAR;
+            eglframe.eglColorFormat = CU_EGL_COLOR_FORMAT_Y10V10U10_420_SEMIPLANAR;
         } else {
             LOG("Unknown bitdepth");
         }

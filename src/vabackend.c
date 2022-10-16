@@ -429,48 +429,55 @@ static VAStatus nvQueryConfigProfiles(
     if (doesGPUSupportCodec(cudaVideoCodec_HEVC, 8, cudaVideoChromaFormat_420, NULL, NULL)) {
         profile_list[profiles++] = VAProfileHEVCMain;
     }
-//    if (doesGPUSupportCodec(cudaVideoCodec_HEVC, 10, cudaVideoChromaFormat_420, NULL, NULL)) {
-//        profile_list[profiles++] = VAProfileHEVCMain10;
-//    }
-//    if (doesGPUSupportCodec(cudaVideoCodec_HEVC, 10, cudaVideoChromaFormat_420, NULL, NULL)) {
-//        profile_list[profiles++] = VAProfileHEVCMain422_10;
-//    }
-//    if (doesGPUSupportCodec(cudaVideoCodec_HEVC, 12, cudaVideoChromaFormat_420, NULL, NULL)) {
-//        profile_list[profiles++] = VAProfileHEVCMain422_12;
-//    }
-//    if (doesGPUSupportCodec(cudaVideoCodec_HEVC, 8, cudaVideoChromaFormat_420, NULL, NULL)) {
-//        profile_list[profiles++] = VAProfileHEVCMain444;
-//    }
-//    if (doesGPUSupportCodec(cudaVideoCodec_HEVC, 10, cudaVideoChromaFormat_420, NULL, NULL)) {
-//        profile_list[profiles++] = VAProfileHEVCMain444_10;
-//    }
-//    if (doesGPUSupportCodec(cudaVideoCodec_HEVC, 12, cudaVideoChromaFormat_420, NULL, NULL)) {
-//        profile_list[profiles++] = VAProfileHEVCMain444_12;
-//    }
-//    if (doesGPUSupportCodec(cudaVideoCodec_HEVC, 12, cudaVideoChromaFormat_420, NULL, NULL)) {
-//        profile_list[profiles++] = VAProfileHEVCMain12;
-//    }
     if (doesGPUSupportCodec(cudaVideoCodec_VP8, 8, cudaVideoChromaFormat_420, NULL, NULL)) {
         profile_list[profiles++] = VAProfileVP8Version0_3;
     }
     if (doesGPUSupportCodec(cudaVideoCodec_VP9, 8, cudaVideoChromaFormat_420, NULL, NULL)) {
         profile_list[profiles++] = VAProfileVP9Profile0; //color depth: 8 bit, 4:2:0
     }
+    if (doesGPUSupportCodec(cudaVideoCodec_AV1, 8, cudaVideoChromaFormat_420, NULL, NULL)) {
+        profile_list[profiles++] = VAProfileAV1Profile0;
+    }
+
+    if (drv->supports16BitSurface) {
+        if (doesGPUSupportCodec(cudaVideoCodec_HEVC, 10, cudaVideoChromaFormat_420, NULL, NULL)) {
+            profile_list[profiles++] = VAProfileHEVCMain10;
+        }
+        if (doesGPUSupportCodec(cudaVideoCodec_HEVC, 12, cudaVideoChromaFormat_420, NULL, NULL)) {
+            profile_list[profiles++] = VAProfileHEVCMain12;
+        }
+        if (doesGPUSupportCodec(cudaVideoCodec_VP9, 10, cudaVideoChromaFormat_420, NULL, NULL)) {
+            profile_list[profiles++] = VAProfileVP9Profile2; //color depth: 10–12 bit, 4:2:0
+        }
+    }
+
+    // We currently only support 420 chroma layout
+#if 0
+    if (doesGPUSupportCodec(cudaVideoCodec_HEVC, 10, cudaVideoChromaFormat_422, NULL, NULL)) {
+        profile_list[profiles++] = VAProfileHEVCMain422_10;
+    }
+    if (doesGPUSupportCodec(cudaVideoCodec_HEVC, 12, cudaVideoChromaFormat_422, NULL, NULL)) {
+        profile_list[profiles++] = VAProfileHEVCMain422_12;
+    }
+    if (doesGPUSupportCodec(cudaVideoCodec_HEVC, 8, cudaVideoChromaFormat_444, NULL, NULL)) {
+        profile_list[profiles++] = VAProfileHEVCMain444;
+    }
+    if (doesGPUSupportCodec(cudaVideoCodec_HEVC, 10, cudaVideoChromaFormat_444, NULL, NULL)) {
+        profile_list[profiles++] = VAProfileHEVCMain444_10;
+    }
+    if (doesGPUSupportCodec(cudaVideoCodec_HEVC, 12, cudaVideoChromaFormat_444, NULL, NULL)) {
+        profile_list[profiles++] = VAProfileHEVCMain444_12;
+    }
     if (doesGPUSupportCodec(cudaVideoCodec_VP9, 8, cudaVideoChromaFormat_444, NULL, NULL)) {
         profile_list[profiles++] = VAProfileVP9Profile1; //color depth: 8 bit, 4:2:2, 4:4:0, 4:4:4
     }
-//    if (doesGPUSupportCodec(cudaVideoCodec_VP9, 10, cudaVideoChromaFormat_420, NULL, NULL)) {
-//        profile_list[profiles++] = VAProfileVP9Profile2; //color depth: 10–12 bit, 4:2:0
-//    }
-//    if (doesGPUSupportCodec(cudaVideoCodec_VP9, 10, cudaVideoChromaFormat_444, NULL, NULL)) {
-//        profile_list[profiles++] = VAProfileVP9Profile3; //color depth: 10–12 bit, 4:2:2, 4:4:0, 4:4:4
-//    }
-    if (doesGPUSupportCodec(cudaVideoCodec_AV1, 8, cudaVideoChromaFormat_420, NULL, NULL)) {
-        profile_list[profiles++] = VAProfileAV1Profile0;
+    if (doesGPUSupportCodec(cudaVideoCodec_VP9, 10, cudaVideoChromaFormat_444, NULL, NULL)) {
+        profile_list[profiles++] = VAProfileVP9Profile3; //color depth: 10–12 bit, 4:2:2, 4:4:0, 4:4:4
     }
     if (doesGPUSupportCodec(cudaVideoCodec_AV1, 8, cudaVideoChromaFormat_444, NULL, NULL)) {
         profile_list[profiles++] = VAProfileAV1Profile1;
     }
+#endif
 
     //now filter out the codecs we don't support
     for (int i = 0; i < profiles; i++) {
@@ -523,9 +530,17 @@ static VAStatus nvGetConfigAttributes(
         {
             attrib_list[i].value = VA_RT_FORMAT_YUV420;
 
-            if (drv->supports16BitSurface && profile == VAProfileHEVCMain10) {
-                attrib_list[i].value |= VA_RT_FORMAT_YUV420_10;
-            }
+            if (drv->supports16BitSurface) {
+                switch(profile) {
+                case VAProfileVP9Profile2:
+                case VAProfileHEVCMain12:
+                    attrib_list[i].value |= VA_RT_FORMAT_YUV420_12;
+                    // Fall-through
+                case VAProfileHEVCMain10:
+                case VAProfileAV1Profile0:
+                    attrib_list[i].value |= VA_RT_FORMAT_YUV420_10;
+                    break;
+            }}
         }
         else if (attrib_list[i].type == VAConfigAttribMaxPictureWidth)
         {
@@ -579,16 +594,43 @@ static VAStatus nvCreateConfig(
     }
 
     cfg->cudaCodec = cudaCodec;
+    cfg->chromaFormat = cudaVideoChromaFormat_420;
+    cfg->surfaceFormat = cudaVideoSurfaceFormat_NV12;
+    cfg->bitDepth = 8;
 
-    //these should be set from the attributes, or a default if the user doesn't care
-    if (drv->supports16BitSurface && profile == VAProfileHEVCMain10) {
-        cfg->surfaceFormat = cudaVideoSurfaceFormat_P016;
-        cfg->chromaFormat = cudaVideoChromaFormat_420;
-        cfg->bitDepth = 10;
-    } else {
-        cfg->surfaceFormat = cudaVideoSurfaceFormat_NV12;
-        cfg->chromaFormat = cudaVideoChromaFormat_420;
-        cfg->bitDepth = 8;
+    if (drv->supports16BitSurface) {
+        switch(cfg->profile) {
+        case VAProfileHEVCMain10:
+            cfg->surfaceFormat = cudaVideoSurfaceFormat_P016;
+            cfg->bitDepth = 10;
+            break;
+        case VAProfileHEVCMain12:
+            cfg->surfaceFormat = cudaVideoSurfaceFormat_P016;
+            cfg->bitDepth = 12;
+            break;
+        case VAProfileVP9Profile2:
+        case VAProfileAV1Profile0:
+            // If the user provides an RTFormat, we can use that to identify which decoder
+            // configuration is appropriate. If a format is not required here, the caller
+            // must pass render targets to createContext so we can use those to establish
+            // the surface format and bit depth.
+            if (num_attribs > 0 && attrib_list[0].type == VAConfigAttribRTFormat) {
+                switch(attrib_list[0].value) {
+                case VA_RT_FORMAT_YUV420_12:
+                    cfg->surfaceFormat = cudaVideoSurfaceFormat_P016;
+                    cfg->bitDepth = 12;
+                    break;
+                case VA_RT_FORMAT_YUV420_10:
+                    cfg->surfaceFormat = cudaVideoSurfaceFormat_P016;
+                    cfg->bitDepth = 10;
+                    break;
+                default:
+                    break;
+                }
+            }
+        default:
+            break;
+        }
     }
 
     *config_id = obj->id;
@@ -626,9 +668,17 @@ static VAStatus nvQueryConfigAttributes(
         int i = 0;
         attrib_list[i].type = VAConfigAttribRTFormat;
         attrib_list[i].value = VA_RT_FORMAT_YUV420;
-        if (drv->supports16BitSurface && cfg->profile == VAProfileHEVCMain10) {
-            attrib_list[i].value |= VA_RT_FORMAT_YUV420_10;
-        }
+        if (drv->supports16BitSurface) {
+            switch(cfg->profile) {
+            case VAProfileHEVCMain12:
+            case VAProfileVP9Profile2:
+                attrib_list[i].value |= VA_RT_FORMAT_YUV420_12;
+                // Fall-through
+            case VAProfileHEVCMain10:
+            case VAProfileAV1Profile0:
+                attrib_list[i].value |= VA_RT_FORMAT_YUV420_10;
+                break;
+        }}
         i++;
         *num_attribs = i;
         return VA_STATUS_SUCCESS;
@@ -762,6 +812,13 @@ static VAStatus nvCreateContext(
         return VA_STATUS_ERROR_UNSUPPORTED_PROFILE; //TODO not sure this is the correct error
     }
 
+    if (num_render_targets) {
+        // Update the decoder configuration to match the passed in surfaces.
+        NVSurface *surface = (NVSurface *) getObjectPtr(drv, render_targets[0]);
+        cfg->chromaFormat = surface->format;
+        cfg->bitDepth = surface->bitDepth;
+    }
+
     CUVIDDECODECREATEINFO vdci;
     memset(&vdci, 0, sizeof(CUVIDDECODECREATEINFO));
     vdci.ulWidth  = vdci.ulMaxWidth  = vdci.ulTargetWidth  = picture_width;
@@ -772,7 +829,7 @@ static VAStatus nvCreateContext(
     vdci.display_area.right = picture_width;
     vdci.display_area.bottom = picture_height;
     vdci.ChromaFormat = cfg->chromaFormat;
-    vdci.OutputFormat = cfg->surfaceFormat;
+    vdci.OutputFormat = cfg->chromaFormat;
     vdci.bitDepthMinus8 = cfg->bitDepth - 8;
 
     vdci.DeinterlaceMode = cudaVideoDeinterlaceMode_Adaptive;
@@ -1127,6 +1184,8 @@ static VAStatus nvQueryImageFormats(
         int *num_formats           /* out */
     )
 {
+    NVDriver *drv = (NVDriver*) ctx->pDriverData;
+
     LOG("In %s", __func__);
 
     int i = 0;
@@ -1135,13 +1194,15 @@ static VAStatus nvQueryImageFormats(
     format_list[i].byte_order = VA_LSB_FIRST;
     format_list[i++].bits_per_pixel = 12;
 
-//    format_list[i].fourcc = VA_FOURCC_P010;
-//    format_list[i].byte_order = VA_LSB_FIRST;
-//    format_list[i++].bits_per_pixel = 24;
+    if (drv->supports16BitSurface) {
+        format_list[i].fourcc = VA_FOURCC_P010;
+        format_list[i].byte_order = VA_LSB_FIRST;
+        format_list[i++].bits_per_pixel = 24;
 
-//    format_list[i].fourcc = VA_FOURCC_P012;
-//    format_list[i].byte_order = VA_LSB_FIRST;
-//    format_list[i++].bits_per_pixel = 24;
+        format_list[i].fourcc = VA_FOURCC_P012;
+        format_list[i].byte_order = VA_LSB_FIRST;
+        format_list[i++].bits_per_pixel = 24;
+    }
 
     *num_formats = i;
 
@@ -1365,7 +1426,8 @@ static VAStatus nvQuerySubpictureFormats(
     )
 {
     LOG("In %s", __func__);
-    return VA_STATUS_ERROR_UNIMPLEMENTED;
+    *num_formats = 0;
+    return VA_STATUS_SUCCESS;
 }
 
 static VAStatus nvCreateSubpicture(
@@ -1495,63 +1557,74 @@ static VAStatus nvQuerySurfaceAttributes(
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
     NVConfig *cfg = (NVConfig*) getObject(drv, config)->obj;
 
-    LOG("with %d %p %d", cfg->cudaCodec, attrib_list, *num_attribs);
+    LOG("with %d (%d) %p %d", cfg->cudaCodec, cfg->bitDepth, attrib_list, *num_attribs);
+
+    if (cfg->chromaFormat != cudaVideoChromaFormat_420) {
+        //TODO not sure what pixel formats are needed for 422 and 444 formats
+        LOG("Unknown chrome format: %d", cfg->chromaFormat);
+        return VA_STATUS_ERROR_INVALID_CONFIG;
+    }
+
+    CUVIDDECODECAPS videoDecodeCaps = {
+        .eCodecType      = cfg->cudaCodec,
+        .eChromaFormat   = cfg->chromaFormat,
+        .nBitDepthMinus8 = cfg->bitDepth - 8
+    };
+
+    CHECK_CUDA_RESULT(cu->cuCtxPushCurrent(drv->cudaContext));
+    CUresult result = cv->cuvidGetDecoderCaps(&videoDecodeCaps);
+    CHECK_CUDA_RESULT(cu->cuCtxPopCurrent(NULL));
+
+    if (result != CUDA_SUCCESS) {
+        CHECK_CUDA_RESULT(result);
+        return VA_STATUS_ERROR_OPERATION_FAILED;
+    }
 
     if (attrib_list == NULL) {
             *num_attribs = 5;
+            if (drv->supports16BitSurface) {
+                *num_attribs += 2;
+            }
     } else {
-        CUVIDDECODECAPS videoDecodeCaps = {
-            .eCodecType      = cfg->cudaCodec,
-            .eChromaFormat   = cfg->chromaFormat,
-            .nBitDepthMinus8 = cfg->bitDepth - 8
-        };
-
-        CHECK_CUDA_RESULT(cu->cuCtxPushCurrent(drv->cudaContext));
-        CUresult result = cv->cuvidGetDecoderCaps(&videoDecodeCaps);
-        CHECK_CUDA_RESULT(cu->cuCtxPopCurrent(NULL));
-
-        if (result != CUDA_SUCCESS) {
-            CHECK_CUDA_RESULT(result);
-            return VA_STATUS_ERROR_OPERATION_FAILED;
-        }
-
-        attrib_list[0].type = VASurfaceAttribPixelFormat;
+        attrib_list[0].type = VASurfaceAttribMinWidth;
         attrib_list[0].flags = 0;
         attrib_list[0].value.type = VAGenericValueTypeInteger;
+        attrib_list[0].value.value.i = videoDecodeCaps.nMinWidth;
 
-        if (cfg->chromaFormat == cudaVideoChromaFormat_420) {
-            if (drv->supports16BitSurface && cfg->bitDepth == 10 && (videoDecodeCaps.nOutputFormatMask & 2)) {
-                attrib_list[0].value.value.i = VA_FOURCC_P010;
-            } else if (drv->supports16BitSurface && cfg->bitDepth == 12 && (videoDecodeCaps.nOutputFormatMask & 2)) {
-                attrib_list[0].value.value.i = VA_FOURCC_P012;
-            } else if (videoDecodeCaps.nOutputFormatMask & 1) {
-                attrib_list[0].value.value.i = VA_FOURCC_NV12;
-            }
-        } else {
-            //TODO not sure what pixel formats are needed for 422 and 444 formats
-            LOG("Unknown chrome format: %d", cfg->chromaFormat);
-            return VA_STATUS_ERROR_INVALID_CONFIG;
-        }
-
-        attrib_list[1].type = VASurfaceAttribMinWidth;
+        attrib_list[1].type = VASurfaceAttribMinHeight;
         attrib_list[1].flags = 0;
         attrib_list[1].value.type = VAGenericValueTypeInteger;
-        attrib_list[1].value.value.i = videoDecodeCaps.nMinWidth;
+        attrib_list[1].value.value.i = videoDecodeCaps.nMinHeight;
 
-        attrib_list[2].type = VASurfaceAttribMinHeight;
+        attrib_list[2].type = VASurfaceAttribMaxWidth;
         attrib_list[2].flags = 0;
         attrib_list[2].value.type = VAGenericValueTypeInteger;
-        attrib_list[2].value.value.i = videoDecodeCaps.nMinHeight;
+        attrib_list[2].value.value.i = videoDecodeCaps.nMaxWidth;
 
-        attrib_list[3].type = VASurfaceAttribMaxWidth;
+        attrib_list[3].type = VASurfaceAttribMaxHeight;
         attrib_list[3].flags = 0;
         attrib_list[3].value.type = VAGenericValueTypeInteger;
-        attrib_list[3].value.value.i = videoDecodeCaps.nMaxWidth;
+        attrib_list[3].value.value.i = videoDecodeCaps.nMaxHeight;
 
-        attrib_list[4].type = VASurfaceAttribMaxHeight;
-        attrib_list[4].flags = 0;
-        attrib_list[4].value.type = VAGenericValueTypeInteger;
-        attrib_list[4].value.value.i = videoDecodeCaps.nMaxHeight;
+        int attrib_idx = 4;
+
+        attrib_list[attrib_idx].type = VASurfaceAttribPixelFormat;
+        attrib_list[attrib_idx].flags = 0;
+        attrib_list[attrib_idx].value.type = VAGenericValueTypeInteger;
+        attrib_list[attrib_idx].value.value.i = VA_FOURCC_NV12;
+        attrib_idx += 1;
+        if (drv->supports16BitSurface) {
+            attrib_list[attrib_idx].type = VASurfaceAttribPixelFormat;
+            attrib_list[attrib_idx].flags = 0;
+            attrib_list[attrib_idx].value.type = VAGenericValueTypeInteger;
+            attrib_list[attrib_idx].value.value.i = VA_FOURCC_P010;
+            attrib_idx += 1;
+            attrib_list[attrib_idx].type = VASurfaceAttribPixelFormat;
+            attrib_list[attrib_idx].flags = 0;
+            attrib_list[attrib_idx].value.type = VAGenericValueTypeInteger;
+            attrib_list[attrib_idx].value.value.i = VA_FOURCC_P012;
+            attrib_idx += 1;
+        }
     }
 
     return VA_STATUS_SUCCESS;
