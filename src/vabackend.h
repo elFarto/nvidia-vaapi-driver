@@ -52,6 +52,7 @@ typedef struct
     uint32_t                width;
     uint32_t                height;
     cudaVideoSurfaceFormat  format;
+    cudaVideoChromaFormat   chromaFormat;
     int                     bitDepth;
     int                     pictureIdx;
     struct _NVContext       *context;

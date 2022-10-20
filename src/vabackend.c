@@ -729,6 +729,7 @@ static VAStatus nvCreateSurfaces2(
         suf->pictureIdx = -1;
         suf->bitDepth = bitdepth;
         suf->context = NULL;
+        suf->chromaFormat = cudaVideoChromaFormat_420;
         CHECK_CUDA_RESULT(cu->cuEventCreate(&suf->event, CU_EVENT_BLOCKING_SYNC | CU_EVENT_DISABLE_TIMING));
         pthread_mutex_init(&suf->mutex, NULL);
         pthread_cond_init(&suf->cond, NULL);
@@ -815,7 +816,8 @@ static VAStatus nvCreateContext(
     if (num_render_targets) {
         // Update the decoder configuration to match the passed in surfaces.
         NVSurface *surface = (NVSurface *) getObjectPtr(drv, render_targets[0]);
-        cfg->chromaFormat = surface->format;
+        cfg->surfaceFormat = surface->format;
+        cfg->chromaFormat = surface->chromaFormat;
         cfg->bitDepth = surface->bitDepth;
     }
 
@@ -829,7 +831,7 @@ static VAStatus nvCreateContext(
     vdci.display_area.right = picture_width;
     vdci.display_area.bottom = picture_height;
     vdci.ChromaFormat = cfg->chromaFormat;
-    vdci.OutputFormat = cfg->chromaFormat;
+    vdci.OutputFormat = cfg->surfaceFormat;
     vdci.bitDepthMinus8 = cfg->bitDepth - 8;
 
     vdci.DeinterlaceMode = cudaVideoDeinterlaceMode_Adaptive;
