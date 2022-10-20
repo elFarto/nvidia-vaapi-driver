@@ -294,7 +294,7 @@ static cudaVideoCodec computeHEVCCudaCodec(VAProfile profile) {
     switch (profile) {
         case VAProfileHEVCMain:
         case VAProfileHEVCMain10:
-        //case VAProfileHEVCMain12: //need to wait for ffmpeg to support this via VA-API
+        case VAProfileHEVCMain12:
             return cudaVideoCodec_HEVC;
         default:
             return cudaVideoCodec_NONE;
@@ -304,7 +304,7 @@ static cudaVideoCodec computeHEVCCudaCodec(VAProfile profile) {
 static const VAProfile hevcSupportedProfiles[] = {
     VAProfileHEVCMain,
     VAProfileHEVCMain10,
-    // VAProfileHEVCMain12,
+    VAProfileHEVCMain12,
 };
 
 const DECLARE_CODEC(hevcCodec) = {

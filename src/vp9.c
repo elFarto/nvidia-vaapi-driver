@@ -33,8 +33,8 @@ static void copyVP9PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *pi
     picParams->CodecSpecific.vp9.allow_high_precision_mv = buf->pic_fields.bits.allow_high_precision_mv;
     picParams->CodecSpecific.vp9.refreshEntropyProbs = buf->pic_fields.bits.refresh_frame_context;
 
-//    picParams->CodecSpecific.vp9.bitDepthMinus8Luma = buf->pic_fields.bits.;
-//    picParams->CodecSpecific.vp9.bitDepthMinus8Chroma = buf->pic_fields.bits.;
+    picParams->CodecSpecific.vp9.bitDepthMinus8Luma = buf->bit_depth - 8;
+    picParams->CodecSpecific.vp9.bitDepthMinus8Chroma = buf->bit_depth - 8;
 
     picParams->CodecSpecific.vp9.loopFilterLevel = buf->filter_level;
     picParams->CodecSpecific.vp9.loopFilterSharpness = buf->sharpness_level;
