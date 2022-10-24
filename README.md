@@ -10,7 +10,7 @@ Only decoding video is currently supported.
 
 | Codec | Supported | Comments |
 |---|---|---|
-|AV1|:o:|Experimental support. Firefox 98+ is required.|
+|AV1|:heavy_check_mark:|Firefox 98+ is required.|
 |H.264|:heavy_check_mark:||
 |HEVC|:heavy_check_mark:||
 |VP8|:heavy_check_mark:||
@@ -20,8 +20,7 @@ Only decoding video is currently supported.
 |MPEG-4|:x:|VA-API does not supply enough of the original bitstream to allow NVDEC to decode it.|
 |JPEG|:x:|This is unlikely to ever work, the two APIs are too different.|
 
-Currently, 10-bit and 12-bit videos are not supported due to the NVIDIA driver not allowing R16 and RG1616 surfaces to be imported.
-To view which codecs your card is capable of decoding you can use the `vainfo` command with this driver installed, or visit the NVIDIA website [here](https://developer.nvidia.com/video-encode-and-decode-gpu-support-matrix-new#geforce).
+Currently, YUV444 videos are currently not supported. To view which codecs your card is capable of decoding you can use the `vainfo` command with this driver installed, or visit the NVIDIA website [here](https://developer.nvidia.com/video-encode-and-decode-gpu-support-matrix-new#geforce).
 
 # Building
 
