@@ -8,7 +8,7 @@ static void copyH264PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *p
     picParams->PicWidthInMbs    = buf->picture_width_in_mbs_minus1 + 1; //int
     picParams->FrameHeightInMbs = buf->picture_height_in_mbs_minus1 + 1; //int
 
-    ctx->renderTargets->progressiveFrame = !buf->pic_fields.bits.field_pic_flag;
+    ctx->renderTarget->progressiveFrame = !buf->pic_fields.bits.field_pic_flag;
     picParams->field_pic_flag    = buf->pic_fields.bits.field_pic_flag;
     picParams->bottom_field_flag = (buf->CurrPic.flags & VA_PICTURE_H264_BOTTOM_FIELD) != 0;
     picParams->second_field      = (buf->CurrPic.flags & VA_PICTURE_H264_TOP_FIELD) != 0 && (buf->CurrPic.flags & VA_PICTURE_H264_BOTTOM_FIELD) != 0;
@@ -95,10 +95,10 @@ static void copyH264SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *pic
         static const uint8_t header[] = { 0, 0, 1 }; //1 as a 24-bit Big Endian
 
         VASliceParameterBufferH264 *sliceParams = &((VASliceParameterBufferH264*) ctx->lastSliceParams)[i];
-        uint32_t offset = (uint32_t) ctx->buf.size;
+        uint32_t offset = (uint32_t) ctx->bitstreamBuffer.size;
         appendBuffer(&ctx->sliceOffsets, &offset, sizeof(offset));
-        appendBuffer(&ctx->buf, header, sizeof(header));
-        appendBuffer(&ctx->buf, PTROFF(buf->ptr, sliceParams->slice_data_offset), sliceParams->slice_data_size);
+        appendBuffer(&ctx->bitstreamBuffer, header, sizeof(header));
+        appendBuffer(&ctx->bitstreamBuffer, PTROFF(buf->ptr, sliceParams->slice_data_offset), sliceParams->slice_data_size);
         picParams->nBitstreamDataLen += sliceParams->slice_data_size + 3;
     }
 }

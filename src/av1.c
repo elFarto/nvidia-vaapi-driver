@@ -90,7 +90,7 @@ static void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *pi
     pps->SkipModeFrame1 = 0;
 
     //we'll need this value in a future frame
-    ctx->renderTargets->order_hint = pps->frame_offset;
+    ctx->renderTarget->order_hint = pps->frame_offset;
 
     if (pps->skip_mode) {
         int forwardIdx = -1;
@@ -304,12 +304,12 @@ static void copyAV1SliceParam(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *pic
 }
 
 static void copyAV1SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams) {
-    uint32_t offset = (uint32_t) ctx->buf.size;
+    uint32_t offset = (uint32_t) ctx->bitstreamBuffer.size;
     for (int i = 0; i < ctx->lastSliceParamsCount; i++) {
         VASliceParameterBufferAV1 *sliceParams = &((VASliceParameterBufferAV1*) ctx->lastSliceParams)[i];
 
         //copy just the slice we're looking at
-        appendBuffer(&ctx->buf, PTROFF(buf->ptr, sliceParams->slice_data_offset), sliceParams->slice_data_size);
+        appendBuffer(&ctx->bitstreamBuffer, PTROFF(buf->ptr, sliceParams->slice_data_offset), sliceParams->slice_data_size);
 
         //now append the offset and size of the slice we just copied
         appendBuffer(&ctx->sliceOffsets, &offset, sizeof(offset));
@@ -317,7 +317,7 @@ static void copyAV1SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picP
         appendBuffer(&ctx->sliceOffsets, &offset, sizeof(offset));
     }
 
-    picParams->nBitstreamDataLen = ctx->buf.size;
+    picParams->nBitstreamDataLen = ctx->bitstreamBuffer.size;
 }
 
 static cudaVideoCodec computeAV1CudaCodec(VAProfile profile) {

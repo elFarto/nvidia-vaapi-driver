@@ -16,7 +16,7 @@ static void copyMPEG4PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *
     picParams->PicWidthInMbs = (int) (buf->vop_width + 15) / 16; //int
     picParams->FrameHeightInMbs = (int) (buf->vop_height + 15) / 16; //int
 
-    ctx->renderTargets->progressiveFrame  = !buf->vol_fields.bits.interlaced;
+    ctx->renderTarget->progressiveFrame  = !buf->vol_fields.bits.interlaced;
     picParams->field_pic_flag    = buf->vol_fields.bits.interlaced;
     picParams->bottom_field_flag = buf->vop_fields.bits.top_field_first;
     picParams->second_field      = 0;
@@ -69,9 +69,9 @@ static void copyMPEG4SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *pi
     {
         VASliceParameterBufferMPEG4 *sliceParams = &((VASliceParameterBufferMPEG4*) ctx->lastSliceParams)[i];
         LOG("here: %d", sliceParams->macroblock_offset);
-        uint32_t offset = (uint32_t) ctx->buf.size;
+        uint32_t offset = (uint32_t) ctx->bitstreamBuffer.size;
         appendBuffer(&ctx->sliceOffsets, &offset, sizeof(offset));
-        appendBuffer(&ctx->buf, PTROFF(buf->ptr, sliceParams->slice_data_offset), sliceParams->slice_data_size);
+        appendBuffer(&ctx->bitstreamBuffer, PTROFF(buf->ptr, sliceParams->slice_data_offset), sliceParams->slice_data_size);
         picParams->nBitstreamDataLen += sliceParams->slice_data_size;
     }
 }

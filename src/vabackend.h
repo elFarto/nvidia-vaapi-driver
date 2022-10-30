@@ -119,10 +119,10 @@ typedef struct _NVContext
     int                 width;
     int                 height;
     CUvideodecoder      decoder;
-    NVSurface           *renderTargets;
+    NVSurface           *renderTarget;
     void                *lastSliceParams;
     unsigned int        lastSliceParamsCount;
-    AppendableBuffer    buf;
+    AppendableBuffer    bitstreamBuffer;
     AppendableBuffer    sliceOffsets;
     CUVIDPICPARAMS      pPicParams;
     const struct _NVCodec *codec;

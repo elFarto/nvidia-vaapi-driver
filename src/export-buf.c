@@ -298,6 +298,7 @@ BackingImage* createBackingImage(NVDriver *drv, uint32_t width, uint32_t height,
     img->image = image;
     img->arrays[0] = arrays[0];
     img->arrays[1] = arrays[1];
+    img->arrays[2] = NULL;
     img->width = width;
     img->height = height;
 

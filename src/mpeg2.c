@@ -53,7 +53,7 @@ static void copyMPEG2PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *
     picParams->FrameHeightInMbs = (int) ( buf->vertical_size + 15) / 16; //int
 
     LOG("buf->picture_coding_extension.bits.progressive_frame: %d",  buf->picture_coding_extension.bits.progressive_frame);
-    ctx->renderTargets->progressiveFrame = buf->picture_coding_extension.bits.progressive_frame;
+    ctx->renderTarget->progressiveFrame = buf->picture_coding_extension.bits.progressive_frame;
     picParams->field_pic_flag    = buf->picture_coding_extension.bits.picture_structure != 3;
     picParams->bottom_field_flag = buf->picture_coding_extension.bits.picture_structure == 2; //PICT_BOTTOM_FIELD
     picParams->second_field      = picParams->field_pic_flag && !buf->picture_coding_extension.bits.is_first_field;
@@ -94,9 +94,9 @@ static void copyMPEG2SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *pi
     for (int i = 0; i < ctx->lastSliceParamsCount; i++)
     {
         VASliceParameterBufferMPEG2 *sliceParams = &((VASliceParameterBufferMPEG2*) ctx->lastSliceParams)[i];
-        uint32_t offset = (uint32_t) ctx->buf.size;
+        uint32_t offset = (uint32_t) ctx->bitstreamBuffer.size;
         appendBuffer(&ctx->sliceOffsets, &offset, sizeof(offset));
-        appendBuffer(&ctx->buf, PTROFF(buf->ptr, sliceParams->slice_data_offset), sliceParams->slice_data_size);
+        appendBuffer(&ctx->bitstreamBuffer, PTROFF(buf->ptr, sliceParams->slice_data_offset), sliceParams->slice_data_size);
         picParams->nBitstreamDataLen += sliceParams->slice_data_size;
     }
 }
