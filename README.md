@@ -14,7 +14,7 @@ Only decoding video is currently supported.
 |H.264|:heavy_check_mark:||
 |HEVC|:heavy_check_mark:||
 |VP8|:heavy_check_mark:||
-|VP9|:heavy_check_mark:||
+|VP9|:heavy_check_mark:|Requires being compiled with `gstreamer-codecparsers-1.0`|
 |MPEG-2|:heavy_check_mark:||
 |VC-1|:heavy_check_mark:||
 |MPEG-4|:x:|VA-API does not supply enough of the original bitstream to allow NVDEC to decode it.|
