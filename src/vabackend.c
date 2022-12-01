@@ -129,12 +129,14 @@ void logger(const char *filename, const char *function, int line, const char *ms
     fflush(LOG_OUTPUT);
 }
 
-void checkCudaErrors(CUresult err, const char *file, const char *function, const int line) {
+void checkCudaErrors(CUresult err, const char *file, const char *function, const int line, const bool doExit) {
     if (CUDA_SUCCESS != err) {
         const char *errStr = NULL;
         cu->cuGetErrorString(err, &errStr);
         logger(file, function, line, "cuda error '%s' (%d)\n", errStr, err);
-        exit(EXIT_FAILURE);
+        if (doExit) {
+            exit(EXIT_FAILURE);
+        }
     }
 }
 

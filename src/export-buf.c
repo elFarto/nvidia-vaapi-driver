@@ -95,7 +95,7 @@ void releaseExporter(NVDriver *drv) {
     }
 }
 
-static void reconnect(NVDriver *drv) {
+static bool reconnect(NVDriver *drv) {
     LOG("Reconnecting to stream");
     eglInitialize(drv->eglDisplay, NULL, NULL);
     if (drv->cuStreamConnection != NULL) {
@@ -115,8 +115,13 @@ static void reconnect(NVDriver *drv) {
         LOG("Unable to connect EGLImage stream consumer");
         return;
     }
-    CHECK_CUDA_RESULT(drv->cu->cuEGLStreamProducerConnect(&drv->cuStreamConnection, drv->eglStream, 1024, 1024));
+    CUresult ret = drv->cu->cuEGLStreamProducerConnect(&drv->cuStreamConnection, drv->eglStream, 0, 0);
+    if (ret != CUDA_SUCCESS) {
+        CHECK_CUDA_RESULT_NO_EXIT(ret);
+        return false;
+    }
     drv->numFramesPresented = 0;
+    return true;
 }
 
 static bool checkModesetParameterFromFd(int fd) {
@@ -255,7 +260,7 @@ bool initExporter(NVDriver *drv, void *device) {
         bool r16 = false, rg1616 = false;
         for (int i = 0; i < formatCount; i++) {
             const char *fourcc = (const char *)&formats[i];
-            LOG("Found format: %c%c%c%c", fourcc[0], fourcc[1], fourcc[2], fourcc[3]);
+            //LOG("Found format: %c%c%c%c", fourcc[0], fourcc[1], fourcc[2], fourcc[3]);
             if (formats[i] == DRM_FORMAT_R16) {
                 r16 = true;
             } else if (formats[i] == DRM_FORMAT_RG1616) {
@@ -270,7 +275,9 @@ bool initExporter(NVDriver *drv, void *device) {
         }
     }
 
-    reconnect(drv);
+    if (!reconnect(drv)) {
+        return false;
+    }
 
     return true;
 }
@@ -447,7 +454,9 @@ BackingImage *allocateBackingImage(NVDriver *drv, const NVSurface *surface) {
     LOG("Presenting frame %d %dx%d (%p, %p, %p)", surface->pictureIdx, eglframe.width, eglframe.height, surface, eglframe.frame.pArray[0], eglframe.frame.pArray[1]);
     CUresult result = drv->cu->cuEGLStreamProducerPresentFrame( &drv->cuStreamConnection, eglframe, NULL );
     if (result == CUDA_ERROR_UNKNOWN) {
-        reconnect(drv);
+        if (!reconnect(drv)) {
+            return NULL;
+        }
         CHECK_CUDA_RESULT(drv->cu->cuEGLStreamProducerPresentFrame( &drv->cuStreamConnection, eglframe, NULL ));
     }
 
