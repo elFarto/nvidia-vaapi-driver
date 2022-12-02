@@ -60,6 +60,9 @@ bool direct_initExporter(NVDriver *drv) {
 
     bool ret = init_nvdriver(&drv->driverContext, drv->drmFd);
 
+    //TODO this isn't really correct as we don't know if the driver version actually supports importing them
+    //but we don't have an easy way to find out.
+    drv->supports16BitSurface = true;
     findGPUIndexFromFd(drv);
 
     return ret;
@@ -104,21 +107,30 @@ static void import_to_cuda(NVDriver *drv, NVDriverImage *image, int bpc, int cha
 
 BackingImage *direct_allocateBackingImage(NVDriver *drv, const NVSurface *surface) {
     NVDriverImage driverImages[2] = { 0 };
+    int bpp = surface->format == cudaVideoSurfaceFormat_NV12 ? 8 : 16;
 
     BackingImage *backingImage = calloc(1, sizeof(BackingImage));
 
     LOG("Allocating BackingImages: %p %dx%d", backingImage, surface->width, surface->height);
-    alloc_image(&drv->driverContext, surface->width, surface->height, 1, 8, &driverImages[0]);
-    alloc_image(&drv->driverContext, surface->width>>1, surface->height>>1, 2, 8, &driverImages[1]);
+    alloc_image(&drv->driverContext, surface->width, surface->height, 1, bpp, &driverImages[0]);
+    alloc_image(&drv->driverContext, surface->width>>1, surface->height>>1, 2, bpp, &driverImages[1]);
 
     LOG("Importing images");
-    import_to_cuda(drv, &driverImages[0], 8, 1, &backingImage->cudaImages[0], &backingImage->arrays[0]);
-    import_to_cuda(drv, &driverImages[1], 8, 2, &backingImage->cudaImages[1], &backingImage->arrays[1]);
+    import_to_cuda(drv, &driverImages[0], bpp, 1, &backingImage->cudaImages[0], &backingImage->arrays[0]);
+    import_to_cuda(drv, &driverImages[1], bpp, 2, &backingImage->cudaImages[1], &backingImage->arrays[1]);
 
     backingImage->fds[0] = driverImages[0].drmFd;
     backingImage->fds[1] = driverImages[1].drmFd;
 
-    backingImage->fourcc = DRM_FORMAT_NV12;
+    if (surface->format == cudaVideoSurfaceFormat_P016) {
+        if (surface->bitDepth == 10) {
+            backingImage->fourcc = DRM_FORMAT_P010;
+        } else {
+            backingImage->fourcc = DRM_FORMAT_P012;
+        }
+    } else {
+        backingImage->fourcc = DRM_FORMAT_NV12;
+    }
 
     backingImage->width = surface->width;
     backingImage->height = surface->height;
