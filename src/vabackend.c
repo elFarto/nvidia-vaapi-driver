@@ -1032,15 +1032,6 @@ static VAStatus nvBeginPicture(
     NVContext *nvCtx = (NVContext*) getObjectPtr(drv, context);
     NVSurface *surface = (NVSurface*) getObjectPtr(drv, render_target);
 
-    if (surf->context != NULL && surf->context != nvCtx) {
-        //this surface was last used on a different context, we need to free up the backing image (it might not be the correct size)
-        if (surf->backingImage != NULL) {
-            drv->backend->detachBackingImageFromSurface(drv, surf);
-        }
-        //...and reset the pictureIdx
-        surf->pictureIdx = -1;
-    }
-
     if (surface == NULL) {
         return VA_STATUS_ERROR_INVALID_SURFACE;
     }
@@ -1048,7 +1039,7 @@ static VAStatus nvBeginPicture(
     if (surface->context != NULL && surface->context != nvCtx) {
         //this surface was last used on a different context, we need to free up the backing image (it might not be the correct size)
         if (surface->backingImage != NULL) {
-            detachBackingImageFromSurface(drv, surface);
+            drv->backend->detachBackingImageFromSurface(drv, surface);
         }
         //...and reset the pictureIdx
         surface->pictureIdx = -1;

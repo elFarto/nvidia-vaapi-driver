@@ -46,6 +46,7 @@ nvidia_incdir = include_directories('nvidia-include')
 shared_library(
     'nvidia_drv_video',
     name_prefix: '',
+    sources: sources,
     dependencies: [
         libva_deps,
         ffnvcodec_deps,
