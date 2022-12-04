@@ -24,17 +24,21 @@ void findGPUIndexFromFd(NVDriver *drv) {
     get_device_uuid(&drv->driverContext, drmUuid);
 
     int gpuCount = 0;
-    CHECK_CUDA_RESULT(drv->cu->cuDeviceGetCount(&gpuCount));
+    if (CHECK_CUDA_RESULT(drv->cu->cuDeviceGetCount(&gpuCount))) {
+        return;
+    }
 
     for (int i = 0; i < gpuCount; i++) {
         CUuuid uuid;
-        CUresult ret = drv->cu->cuDeviceGetUuid(&uuid, i);
-        if (ret == CUDA_SUCCESS && memcmp(drmUuid, uuid.bytes, 16) == 0) {
-            drv->cudaGpuId = i;
-            return;
+        if (!CHECK_CUDA_RESULT(drv->cu->cuDeviceGetUuid(&uuid, i))) {
+            if (memcmp(drmUuid, uuid.bytes, 16) == 0) {
+                drv->cudaGpuId = i;
+                return;
+            }
         }
     }
 
+    //default to index 0
     drv->cudaGpuId = 0;
 }
 
@@ -72,19 +76,17 @@ void direct_releaseExporter(NVDriver *drv) {
     free_nvdriver(&drv->driverContext);
 }
 
-static void import_to_cuda(NVDriver *drv, NVDriverImage *image, int bpc, int channels, NVCudaImage *cudaImage, CUarray *array) {
+static bool import_to_cuda(NVDriver *drv, NVDriverImage *image, int bpc, int channels, NVCudaImage *cudaImage, CUarray *array) {
     CUDA_EXTERNAL_MEMORY_HANDLE_DESC extMemDesc = {
-        .type = CU_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD,
+        .type      = CU_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD,
         .handle.fd = image->nvFd,
-        .flags = 0,
-        .size = image->memorySize
+        .flags     = 0,
+        .size      = image->memorySize
     };
 
     LOG("importing memory size: %dx%d = %x", image->width, image->height, image->memorySize);
 
-    CHECK_CUDA_RESULT(drv->cu->cuImportExternalMemory(&cudaImage->extMem, &extMemDesc));
-
-    close(image->nvFd);
+    CHECK_CUDA_RESULT_RETURN(drv->cu->cuImportExternalMemory(&cudaImage->extMem, &extMemDesc), false);
 
     CUDA_EXTERNAL_MEMORY_MIPMAPPED_ARRAY_DESC mipmapArrayDesc = {
         .arrayDesc = {
@@ -99,10 +101,12 @@ static void import_to_cuda(NVDriver *drv, NVDriverImage *image, int bpc, int cha
         .offset = 0
     };
     //create a mimap array from the imported memory
-    CHECK_CUDA_RESULT(drv->cu->cuExternalMemoryGetMappedMipmappedArray(&cudaImage->mipmapArray, cudaImage->extMem, &mipmapArrayDesc));
+    CHECK_CUDA_RESULT_RETURN(drv->cu->cuExternalMemoryGetMappedMipmappedArray(&cudaImage->mipmapArray, cudaImage->extMem, &mipmapArrayDesc), false);
 
     //create an array from the mipmap array
-    CHECK_CUDA_RESULT(drv->cu->cuMipmappedArrayGetLevel(array, cudaImage->mipmapArray, 0));
+    CHECK_CUDA_RESULT_RETURN(drv->cu->cuMipmappedArrayGetLevel(array, cudaImage->mipmapArray, 0), false);
+
+    return true;
 }
 
 BackingImage *direct_allocateBackingImage(NVDriver *drv, const NVSurface *surface) {
@@ -116,8 +120,12 @@ BackingImage *direct_allocateBackingImage(NVDriver *drv, const NVSurface *surfac
     alloc_image(&drv->driverContext, surface->width>>1, surface->height>>1, 2, bpp, &driverImages[1]);
 
     LOG("Importing images");
-    import_to_cuda(drv, &driverImages[0], bpp, 1, &backingImage->cudaImages[0], &backingImage->arrays[0]);
-    import_to_cuda(drv, &driverImages[1], bpp, 2, &backingImage->cudaImages[1], &backingImage->arrays[1]);
+    if (!import_to_cuda(drv, &driverImages[0], bpp, 1, &backingImage->cudaImages[0], &backingImage->arrays[0])) {
+        goto bail;
+    }
+    if (!import_to_cuda(drv, &driverImages[1], bpp, 2, &backingImage->cudaImages[1], &backingImage->arrays[1])) {
+        goto bail;
+    }
 
     backingImage->fds[0] = driverImages[0].drmFd;
     backingImage->fds[1] = driverImages[1].drmFd;
@@ -145,6 +153,21 @@ BackingImage *direct_allocateBackingImage(NVDriver *drv, const NVSurface *surfac
     backingImage->size[1] = driverImages[1].memorySize;
 
     return backingImage;
+
+bail:
+    for (int i = 0; i < 2; i++) {
+        if (driverImages[i].nvFd != 0) {
+            close(driverImages[i].nvFd);
+        }
+        if (driverImages[i].drmFd != 0) {
+            close(driverImages[i].drmFd);
+        }
+    }
+
+    if (backingImage !=  NULL) {
+        free(backingImage);
+    }
+    return NULL;
 }
 
 static void destroyBackingImage(NVDriver *drv, BackingImage *img) {
@@ -208,7 +231,7 @@ static bool copyFrameToSurface(NVDriver *drv, CUdeviceptr ptr, NVSurface *surfac
         .Height = surface->height,
         .WidthInBytes = surface->width * bpp
     };
-    CHECK_CUDA_RESULT(drv->cu->cuMemcpy2DAsync(&cpy, 0));
+    CHECK_CUDA_RESULT_RETURN(drv->cu->cuMemcpy2DAsync(&cpy, 0), false);
     CUDA_MEMCPY2D cpy2 = {
         .srcMemoryType = CU_MEMORYTYPE_DEVICE,
         .srcDevice = ptr,
@@ -219,7 +242,7 @@ static bool copyFrameToSurface(NVDriver *drv, CUdeviceptr ptr, NVSurface *surfac
         .Height = surface->height >> 1,
         .WidthInBytes = surface->width * bpp
     };
-    CHECK_CUDA_RESULT(drv->cu->cuMemcpy2D(&cpy2));
+    CHECK_CUDA_RESULT_RETURN(drv->cu->cuMemcpy2D(&cpy2), false);
 
     //notify anyone waiting for us to be resolved
     pthread_mutex_lock(&surface->mutex);

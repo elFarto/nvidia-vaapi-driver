@@ -99,28 +99,24 @@ static bool reconnect(NVDriver *drv) {
     LOG("Reconnecting to stream");
     eglInitialize(drv->eglDisplay, NULL, NULL);
     if (drv->cuStreamConnection != NULL) {
-        CHECK_CUDA_RESULT(drv->cu->cuEGLStreamProducerDisconnect(&drv->cuStreamConnection));
+        CHECK_CUDA_RESULT_RETURN(drv->cu->cuEGLStreamProducerDisconnect(&drv->cuStreamConnection), false);
     }
     if (drv->eglStream != EGL_NO_STREAM_KHR) {
         eglDestroyStreamKHR(drv->eglDisplay, drv->eglStream);
     }
+    drv->numFramesPresented = 0;
     //tell the driver we don't want it to reuse any EGLImages
     EGLint stream_attrib_list[] = { EGL_SUPPORT_REUSE_NV, EGL_FALSE, EGL_NONE };
     drv->eglStream = eglCreateStreamKHR(drv->eglDisplay, stream_attrib_list);
     if (drv->eglStream == EGL_NO_STREAM_KHR) {
         LOG("Unable to create EGLStream");
-        return;
+        return false;
     }
     if (!eglStreamImageConsumerConnectNV(drv->eglDisplay, drv->eglStream, 0, 0, NULL)) {
         LOG("Unable to connect EGLImage stream consumer");
-        return;
-    }
-    CUresult ret = drv->cu->cuEGLStreamProducerConnect(&drv->cuStreamConnection, drv->eglStream, 0, 0);
-    if (ret != CUDA_SUCCESS) {
-        CHECK_CUDA_RESULT_NO_EXIT(ret);
         return false;
     }
-    drv->numFramesPresented = 0;
+    CHECK_CUDA_RESULT_RETURN(drv->cu->cuEGLStreamProducerConnect(&drv->cuStreamConnection, drv->eglStream, 0, 0), false);
     return true;
 }
 
@@ -303,7 +299,6 @@ static BackingImage* createBackingImage(NVDriver *drv, uint32_t width, uint32_t 
     img->image = image;
     img->arrays[0] = arrays[0];
     img->arrays[1] = arrays[1];
-    img->arrays[2] = NULL;
     img->width = width;
     img->height = height;
 
@@ -317,7 +312,7 @@ static BackingImage* createBackingImage(NVDriver *drv, uint32_t width, uint32_t 
 }
 
 
-void egl_destroyBackingImage(NVDriver *drv, BackingImage *img) {
+bool egl_destroyBackingImage(NVDriver *drv, BackingImage *img) {
     //if we're attached to a surface, update the surface to remove us
     if (img->surface != NULL) {
         img->surface->backingImage = NULL;
@@ -332,11 +327,12 @@ void egl_destroyBackingImage(NVDriver *drv, BackingImage *img) {
     //eglStreamReleaseImageNV(drv->eglDisplay, drv->eglStream, surface->eglImage, EGL_NO_SYNC);
     //destroy them rather than releasing them
     eglDestroyImage(drv->eglDisplay, img->image);
-    CHECK_CUDA_RESULT(drv->cu->cuArrayDestroy(img->arrays[0]));
-    CHECK_CUDA_RESULT(drv->cu->cuArrayDestroy(img->arrays[1]));
+    CHECK_CUDA_RESULT_RETURN(drv->cu->cuArrayDestroy(img->arrays[0]), false);
+    CHECK_CUDA_RESULT_RETURN(drv->cu->cuArrayDestroy(img->arrays[1]), false);
     img->arrays[0] = NULL;
     img->arrays[1] = NULL;
     free(img);
+    return true;
 }
 
 void egl_attachBackingImageToSurface(NVSurface *surface, BackingImage *img) {
@@ -351,7 +347,9 @@ void egl_detachBackingImageFromSurface(NVDriver *drv, NVSurface *surface) {
     }
 
     if (surface->backingImage->fourcc == DRM_FORMAT_NV21) {
-        egl_destroyBackingImage(drv, surface->backingImage);
+        if (!egl_destroyBackingImage(drv, surface->backingImage)) {
+            LOG("Unable to destory backing image");
+        }
     } else {
         pthread_mutex_lock(&drv->imagesMutex);
 
@@ -444,19 +442,19 @@ BackingImage *egl_allocateBackingImage(NVDriver *drv, const NVSurface *surface) 
         .Flags = 0,
         .Format = eglframe.cuFormat
     };
-    CHECK_CUDA_RESULT(drv->cu->cuArray3DCreate(&eglframe.frame.pArray[0], &arrDesc));
-    CHECK_CUDA_RESULT(drv->cu->cuArray3DCreate(&eglframe.frame.pArray[1], &arr2Desc));
+    CHECK_CUDA_RESULT_RETURN(drv->cu->cuArray3DCreate(&eglframe.frame.pArray[0], &arrDesc), NULL);
+    CHECK_CUDA_RESULT_RETURN(drv->cu->cuArray3DCreate(&eglframe.frame.pArray[1], &arr2Desc), NULL);
 
     pthread_mutex_lock(&drv->exportMutex);
 
     LOG("Presenting frame %d %dx%d (%p, %p, %p)", surface->pictureIdx, eglframe.width, eglframe.height, surface, eglframe.frame.pArray[0], eglframe.frame.pArray[1]);
-    CUresult result = drv->cu->cuEGLStreamProducerPresentFrame( &drv->cuStreamConnection, eglframe, NULL );
-    LOG("got cuEGLStreamProducerPresentFrame result: %d", result);
-    if (result == CUDA_ERROR_UNKNOWN || result == 400) { //CUDA_ERROR_INVALID_HANDLE = 400
+    if (CHECK_CUDA_RESULT(drv->cu->cuEGLStreamProducerPresentFrame( &drv->cuStreamConnection, eglframe, NULL))) {
+        //if we got an error here, try to reconnect to the EGLStream
         if (!reconnect(drv)) {
             return NULL;
         }
-        CHECK_CUDA_RESULT(drv->cu->cuEGLStreamProducerPresentFrame( &drv->cuStreamConnection, eglframe, NULL ));
+        //and try again
+        CHECK_CUDA_RESULT_RETURN(drv->cu->cuEGLStreamProducerPresentFrame( &drv->cuStreamConnection, eglframe, NULL), NULL);
     }
 
     BackingImage *ret = NULL;
@@ -504,7 +502,7 @@ static bool copyFrameToSurface(NVDriver *drv, CUdeviceptr ptr, NVSurface *surfac
         .Height = surface->height,
         .WidthInBytes = surface->width * bpp
     };
-    CHECK_CUDA_RESULT(drv->cu->cuMemcpy2DAsync(&cpy, 0));
+    CHECK_CUDA_RESULT_RETURN(drv->cu->cuMemcpy2DAsync(&cpy, 0), false);
     CUDA_MEMCPY2D cpy2 = {
         .srcMemoryType = CU_MEMORYTYPE_DEVICE,
         .srcDevice = ptr,
@@ -515,7 +513,7 @@ static bool copyFrameToSurface(NVDriver *drv, CUdeviceptr ptr, NVSurface *surfac
         .Height = surface->height >> 1,
         .WidthInBytes = surface->width * bpp
     };
-    CHECK_CUDA_RESULT(drv->cu->cuMemcpy2D(&cpy2));
+    CHECK_CUDA_RESULT_RETURN(drv->cu->cuMemcpy2D(&cpy2), false);
 
     //notify anyone waiting for us to be resolved
     pthread_mutex_lock(&surface->mutex);
@@ -549,7 +547,9 @@ bool egl_realiseSurface(NVDriver *drv, NVSurface *surface) {
             if (img->fourcc == DRM_FORMAT_NV21) {
                 LOG("Detected NV12/NV21 NVIDIA driver bug, attempting to work around");
                 //free the old surface to prevent leaking them
-                egl_destroyBackingImage(drv, img);
+                if (!egl_destroyBackingImage(drv, img)) {
+                    LOG("Unable to destroy backing image");
+                }
                 //this is a caused by a bug in old versions the driver that was fixed in the 510 series
                 drv->useCorrectNV12Format = !drv->useCorrectNV12Format;
                 //re-export the frame in the correct format
