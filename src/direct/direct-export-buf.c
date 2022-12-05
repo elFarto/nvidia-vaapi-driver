@@ -88,6 +88,10 @@ static bool import_to_cuda(NVDriver *drv, NVDriverImage *image, int bpc, int cha
 
     CHECK_CUDA_RESULT_RETURN(drv->cu->cuImportExternalMemory(&cudaImage->extMem, &extMemDesc), false);
 
+    //For some reason, this close *must* be *here*, otherwise we will get random visual glitches.
+    close(image->nvFd);
+    image->nvFd = 0;
+
     CUDA_EXTERNAL_MEMORY_MIPMAPPED_ARRAY_DESC mipmapArrayDesc = {
         .arrayDesc = {
             .Width = image->width,
@@ -119,18 +123,12 @@ BackingImage *direct_allocateBackingImage(NVDriver *drv, const NVSurface *surfac
     alloc_image(&drv->driverContext, surface->width, surface->height, 1, bpp, &driverImages[0]);
     alloc_image(&drv->driverContext, surface->width>>1, surface->height>>1, 2, bpp, &driverImages[1]);
 
-    LOG("Importing images");
     if (!import_to_cuda(drv, &driverImages[0], bpp, 1, &backingImage->cudaImages[0], &backingImage->arrays[0])) {
         goto bail;
     }
     if (!import_to_cuda(drv, &driverImages[1], bpp, 2, &backingImage->cudaImages[1], &backingImage->arrays[1])) {
         goto bail;
     }
-
-    close(driverImages[0].nvFd);
-    close(driverImages[1].nvFd);
-    driverImages[0].nvFd = 0;
-    driverImages[1].nvFd = 0;
 
     backingImage->fds[0] = driverImages[0].drmFd;
     backingImage->fds[1] = driverImages[1].drmFd;

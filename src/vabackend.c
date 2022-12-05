@@ -141,7 +141,7 @@ bool checkCudaErrors(CUresult err, const char *file, const char *function, const
     if (CUDA_SUCCESS != err) {
         const char *errStr = NULL;
         cu->cuGetErrorString(err, &errStr);
-        logger(file, function, line, "cuda error '%s' (%d)\n", errStr, err);
+        logger(file, function, line, "CUDA ERROR '%s' (%d)\n", errStr, err);
         return true;
     }
     return false;
