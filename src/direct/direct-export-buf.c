@@ -127,6 +127,11 @@ BackingImage *direct_allocateBackingImage(NVDriver *drv, const NVSurface *surfac
         goto bail;
     }
 
+    close(driverImages[0].nvFd);
+    close(driverImages[1].nvFd);
+    driverImages[0].nvFd = 0;
+    driverImages[1].nvFd = 0;
+
     backingImage->fds[0] = driverImages[0].drmFd;
     backingImage->fds[1] = driverImages[1].drmFd;
 
