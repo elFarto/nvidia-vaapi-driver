@@ -23,7 +23,11 @@
 #ifndef _UAPI_NVIDIA_DRM_IOCTL_H_
 #define _UAPI_NVIDIA_DRM_IOCTL_H_
 
-#include <drm/drm.h>
+#if defined __has_include && __has_include(<libdrm/drm.h>)
+#  include <libdrm/drm.h>
+#else
+#  include <drm/drm.h>
+#endif
 
 /*
  * We should do our best to keep these values constant. Any change to these will

@@ -47,3 +47,8 @@ for f in $INCLUDED_FILES; do
         fi
     done
 done
+
+#fixup nvidia-drm-ioctl.h as it includes a kernel header, and we'd like it to be able to choose
+mv ${OUTPUT_DIR}/nvidia-drm-ioctl.h ${OUTPUT_DIR}/nvidia-drm-ioctl.h.bak
+sed 's$#include <drm/drm.h>$#if defined __has_include \&\& __has_include(<libdrm/drm.h>)\n#  include <libdrm/drm.h>\n#else\n#  include <drm/drm.h>\n#endif$' < ${OUTPUT_DIR}/nvidia-drm-ioctl.h.bak > ${OUTPUT_DIR}/nvidia-drm-ioctl.h
+

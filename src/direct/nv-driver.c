@@ -8,7 +8,11 @@
 #include <string.h>
 #include <stdint.h>
 
-#include <drm/drm_fourcc.h>
+#if defined __has_include && __has_include(<libdrm/drm.h>)
+#  include <libdrm/drm_fourcc.h>
+#else
+#  include <drm/drm_fourcc.h>
+#endif
 
 //#define NV_TYPESAFE_HANDLES 1
 
