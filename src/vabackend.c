@@ -1481,7 +1481,7 @@ static VAStatus nvCreateImage(
     NVBuffer *imageBuffer = (NVBuffer*) imageBufferObject->obj;
     imageBuffer->bufferType = VAImageBufferType;
     imageBuffer->size = 0;
-    for (int i = 0; i < fmtInfo->numPlanes; i++) {
+    for (uint32_t i = 0; i < fmtInfo->numPlanes; i++) {
         imageBuffer->size += ((width * height) >> (p[i].ss.x + p[i].ss.y)) * fmtInfo->bppc * p[i].channelCount;
     }
     imageBuffer->elements = 1;
@@ -1597,7 +1597,7 @@ static VAStatus nvGetImage(
     //wait for the surface to be decoded
     nvSyncSurface(ctx, surface);
 
-    for (int i = 0; i < fmtInfo->numPlanes; i++) {
+    for (uint32_t i = 0; i < fmtInfo->numPlanes; i++) {
         const NVFormatPlane *p = &fmtInfo->plane[i];
         CUDA_MEMCPY2D memcpy2d = {
         .srcXInBytes = 0, .srcY = 0,
@@ -1856,21 +1856,21 @@ static VAStatus nvQuerySurfaceAttributes(
                     attrib_idx += 1;
                     break;
                 case cudaVideoSurfaceFormat_YUV444_16Bit:
-#if VA_FOURCC_Q410
+#ifdef VA_FOURCC_Q410
                     attrib_list[attrib_idx].type = VASurfaceAttribPixelFormat;
                     attrib_list[attrib_idx].flags = 0;
                     attrib_list[attrib_idx].value.type = VAGenericValueTypeInteger;
                     attrib_list[attrib_idx].value.value.i = VA_FOURCC_Q410;
                     attrib_idx += 1;
 #endif
-#if VA_FOURCC_Q412
+#ifdef VA_FOURCC_Q412
                     attrib_list[attrib_idx].type = VASurfaceAttribPixelFormat;
                     attrib_list[attrib_idx].flags = 0;
                     attrib_list[attrib_idx].value.type = VAGenericValueTypeInteger;
                     attrib_list[attrib_idx].value.value.i = VA_FOURCC_Q412;
                     attrib_idx += 1;
 #endif
-#if VA_FOURCC_Q416
+#ifdef VA_FOURCC_Q416
                     attrib_list[attrib_idx].type = VASurfaceAttribPixelFormat;
                     attrib_list[attrib_idx].flags = 0;
                     attrib_list[attrib_idx].value.type = VAGenericValueTypeInteger;
