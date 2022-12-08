@@ -295,6 +295,9 @@ static cudaVideoCodec computeHEVCCudaCodec(VAProfile profile) {
         case VAProfileHEVCMain:
         case VAProfileHEVCMain10:
         case VAProfileHEVCMain12:
+        case VAProfileHEVCMain444:
+        case VAProfileHEVCMain444_10:
+        case VAProfileHEVCMain444_12:
             return cudaVideoCodec_HEVC;
         default:
             return cudaVideoCodec_NONE;
@@ -305,6 +308,9 @@ static const VAProfile hevcSupportedProfiles[] = {
     VAProfileHEVCMain,
     VAProfileHEVCMain10,
     VAProfileHEVCMain12,
+    VAProfileHEVCMain444,
+    VAProfileHEVCMain444_10,
+    VAProfileHEVCMain444_12,
 };
 
 const DECLARE_CODEC(hevcCodec) = {
