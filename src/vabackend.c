@@ -573,58 +573,38 @@ static VAStatus nvGetConfigAttributes(
 
     for (int i = 0; i < num_attribs; i++)
     {
+        attrib_list[i].value = VA_RT_FORMAT_YUV420;
         if (attrib_list[i].type == VAConfigAttribRTFormat)
         {
             switch (profile) {
             case VAProfileHEVCMain12:
             case VAProfileVP9Profile2:
-                attrib_list[i].value = VA_RT_FORMAT_YUV420_12;
+                attrib_list[i].value |= VA_RT_FORMAT_YUV420_12;
                 // Fall-through
             case VAProfileHEVCMain10:
-                if (!drv->supports16BitSurface) {
-                    return VA_STATUS_ERROR_UNSUPPORTED_PROFILE;
-                }
-                attrib_list[i].value = VA_RT_FORMAT_YUV420_10;
-                break;
-
-            case VAProfileHEVCMain444:
-            case VAProfileVP9Profile1:
-                if (!drv->supports444Surface) {
-                    return VA_STATUS_ERROR_UNSUPPORTED_PROFILE;
-                }
-                attrib_list[i].value = VA_RT_FORMAT_YUV444;
+            case VAProfileAV1Profile0:
+                attrib_list[i].value |= VA_RT_FORMAT_YUV420_10;
                 break;
 
             case VAProfileHEVCMain444_12:
             case VAProfileVP9Profile3:
-                attrib_list[i].value = VA_RT_FORMAT_YUV444_12;
+                attrib_list[i].value |= VA_RT_FORMAT_YUV444_12 | VA_RT_FORMAT_YUV420_12;
                 // Fall-through
             case VAProfileHEVCMain444_10:
-                if (!drv->supports16BitSurface || !drv->supports444Surface) {
-                    return VA_STATUS_ERROR_UNSUPPORTED_PROFILE;
-                }
-                attrib_list[i].value = VA_RT_FORMAT_YUV444_10;
-                break;
-
-            case VAProfileAV1Profile0:
-                attrib_list[i].value = VA_RT_FORMAT_YUV420;
-                if (!drv->supports16BitSurface) {
-                    attrib_list[i].value |= VA_RT_FORMAT_YUV420_10;
-                }
-                break;
             case VAProfileAV1Profile1:
-                if (!drv->supports444Surface) {
-                    return VA_STATUS_ERROR_UNSUPPORTED_PROFILE;
-                }
-                attrib_list[i].value = VA_RT_FORMAT_YUV444;
-                if (!drv->supports16BitSurface) {
-                    attrib_list[i].value |= VA_RT_FORMAT_YUV444_10;
-                }
+                attrib_list[i].value |= VA_RT_FORMAT_YUV444_10 | VA_RT_FORMAT_YUV420_10;
+                // Fall-through
+            case VAProfileHEVCMain444:
+            case VAProfileVP9Profile1:
+                attrib_list[i].value |= VA_RT_FORMAT_YUV444;
                 break;
+            }
 
-            default:
-                attrib_list[i].value = VA_RT_FORMAT_YUV420;
-                break;
+            if (!drv->supports16BitSurface) {
+                attrib_list[i].value &= ~(VA_RT_FORMAT_YUV420_10 | VA_RT_FORMAT_YUV420_12 | VA_RT_FORMAT_YUV444_10 | VA_RT_FORMAT_YUV444_12);
+            }
+            if (!drv->supports444Surface) {
+                attrib_list[i].value &= ~(VA_RT_FORMAT_YUV444 | VA_RT_FORMAT_YUV444_10 | VA_RT_FORMAT_YUV444_12);
             }
         }
         else if (attrib_list[i].type == VAConfigAttribMaxPictureWidth)
@@ -823,59 +803,37 @@ static VAStatus nvQueryConfigAttributes(
     *profile = cfg->profile;
     *entrypoint = cfg->entrypoint;
     int i = 0;
-    attrib_list[i].value = 0;
+    attrib_list[i].value = VA_RT_FORMAT_YUV420;
     attrib_list[i].type = VAConfigAttribRTFormat;
-    switch (cfg->profile)
-    {
+    switch (cfg->profile) {
     case VAProfileHEVCMain12:
     case VAProfileVP9Profile2:
-        attrib_list[i].value = VA_RT_FORMAT_YUV420_12;
+        attrib_list[i].value |= VA_RT_FORMAT_YUV420_12;
         // Fall-through
     case VAProfileHEVCMain10:
-        if (cfg->chromaFormat != cudaVideoChromaFormat_420 || cfg->surfaceFormat != cudaVideoSurfaceFormat_P016) {
-            return VA_STATUS_ERROR_INVALID_CONFIG;
-        }
-        attrib_list[i].value = VA_RT_FORMAT_YUV420_10;
-        break;
-
-    case VAProfileHEVCMain444:
-    case VAProfileVP9Profile1:
-        if (cfg->chromaFormat != cudaVideoChromaFormat_444 || cfg->surfaceFormat != cudaVideoSurfaceFormat_YUV444) {
-            return VA_STATUS_ERROR_INVALID_CONFIG;
-        }
-        attrib_list[i].value = VA_RT_FORMAT_YUV444;
+    case VAProfileAV1Profile0:
+        attrib_list[i].value |= VA_RT_FORMAT_YUV420_10;
         break;
 
     case VAProfileHEVCMain444_12:
     case VAProfileVP9Profile3:
-        attrib_list[i].value = VA_RT_FORMAT_YUV444_12;
+        attrib_list[i].value |= VA_RT_FORMAT_YUV444_12 | VA_RT_FORMAT_YUV420_12;
         // Fall-through
     case VAProfileHEVCMain444_10:
-        if (cfg->chromaFormat != cudaVideoChromaFormat_444 || cfg->surfaceFormat != cudaVideoSurfaceFormat_YUV444_16Bit) {
-            return VA_STATUS_ERROR_INVALID_CONFIG;
-        }
-        attrib_list[i].value = VA_RT_FORMAT_YUV444_10;
-        break;
-
-    case VAProfileAV1Profile0:
-        if (cfg->chromaFormat != cudaVideoChromaFormat_420) {
-            return VA_STATUS_ERROR_INVALID_CONFIG;
-        }
-        attrib_list[i].value = VA_RT_FORMAT_YUV420 | VA_RT_FORMAT_YUV420_10;
-        break;
     case VAProfileAV1Profile1:
-        if (cfg->chromaFormat != cudaVideoChromaFormat_444) {
-            return VA_STATUS_ERROR_INVALID_CONFIG;
-        }
-        attrib_list[i].value = VA_RT_FORMAT_YUV444 | VA_RT_FORMAT_YUV444_10;
+        attrib_list[i].value |= VA_RT_FORMAT_YUV444_10 | VA_RT_FORMAT_YUV420_10;
+        // Fall-through
+    case VAProfileHEVCMain444:
+    case VAProfileVP9Profile1:
+        attrib_list[i].value |= VA_RT_FORMAT_YUV444;
         break;
+    }
 
-    default:
-        if (cfg->chromaFormat != cudaVideoChromaFormat_420 || cfg->surfaceFormat != cudaVideoSurfaceFormat_NV12) {
-            return VA_STATUS_ERROR_INVALID_CONFIG;
-        }
-        attrib_list[i].value = VA_RT_FORMAT_YUV420;
-        break;
+    if (!drv->supports16BitSurface) {
+        attrib_list[i].value &= ~(VA_RT_FORMAT_YUV420_10 | VA_RT_FORMAT_YUV420_12 | VA_RT_FORMAT_YUV444_10 | VA_RT_FORMAT_YUV444_12);
+    }
+    if (!drv->supports444Surface) {
+        attrib_list[i].value &= ~(VA_RT_FORMAT_YUV444 | VA_RT_FORMAT_YUV444_10 | VA_RT_FORMAT_YUV444_12);
     }
 
     i++;
