@@ -14,9 +14,8 @@
 #  include <drm/drm_fourcc.h>
 #endif
 
-//#define NV_TYPESAFE_HANDLES 1
-
 #include "nv-driver.h"
+#include <nvidia.h>
 #include "../vabackend.h"
 
 static const NvHandle NULL_OBJECT = {0};

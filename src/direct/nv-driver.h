@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-#include "nvidia.h"
+#include "nvidia-drm-ioctl.h"
 
 #define ROUND_UP(N, S) ((((N) + (S) - 1) / (S)) * (S))
 
@@ -13,9 +13,9 @@ typedef struct {
     int nv0Fd;
     int drmFd;
     struct drm_nvidia_get_dev_info_params devInfo;
-    NvHandle clientObject;
-    NvHandle deviceObject;
-    NvHandle subdeviceObject;
+    uint32_t clientObject;
+    uint32_t deviceObject;
+    uint32_t subdeviceObject;
     uint32_t driverMajorVersion;
     //bool hasHugePage;
 } NVDriverContext;
