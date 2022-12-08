@@ -124,18 +124,30 @@ BackingImage *direct_allocateBackingImage(NVDriver *drv, const NVSurface *surfac
     switch (surface->format)
     {
     case cudaVideoSurfaceFormat_P016:
-        if (surface->bitDepth == 10) {
+        switch (surface->bitDepth) {
+        case 10:
             backingImage->format = NV_FORMAT_P010;
-        } else {
+            break;
+        case 12:
             backingImage->format = NV_FORMAT_P012;
+            break;
+        default:
+            backingImage->format = NV_FORMAT_P016;
+            break;
         }
         break;
 
     case cudaVideoSurfaceFormat_YUV444_16Bit:
-        if (surface->bitDepth == 10) {
+        switch (surface->bitDepth) {
+        case 10:
             backingImage->format = NV_FORMAT_Q410;
-        } else {
+            break;
+        case 12:
             backingImage->format = NV_FORMAT_Q412;
+            break;
+        default:
+            backingImage->format = NV_FORMAT_Q416;
+            break;
         }
         break;
 
