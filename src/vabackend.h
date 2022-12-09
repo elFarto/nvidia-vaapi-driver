@@ -78,7 +78,8 @@ typedef enum
     NV_FORMAT_444P,
     NV_FORMAT_Q410,
     NV_FORMAT_Q412,
-    NV_FORMAT_Q416
+    NV_FORMAT_Q416,
+    NV_FORMAT_RGBP
 } NVFormat;
 
 typedef struct
