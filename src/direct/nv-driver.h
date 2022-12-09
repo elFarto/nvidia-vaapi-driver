@@ -22,6 +22,7 @@ typedef struct {
 
 typedef struct {
     int nvFd;
+    int nvFd2;
     int drmFd;
     uint32_t width;
     uint32_t height;

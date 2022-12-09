@@ -37,6 +37,8 @@ bool nv_alloc_object(int fd, NvHandle hRoot, NvHandle hObjectParent, NvHandle* h
         return false;
     }
 
+    LOG("Allocating NVObject: %X", alloc.hObjectNew);
+
     *hObjectNew = alloc.hObjectNew;
 
     return true;
@@ -52,6 +54,8 @@ bool nv_free_object(int fd, NvHandle hRoot, NvHandle hObject) {
         .hObjectParent = NULL_OBJECT,
         .hObjectOld = hObject
     };
+
+    LOG("Freeing NVObject: %X", hObject);
 
     int ret = ioctl(fd, _IOC(_IOC_READ|_IOC_WRITE, NV_IOCTL_MAGIC, NV_ESC_RM_FREE, sizeof(NVOS00_PARAMETERS)), &freeParams);
 
@@ -489,6 +493,7 @@ bool alloc_image(NVDriverContext *context, uint32_t width, uint32_t height, uint
     image->width = width;
     image->height = height;
     image->nvFd = memFd;
+    image->nvFd2 = memFd2; //not sure why we can't close this one, we shouldn't need it after importing the image
     image->drmFd = prime_handle.fd;
     image->mods = DRM_FORMAT_MOD_NVIDIA_BLOCK_LINEAR_2D(0, context->devInfo.sector_layout, context->devInfo.page_kind_generation, context->devInfo.generic_page_kind, log2GobsPerBlockY);
     image->offset = 0;

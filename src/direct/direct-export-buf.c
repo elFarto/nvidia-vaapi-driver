@@ -90,7 +90,9 @@ static bool import_to_cuda(NVDriver *drv, NVDriverImage *image, int bpc, int cha
 
     //For some reason, this close *must* be *here*, otherwise we will get random visual glitches.
     close(image->nvFd);
+    close(image->nvFd2);
     image->nvFd = 0;
+    image->nvFd2 = 0;
 
     CUDA_EXTERNAL_MEMORY_MIPMAPPED_ARRAY_DESC mipmapArrayDesc = {
         .arrayDesc = {
@@ -161,6 +163,9 @@ bail:
     for (int i = 0; i < 2; i++) {
         if (driverImages[i].nvFd != 0) {
             close(driverImages[i].nvFd);
+        }
+        if (driverImages[i].nvFd2 != 0) {
+            close(driverImages[i].nvFd2);
         }
         if (driverImages[i].drmFd != 0) {
             close(driverImages[i].drmFd);
