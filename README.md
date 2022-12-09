@@ -44,6 +44,10 @@ To view which codecs your card is capable of decoding you can use the `vainfo` c
 
 To install and use `nvidia-vaapi-driver`, follow the steps in installation and configuration. It is recommended to follow testing as well to verify hardware acceleration is working as intended.
 
+**Requirements**
+
+* NVIDIA driver series 470 or 500+
+
 ## Package manager
 
 | Package manager | Package name                                                                          | Notes          |
