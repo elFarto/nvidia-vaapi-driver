@@ -130,8 +130,6 @@ static bool checkModesetParameterFromFd(int fd) {
             LOG("ERROR: This driver requires the nvidia_drm.modeset kernel module parameter set to 1");
             return false;
         }
-    } else {
-        LOG("Unable to check nvidia_drm modeset setting");
     }
     return true;
 }
@@ -147,12 +145,16 @@ static void findGPUIndexFromFd(NVDriver *drv) {
         LOG("No support for EGL_EXT_device_enumeration");
         drv->cudaGpuId = 0;
         return;
+    } else if (drv->cudaGpuId == -1 && drv->drmFd == -1) {
+        //there's no point scanning here as we don't have anything to match, just return GPU ID 0
+        LOG("Defaulting to CUDA GPU ID 0. Use NVD_GPU to select a specific CUDA GPU");
+        drv->cudaGpuId = 0;
     }
 
     //work out how we're searching for the GPU
     if (drv->cudaGpuId == -1 && drv->drmFd != -1) {
         //figure out the 'drm device index', basically the minor number of the device node & 0x7f
-        //since we don't know/what to care if we're dealing with a master or render node
+        //since we don't know/want to care if we're dealing with a master or render node
 
         fstat(drv->drmFd, &buf);
         drmDeviceIndex = minor(buf.st_rdev) & 0x7f;
@@ -194,11 +196,28 @@ static void findGPUIndexFromFd(NVDriver *drv) {
                     continue;
                 }
 
-                //if it's the device we're looking for, check the modeset parameter on it.
-                if  (!checkModesetParameterFromFd(drv->drmFd)) {
-                    continue;
+                bool closeDevice = false;
+                if (drv->drmFd == -1) {
+                    //we've found a matching device, but don't have an fd for it (likely running under X11)
+                    //so open it manually, but we need to remember to close it again afterwards
+                    const char* drmRenderNodeFile = eglQueryDeviceStringEXT(devices[i], EGL_DRM_RENDER_NODE_FILE_EXT);
+                    if (drmRenderNodeFile) {
+                        drv->drmFd = open(drmRenderNodeFile, O_RDWR);
+                        closeDevice = true;
+                    }
                 }
 
+                //if it's the device we're looking for, check the modeset parameter on it.
+                bool checkModeset = checkModesetParameterFromFd(drv->drmFd);
+
+                if (closeDevice && drv->drmFd != -1) {
+                    close(drv->drmFd);
+                    drv->drmFd = -1;
+                }
+
+                if  (!checkModeset) {
+                    continue;
+                }
                 //TODO it's likely if we get here with (gpu != -1 && foundDrmDeviceIndex != drmDeviceIndex)
                 //then the fd that was passed to us is not an NVIDIA GPU and we should try to implement some sort of optimus support
                 //We can't really rely on the return from checking EGL_CUDA_DEVICE_NV as some non-NVIDIA drivers claim they support it
@@ -258,7 +277,7 @@ bool egl_initExporter(NVDriver *drv) {
         bool r16 = false, rg1616 = false;
         for (int i = 0; i < formatCount; i++) {
             const char *fourcc = (const char *)&formats[i];
-            LOG("Found format: %c%c%c%c", fourcc[0], fourcc[1], fourcc[2], fourcc[3]);
+            //LOG("Found format: %c%c%c%c", fourcc[0], fourcc[1], fourcc[2], fourcc[3]);
             if (formats[i] == DRM_FORMAT_R16) {
                 r16 = true;
             } else if (formats[i] == DRM_FORMAT_RG1616) {
