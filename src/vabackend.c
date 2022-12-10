@@ -1873,7 +1873,9 @@ VAStatus __vaDriverInit_1_0(VADriverContextP ctx)
 
     int fd = -1;
     //drm_state can be passed in with VA_DISPLAY_DRM or VA_DISPLAY_WAYLAND
-    bool isDrm = ctx->drm_state != NULL && ((struct drm_state*) ctx->drm_state)->fd != -1;
+    bool isDrm = ctx->drm_state != NULL && ((struct drm_state*) ctx->drm_state)->fd > 0 &&
+                 (((ctx->display_type & VA_DISPLAY_MAJOR_MASK) == VA_DISPLAY_DRM) ||
+                  ((ctx->display_type & VA_DISPLAY_MAJOR_MASK) == VA_DISPLAY_WAYLAND));
     if (gpu == -1 && !isDrm) {
         LOG("Non-DRM display type detected, defaulting to GPU ID 0. Use NVD_GPU to pick a specific GPU.");
         gpu = 0;

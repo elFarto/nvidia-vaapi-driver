@@ -37,8 +37,6 @@ bool nv_alloc_object(int fd, NvHandle hRoot, NvHandle hObjectParent, NvHandle* h
         return false;
     }
 
-    LOG("Allocating NVObject: %X", alloc.hObjectNew);
-
     *hObjectNew = alloc.hObjectNew;
 
     return true;
@@ -54,8 +52,6 @@ bool nv_free_object(int fd, NvHandle hRoot, NvHandle hObject) {
         .hObjectParent = NULL_OBJECT,
         .hObjectOld = hObject
     };
-
-    LOG("Freeing NVObject: %X", hObject);
 
     int ret = ioctl(fd, _IOC(_IOC_READ|_IOC_WRITE, NV_IOCTL_MAGIC, NV_ESC_RM_FREE, sizeof(NVOS00_PARAMETERS)), &freeParams);
 
