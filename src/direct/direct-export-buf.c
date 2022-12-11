@@ -54,9 +54,44 @@ bool direct_initExporter(NVDriver *drv) {
 
     //make sure we have a drm fd
     if (drv->drmFd == -1) {
-        //TODO make this configurable
-        drv->drmFd = open("/dev/dri/renderD128", O_RDWR|O_CLOEXEC);
-        LOG("Manually opened DRM device");
+        int nvdGpu = drv->cudaGpuId;
+        if (nvdGpu == -1) {
+            // The default GPU is the first one we find.
+            nvdGpu = 0;
+        }
+
+        int fd = -1;
+        int nvIdx = 0;
+        uint8_t drmIdx = 128;
+        char node[20] = {0, };
+        do {
+            snprintf(node, 20, "/dev/dri/renderD%d", drmIdx++);
+            fd = open(node, O_RDWR|O_CLOEXEC);
+            if (fd == -1) {
+                LOG("Unable to find NVIDIA GPU %d", nvdGpu);
+                return false;
+            }
+
+            char name[16] = {0};
+            struct drm_version ver = {
+                .name = name,
+                .name_len = 15
+            };
+            int ret = ioctl(fd, DRM_IOCTL_VERSION, &ver);
+            if (ret || strncmp(name, "nvidia-drm", 10)) {
+                close(fd);
+                continue;
+            }
+            if (nvIdx != nvdGpu) {
+                close(fd);
+                nvIdx++;
+                continue;
+            }
+            break;
+        } while (fd != -1);
+
+        drv->drmFd = fd;
+        LOG("Found NVIDIA GPU %d at %s", nvdGpu, node);
     } else {
         //dup it so we can close it later and not effect firefox
         drv->drmFd = dup(drv->drmFd);
