@@ -399,7 +399,7 @@ bool alloc_image(NVDriverContext *context, uint32_t width, uint32_t height, uint
 
     //first figure out the gob layout
     uint32_t log2GobsPerBlockX = 0; //TODO not sure if these are the correct numbers to start with, but they're the largest ones i've seen used
-    uint32_t log2GobsPerBlockY = height < 100 ? 3 : 4; //TODO 100 is a guess, frames that are 80px high need a value of 3, frames that are 112px high need 4
+    uint32_t log2GobsPerBlockY = height < 96 ? 3 : 4; //TODO 96 is a guess, 80px high needs 3, 112px needs 4, 96px needs 4
     uint32_t log2GobsPerBlockZ = 0;
 
 //    while (log2GobsPerBlockX > 0 && (gobWidthInBytes << (log2GobsPerBlockX - 1)) >= width * bytesPerPixel)
