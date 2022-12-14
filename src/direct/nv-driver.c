@@ -399,17 +399,17 @@ bool alloc_image(NVDriverContext *context, uint32_t width, uint32_t height, uint
 
     //first figure out the gob layout
     uint32_t log2GobsPerBlockX = 0; //TODO not sure if these are the correct numbers to start with, but they're the largest ones i've seen used
-    uint32_t log2GobsPerBlockY = 4;
+    uint32_t log2GobsPerBlockY = height < 128 ? 3 : 4;
     uint32_t log2GobsPerBlockZ = 0;
 
-    while (log2GobsPerBlockX > 0 && (gobWidthInBytes << (log2GobsPerBlockX - 1)) >= width * bytesPerPixel)
-        log2GobsPerBlockX--;
-    while (log2GobsPerBlockY > 0 && (gobHeightInBytes << (log2GobsPerBlockY - 1)) >= height)
-        log2GobsPerBlockY--;
-    while (log2GobsPerBlockZ > 0 && (gobDepthInBytes << (log2GobsPerBlockZ - 1)) >= depth)
-        log2GobsPerBlockZ--;
+//    while (log2GobsPerBlockX > 0 && (gobWidthInBytes << (log2GobsPerBlockX - 1)) >= width * bytesPerPixel)
+//        log2GobsPerBlockX--;
+//    while (log2GobsPerBlockY > 0 && (gobHeightInBytes << (log2GobsPerBlockY - 1)) >= height)
+//        log2GobsPerBlockY--;
+//    while (log2GobsPerBlockZ > 0 && (gobDepthInBytes << (log2GobsPerBlockZ - 1)) >= depth)
+//        log2GobsPerBlockZ--;
 
-    LOG("Calculated GOB size: %dx%d", gobWidthInBytes << log2GobsPerBlockX, gobHeightInBytes << log2GobsPerBlockY );
+    LOG("Calculated GOB size: %dx%d (%dx%d)", gobWidthInBytes << log2GobsPerBlockX, gobHeightInBytes << log2GobsPerBlockY, log2GobsPerBlockX, log2GobsPerBlockY);
 
     //These two seem to be correct, but it was discovered by trial and error so I'm not 100% sure
     uint32_t widthInBytes = ROUND_UP(width * bytesPerPixel, gobWidthInBytes << log2GobsPerBlockX);
