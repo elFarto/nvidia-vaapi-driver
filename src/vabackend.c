@@ -1911,7 +1911,8 @@ VAStatus __vaDriverInit_1_0(VADriverContextP ctx)
     drv->cv = cv;
     drv->useCorrectNV12Format = true;
     drv->cudaGpuId = gpu;
-    drv->drmFd = ctx->drm_state != NULL ? ((struct drm_state*) ctx->drm_state)->fd : -1;
+    //make sure that we want the default GPU, and that a DRM fd that we care about is passed in
+    drv->drmFd = (gpu == -1 && isDrm && ctx->drm_state != NULL) ? ((struct drm_state*) ctx->drm_state)->fd : -1;
     if (backend == EGL) {
         LOG("Selecting EGL backend");
         drv->backend = &EGL_BACKEND;
