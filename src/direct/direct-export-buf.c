@@ -9,6 +9,7 @@
 #include <unistd.h>
 #include <sys/sysmacros.h>
 #include <string.h>
+#include "../backend-common.h"
 
 #if defined __has_include && __has_include(<libdrm/drm.h>)
 #  include <libdrm/drm.h>
@@ -72,16 +73,11 @@ bool direct_initExporter(NVDriver *drv) {
                 return false;
             }
 
-            char name[16] = {0};
-            struct drm_version ver = {
-                .name = name,
-                .name_len = 15
-            };
-            int ret = ioctl(fd, DRM_IOCTL_VERSION, &ver);
-            if (ret || strncmp(name, "nvidia-drm", 10)) {
+            if (!isNvidiaDrmFd(fd, true) || !checkModesetParameterFromFd(fd)) {
                 close(fd);
                 continue;
             }
+
             if (nvIdx != nvdGpu) {
                 close(fd);
                 nvIdx++;
@@ -93,6 +89,10 @@ bool direct_initExporter(NVDriver *drv) {
         drv->drmFd = fd;
         LOG("Found NVIDIA GPU %d at %s", nvdGpu, node);
     } else {
+        if (!isNvidiaDrmFd(drv->drmFd, true) || !checkModesetParameterFromFd(drv->drmFd)) {
+            return false;
+        }
+
         //dup it so we can close it later and not effect firefox
         drv->drmFd = dup(drv->drmFd);
     }

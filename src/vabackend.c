@@ -2075,28 +2075,14 @@ extern const NVBackend DIRECT_BACKEND;
 extern const NVBackend EGL_BACKEND;
 
 __attribute__((visibility("default")))
-VAStatus __vaDriverInit_1_0(VADriverContextP ctx)
-{
-    LOG("Initialising NVIDIA VA-API Driver: %p %X", ctx, ctx->display_type);
+VAStatus __vaDriverInit_1_0(VADriverContextP ctx) {
+    LOG("Initialising NVIDIA VA-API Driver: %X", ctx->display_type);
 
-    int fd = -1;
-    //drm_state can be passed in with VA_DISPLAY_DRM or VA_DISPLAY_WAYLAND
+    //drm_state can be passed in with any display type, including X11. But if it's X11, we don't
+    //want to use the fd as it'll likely be an Intel GPU, as NVIDIA doesn't support DRI3 at the moment
     bool isDrm = ctx->drm_state != NULL && ((struct drm_state*) ctx->drm_state)->fd > 0 &&
                  (((ctx->display_type & VA_DISPLAY_MAJOR_MASK) == VA_DISPLAY_DRM) ||
                   ((ctx->display_type & VA_DISPLAY_MAJOR_MASK) == VA_DISPLAY_WAYLAND));
-    if (gpu == -1 && isDrm) {
-        fd = ((struct drm_state*) ctx->drm_state)->fd;
-        char name[16] = {0};
-        struct drm_version ver = {
-            .name = name,
-            .name_len = 15
-        };
-        int ret = ioctl(fd, DRM_IOCTL_VERSION, &ver);
-        if (ret || strncmp(name, "nvidia-drm", 10)) {
-            LOG("Invalid driver for DRM device: %s", ver.name);
-            return VA_STATUS_ERROR_OPERATION_FAILED;
-        }
-    }
 
     pthread_mutex_lock(&concurrency_mutex);
     LOG("Now have %d (%d max) instances", instances, max_instances);

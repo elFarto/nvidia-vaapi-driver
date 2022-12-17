@@ -23,6 +23,7 @@ thread_dep = dependency('threads')
 
 sources = [
     'src/av1.c',
+    'src/backend-common.c',
     'src/export-buf.c',
     'src/direct/direct-export-buf.c',
     'src/direct/nv-driver.c',

@@ -1,4 +1,5 @@
 #include "vabackend.h"
+#include "backend-common.h"
 #include <stdio.h>
 #include <ffnvcodec/dynlink_loader.h>
 #include <EGL/egl.h>
@@ -120,20 +121,6 @@ static bool reconnect(NVDriver *drv) {
     return true;
 }
 
-static bool checkModesetParameterFromFd(int fd) {
-    if (fd > 0) {
-        //this ioctl should fail if modeset=0
-        struct drm_get_cap caps = { .capability = DRM_CAP_DUMB_BUFFER };
-        int ret = ioctl(fd, DRM_IOCTL_GET_CAP, &caps);
-        if (ret != 0) {
-            //the modeset parameter is set to 0
-            LOG("ERROR: This driver requires the nvidia_drm.modeset kernel module parameter set to 1");
-            return false;
-        }
-    }
-    return true;
-}
-
 static void findGPUIndexFromFd(NVDriver *drv) {
     struct stat buf;
     int drmDeviceIndex;
@@ -155,6 +142,10 @@ static void findGPUIndexFromFd(NVDriver *drv) {
     if (drv->cudaGpuId == -1 && drv->drmFd != -1) {
         //figure out the 'drm device index', basically the minor number of the device node & 0x7f
         //since we don't know/want to care if we're dealing with a master or render node
+
+        if (!isNvidiaDrmFd(drv->drmFd, true) || !checkModesetParameterFromFd(drv->drmFd)) {
+            return;
+        }
 
         fstat(drv->drmFd, &buf);
         drmDeviceIndex = minor(buf.st_rdev) & 0x7f;
@@ -218,13 +209,11 @@ static void findGPUIndexFromFd(NVDriver *drv) {
                 if  (!checkModeset) {
                     continue;
                 }
-                //TODO it's likely if we get here with (gpu != -1 && foundDrmDeviceIndex != drmDeviceIndex)
-                //then the fd that was passed to us is not an NVIDIA GPU and we should try to implement some sort of optimus support
-                //We can't really rely on the return from checking EGL_CUDA_DEVICE_NV as some non-NVIDIA drivers claim they support it
 
                 LOG("Selecting EGLDevice %d", i);
                 drv->eglDevice = devices[i];
                 drv->cudaGpuId = attr;
+                return;
             } else {
                 LOG("No EGL_CUDA_DEVICE_NV support for EGLDevice %d", i);
             }
@@ -238,6 +227,11 @@ static void findGPUIndexFromFd(NVDriver *drv) {
 
 bool egl_initExporter(NVDriver *drv) {
     findGPUIndexFromFd(drv);
+
+    //if we didn't find an EGLDevice, then exit now
+    if (drv->eglDevice == NULL) {
+        return false;
+    }
 
     static const EGLAttrib debugAttribs[] = {EGL_DEBUG_MSG_WARN_KHR, EGL_TRUE, EGL_DEBUG_MSG_INFO_KHR, EGL_TRUE, EGL_NONE};
 
