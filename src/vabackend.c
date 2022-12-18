@@ -52,7 +52,6 @@ const NVFormatInfo formatsInfo[] =
     [NV_FORMAT_P012] = {2, 2, DRM_FORMAT_P012,     true,  false, {{1, DRM_FORMAT_R16,      {0,0}}, {2, DRM_FORMAT_RG1616, {1,1}}},                            {VA_FOURCC_P012, VA_LSB_FIRST,   24, 0,0,0,0,0}},
     [NV_FORMAT_P016] = {2, 2, DRM_FORMAT_P016,     true,  false, {{1, DRM_FORMAT_R16,      {0,0}}, {2, DRM_FORMAT_RG1616, {1,1}}},                            {VA_FOURCC_P016, VA_LSB_FIRST,   24, 0,0,0,0,0}},
     [NV_FORMAT_444P] = {1, 3, DRM_FORMAT_YUV444,   false, true,  {{1, DRM_FORMAT_R8,       {0,0}}, {1, DRM_FORMAT_R8,     {0,0}}, {1, DRM_FORMAT_R8, {0,0}}}, {VA_FOURCC_444P, VA_LSB_FIRST,   24, 0,0,0,0,0}},
-    [NV_FORMAT_RGBP] = {1, 3, DRM_FORMAT_YUV444,   false, true,  {{1, DRM_FORMAT_R8,       {0,0}}, {1, DRM_FORMAT_R8,     {0,0}}, {1, DRM_FORMAT_R8, {0,0}}}, {VA_FOURCC_RGBP, VA_LSB_FIRST,   24, 0,0,0,0,0}},
     // Nvidia decoder only supports YUV444 planar formats with 3 planes so we can't use VA_FOURCC_Y410, VA_FOURCC_Y412 and VA_FOURCC_Y416.
     // VA_FOURCC_Q410, VA_FOURCC_Q412 and VA_FOURCC_Q416 aren't defined in va.h yet.
 #if defined(VA_FOURCC_Q410) && defined(DRM_FORMAT_Q410)
@@ -597,7 +596,7 @@ static VAStatus nvGetConfigAttributes(
                 // Fall-through
             case VAProfileHEVCMain444:
             case VAProfileVP9Profile1:
-                attrib_list[i].value |= VA_RT_FORMAT_YUV444 | VA_RT_FORMAT_RGBP;
+                attrib_list[i].value |= VA_RT_FORMAT_YUV444;
                 break;
             }
 
@@ -605,7 +604,7 @@ static VAStatus nvGetConfigAttributes(
                 attrib_list[i].value &= ~(VA_RT_FORMAT_YUV420_10 | VA_RT_FORMAT_YUV420_12 | VA_RT_FORMAT_YUV444_10 | VA_RT_FORMAT_YUV444_12);
             }
             if (!drv->supports444Surface) {
-                attrib_list[i].value &= ~(VA_RT_FORMAT_YUV444 | VA_RT_FORMAT_RGBP | VA_RT_FORMAT_YUV444_10 | VA_RT_FORMAT_YUV444_12);
+                attrib_list[i].value &= ~(VA_RT_FORMAT_YUV444 | VA_RT_FORMAT_YUV444_10 | VA_RT_FORMAT_YUV444_12);
             }
         }
         else if (attrib_list[i].type == VAConfigAttribMaxPictureWidth)
@@ -749,7 +748,6 @@ static VAStatus nvCreateConfig(
                     cfg->bitDepth = 10;
                     break;
                 case VA_RT_FORMAT_YUV444:
-                case VA_RT_FORMAT_RGBP:
                     cfg->surfaceFormat = cudaVideoSurfaceFormat_YUV444;
                     cfg->chromaFormat = cudaVideoChromaFormat_444;
                     cfg->bitDepth = 8;
@@ -827,7 +825,7 @@ static VAStatus nvQueryConfigAttributes(
         // Fall-through
     case VAProfileHEVCMain444:
     case VAProfileVP9Profile1:
-        attrib_list[i].value |= VA_RT_FORMAT_YUV444 | VA_RT_FORMAT_RGBP;
+        attrib_list[i].value |= VA_RT_FORMAT_YUV444;
         break;
     }
 
@@ -835,7 +833,7 @@ static VAStatus nvQueryConfigAttributes(
         attrib_list[i].value &= ~(VA_RT_FORMAT_YUV420_10 | VA_RT_FORMAT_YUV420_12 | VA_RT_FORMAT_YUV444_10 | VA_RT_FORMAT_YUV444_12);
     }
     if (!drv->supports444Surface) {
-        attrib_list[i].value &= ~(VA_RT_FORMAT_YUV444 | VA_RT_FORMAT_RGBP | VA_RT_FORMAT_YUV444_10 | VA_RT_FORMAT_YUV444_12);
+        attrib_list[i].value &= ~(VA_RT_FORMAT_YUV444 | VA_RT_FORMAT_YUV444_10 | VA_RT_FORMAT_YUV444_12);
     }
 
     i++;
@@ -878,7 +876,6 @@ static VAStatus nvCreateSurfaces2(
         bitdepth = 12;
         break;
     case VA_RT_FORMAT_YUV444:
-    case VA_RT_FORMAT_RGBP:
         nvFormat = cudaVideoSurfaceFormat_YUV444;
         chromaFormat = cudaVideoChromaFormat_444;
         bitdepth = 8;
@@ -1768,7 +1765,7 @@ static VAStatus nvQuerySurfaceAttributes(
     }
 
     if (num_attribs != NULL) {
-        *num_attribs = 6;
+        *num_attribs = 5;
         if (drv->supports16BitSurface) {
             *num_attribs += 2;
         }
@@ -1814,11 +1811,6 @@ static VAStatus nvQuerySurfaceAttributes(
                     attrib_list[attrib_idx].flags = 0;
                     attrib_list[attrib_idx].value.type = VAGenericValueTypeInteger;
                     attrib_list[attrib_idx].value.value.i = VA_FOURCC_444P;
-                    attrib_idx += 1;
-                    attrib_list[attrib_idx].type = VASurfaceAttribPixelFormat;
-                    attrib_list[attrib_idx].flags = 0;
-                    attrib_list[attrib_idx].value.type = VAGenericValueTypeInteger;
-                    attrib_list[attrib_idx].value.value.i = VA_FOURCC_RGBP;
                     attrib_idx += 1;
                     break;
                 case cudaVideoSurfaceFormat_YUV444_16Bit:
