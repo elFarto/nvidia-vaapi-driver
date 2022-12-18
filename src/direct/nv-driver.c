@@ -388,7 +388,7 @@ bool alloc_memory(NVDriverContext *context, uint32_t size, int *fd) {
     return false;
 }
 
-bool alloc_image(NVDriverContext *context, uint32_t width, uint32_t height, uint8_t channels, uint8_t bitsPerChannel, NVDriverImage *image) {
+bool alloc_image(NVDriverContext *context, uint32_t width, uint32_t height, uint8_t channels, uint8_t bitsPerChannel, uint32_t fourcc, NVDriverImage *image) {
     uint32_t depth = 1;
     uint32_t gobWidthInBytes = 64;
     uint32_t gobHeightInBytes = 8;
@@ -495,14 +495,7 @@ bool alloc_image(NVDriverContext *context, uint32_t width, uint32_t height, uint
     image->offset = 0;
     image->pitch = widthInBytes;
     image->memorySize = imageSizeInBytes;
-    if (channels == 1) {
-        image->fourcc = bytesPerChannel == 1 ? DRM_FORMAT_R8 : DRM_FORMAT_R16;
-    } else if (channels == 2) {
-        image->fourcc = bytesPerChannel == 1 ? DRM_FORMAT_RG88 : DRM_FORMAT_RG1616;
-    } else {
-        LOG("Unknown fourcc");
-        return false;
-    }
+    image->fourcc = fourcc;
 
     LOG("created image: %dx%d %lx %d %x", width, height, image->mods, widthInBytes, imageSizeInBytes);
 

@@ -285,6 +285,7 @@ bool egl_initExporter(NVDriver *drv) {
             }
         }
         drv->supports16BitSurface = r16 & rg1616;
+        drv->supports444Surface = false;
         if (drv->supports16BitSurface) {
             LOG("Driver supports 16-bit surfaces");
         } else {
