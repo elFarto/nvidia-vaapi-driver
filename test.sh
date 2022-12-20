@@ -1,9 +1,5 @@
 #!/bin/sh
 
-export MPV=mpv
-
-export LD_LIBRARY_PATH=/opt/ffmpeg/lib/
-
 #make sure we use our driver
 export LIBVA_DRIVER_NAME=nvidia
 export LIBVA_DRIVERS_PATH=$(dirname $(realpath $0))/build
@@ -17,5 +13,4 @@ export NVD_LOG=1
 
 #mpv -v --hwdec=vaapi-copy --hwdec-codecs=all --vd-lavc-check-hw-profile=no $@
 #mpv -v -v --msg-level=all=debug --hwdec=vaapi --hwdec-codecs=all --vd-lavc-check-hw-profile=no $@
-#apitrace trace -v -a egl 
-$MPV -v --msg-level=all=debug --hwdec=vaapi --gpu-debug --hwdec-codecs=all --vd-lavc-check-hw-profile=no "$@"
+mpv -v --msg-level=all=debug --hwdec=vaapi --gpu-debug --hwdec-codecs=all --vd-lavc-check-hw-profile=no "$@"

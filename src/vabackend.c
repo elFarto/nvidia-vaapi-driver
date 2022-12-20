@@ -1431,7 +1431,7 @@ static VAStatus nvCreateImage(
     NVImage *img = (NVImage*) imageObj->obj;
     img->width = width;
     img->height = height;
-    img->format = format->fourcc;
+    img->format = nvFormat;
 
     //allocate buffer to hold image when we copy down from the GPU
     //TODO could probably put these in a pool, they appear to be allocated, used, then freed
