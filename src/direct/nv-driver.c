@@ -399,15 +399,8 @@ bool alloc_image(NVDriverContext *context, uint32_t width, uint32_t height, uint
 
     //first figure out the gob layout
     uint32_t log2GobsPerBlockX = 0; //TODO not sure if these are the correct numbers to start with, but they're the largest ones i've seen used
-    uint32_t log2GobsPerBlockY = height < 96 ? 3 : 4; //TODO 96 is a guess, 80px high needs 3, 112px needs 4, 96px needs 4
+    uint32_t log2GobsPerBlockY = height < 88 ? 3 : 4; //TODO 88 is a guess, 80px high needs 3, 112px needs 4, 96px needs 4, 88px needs 4
     uint32_t log2GobsPerBlockZ = 0;
-
-//    while (log2GobsPerBlockX > 0 && (gobWidthInBytes << (log2GobsPerBlockX - 1)) >= width * bytesPerPixel)
-//        log2GobsPerBlockX--;
-//    while (log2GobsPerBlockY > 0 && (gobHeightInBytes << (log2GobsPerBlockY - 1)) >= height)
-//        log2GobsPerBlockY--;
-//    while (log2GobsPerBlockZ > 0 && (gobDepthInBytes << (log2GobsPerBlockZ - 1)) >= depth)
-//        log2GobsPerBlockZ--;
 
     LOG("Calculated GOB size: %dx%d (%dx%d)", gobWidthInBytes << log2GobsPerBlockX, gobHeightInBytes << log2GobsPerBlockY, log2GobsPerBlockX, log2GobsPerBlockY);
 
@@ -415,13 +408,10 @@ bool alloc_image(NVDriverContext *context, uint32_t width, uint32_t height, uint
     uint32_t widthInBytes = ROUND_UP(width * bytesPerPixel, gobWidthInBytes << log2GobsPerBlockX);
     uint32_t alignedHeight = ROUND_UP(height, gobHeightInBytes << log2GobsPerBlockY);
 
-
-    //uint32_t granularity = 1;//65536;
     uint32_t imageSizeInBytes = widthInBytes * alignedHeight;
-    uint32_t size = imageSizeInBytes;//ROUND_UP(imageSizeInBytes, granularity);
-    //uint32_t alignment = 0x200000;
+    uint32_t size = imageSizeInBytes;
 
-    LOG("Aligned image size: %dx%d = %d (%d)", widthInBytes, alignedHeight, imageSizeInBytes, size);
+    LOG("Aligned image size: %dx%d = %d", widthInBytes, alignedHeight, imageSizeInBytes);
 
     //this gets us some memory, and the fd to import into cuda
     int memFd = -1;
