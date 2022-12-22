@@ -35,7 +35,11 @@ Hardware decoding only, encoding is [not supported](/../../issues/116).
 |MPEG-4|:x:|VA-API does not supply enough of the original bitstream to allow NVDEC to decode it.|
 |JPEG|:x:|This is unlikely to ever work, the two APIs are too different.|
 
-YUV444 support is a work in progress [here](/../../pull/134).
+YUV444 is supported but requires:
+
+* \>= Turing (20XX/16XX)
+* HEVC
+* Direct backend
 
 To view which codecs your card is capable of decoding you can use the `vainfo` command with this driver installed, or visit the NVIDIA website [here](https://developer.nvidia.com/video-encode-and-decode-gpu-support-matrix-new#geforce).
 
@@ -133,7 +137,7 @@ a greater degree of control over buffer allocation and freeing.
 |---|---|---|
 | <=Maxwell (<=9XX) | ❓ | ❓ |
 | Pascal (10XX) | ✅ | ❓ |
-| Turing (20XX/16XX) | ❓ | ✅ |
+| Turing (20XX/16XX) | ✅ | ✅ |
 | Ampere (30XX) | ✅ | ❓ |
 | Lovelace (40XX) | ❓ | ❓ |
 
