@@ -135,11 +135,11 @@ a greater degree of control over buffer allocation and freeing.
 
 | Generation | Desktop | Mobile |
 |---|---|---|
-| <=Maxwell (<=9XX) | ❓ | ❓ |
+| <=Maxwell (<=9XX) | ✅ | ❓ |
 | Pascal (10XX) | ✅ | ❓ |
 | Turing (20XX/16XX) | ✅ | ✅ |
 | Ampere (30XX) | ✅ | ❓ |
-| Lovelace (40XX) | ❓ | ❓ |
+| Lovelace (40XX) | ✅ | ❓ |
 
 ❓ - Unknown, let us know the test results of an unknown generation [here](/../../issues/126).
 
