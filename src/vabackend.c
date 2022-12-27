@@ -696,6 +696,8 @@ static VAStatus nvCreateConfig(
                 if (cfg->profile == VAProfileVP9Profile2) {
                     cfg->surfaceFormat = cudaVideoSurfaceFormat_P016;
                     cfg->bitDepth = 10;
+                } else {
+                    LOG("Unable to determine surface type for VP9/AV1 codec due to no RTFormat specified.");
                 }
             }
         default:
