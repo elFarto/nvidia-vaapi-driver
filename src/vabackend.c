@@ -1752,13 +1752,13 @@ static VAStatus nvQuerySurfaceAttributes(
         return VA_STATUS_ERROR_INVALID_CONFIG;
     }
 
-    if (cfg->chromaFormat == cudaVideoChromaFormat_444 && !drv->supports444Surface) {
+    if ((cfg->chromaFormat == cudaVideoChromaFormat_444 || cfg->surfaceFormat == cudaVideoSurfaceFormat_YUV444_16Bit) && !drv->supports444Surface) {
         //TODO not sure what pixel formats are needed for 422 and 444 formats
         LOG("YUV444 surfaces not supported: %d", cfg->chromaFormat);
         return VA_STATUS_ERROR_INVALID_CONFIG;
     }
 
-    if ((cfg->surfaceFormat == cudaVideoSurfaceFormat_P016 || cfg->surfaceFormat == cudaVideoSurfaceFormat_YUV444_16Bit) && !drv->supports444Surface) {
+    if (cfg->surfaceFormat == cudaVideoSurfaceFormat_P016 && !drv->supports16BitSurface) {
         //TODO not sure what pixel formats are needed for 422 and 444 formats
         LOG("16 bits surfaces not supported: %d", cfg->chromaFormat);
         return VA_STATUS_ERROR_INVALID_CONFIG;
