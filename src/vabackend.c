@@ -1802,6 +1802,8 @@ static VAStatus nvQuerySurfaceAttributes(
         attrib_list[3].value.type = VAGenericValueTypeInteger;
         attrib_list[3].value.value.i = videoDecodeCaps.nMaxHeight;
 
+        LOG("Returning constraints: width: %d - %d, height: %d - %d", attrib_list[0].value.value.i, attrib_list[2].value.value.i, attrib_list[1].value.value.i, attrib_list[3].value.value.i);
+
         int attrib_idx = 4;
 
         if (cfg->chromaFormat == cudaVideoChromaFormat_444) {
