@@ -57,7 +57,7 @@ To install and use `nvidia-vaapi-driver`, follow the steps in installation and c
 |---|---|
 | Arch<sup>AUR</sup> | [libva-nvidia-driver](https://aur.archlinux.org/packages/libva-nvidia-driver) |
 | Arch<sup>AUR</sup> | [nvidia-vaapi-driver-git](https://aur.archlinux.org/packages/nvidia-vaapi-driver-git) |
-| Debian,Ubuntu | nvidia-vaapi-driver<sup>[debian](https://packages.ubuntu.com/kinetic/nvidia-vaapi-driver) [ubuntu](https://packages.ubuntu.com/kinetic/nvidia-vaapi-driver)</sup> |
+| Debian,Ubuntu | nvidia-vaapi-driver<sup>[debian](https://tracker.debian.org/pkg/nvidia-vaapi-driver) [ubuntu](https://packages.ubuntu.com/kinetic/nvidia-vaapi-driver)</sup> |
 
 Feel free to add your distributions package in an issue/PR.
 
