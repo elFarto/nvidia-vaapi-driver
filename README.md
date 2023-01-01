@@ -65,10 +65,10 @@ Feel free to add your distributions package in an issue/PR.
 
 You'll need `meson`, the `gstreamer-plugins-bad` library, and [`nv-codec-headers`](https://git.videolan.org/?p=ffmpeg/nv-codec-headers.git) installed.
 
-| Package manager | Packages                                        |
-|-----------------|-------------------------------------------------|
-| pacman          | meson gst-plugins-bad ffnvcodec-headers         |
-| apt             | meson gstreamer1.0-plugins-bad nv-codec-headers |
+| Package manager | Packages                                        | Optional packages for additional codec support |
+|-----------------|-------------------------------------------------|------------------------------------------------|
+| pacman          | meson gst-plugins-bad ffnvcodec-headers         |                                                |
+| apt             | meson gstreamer1.0-plugins-bad nv-codec-headers | libgstreamer-plugins-bad1.0-dev                |
 
 Then run the following commands:
 
