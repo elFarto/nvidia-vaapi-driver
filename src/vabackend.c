@@ -1767,9 +1767,14 @@ static VAStatus nvQuerySurfaceAttributes(
     }
 
     if (num_attribs != NULL) {
-        *num_attribs = 5;
-        if (drv->supports16BitSurface) {
-            *num_attribs += 2;
+        *num_attribs = 4;
+        if (cfg->chromaFormat == cudaVideoChromaFormat_444) {
+            *num_attribs += 4;
+        } else {
+            *num_attribs += 1;
+            if (drv->supports16BitSurface) {
+                *num_attribs += 3;
+            }
         }
     }
 
@@ -1809,15 +1814,15 @@ static VAStatus nvQuerySurfaceAttributes(
         int attrib_idx = 4;
 
         if (cfg->chromaFormat == cudaVideoChromaFormat_444) {
-            switch (cfg->surfaceFormat) {
-                case cudaVideoSurfaceFormat_YUV444:
+            //switch (cfg->surfaceFormat) {
+            //    case cudaVideoSurfaceFormat_YUV444:
                     attrib_list[attrib_idx].type = VASurfaceAttribPixelFormat;
                     attrib_list[attrib_idx].flags = 0;
                     attrib_list[attrib_idx].value.type = VAGenericValueTypeInteger;
                     attrib_list[attrib_idx].value.value.i = VA_FOURCC_444P;
                     attrib_idx += 1;
-                    break;
-                case cudaVideoSurfaceFormat_YUV444_16Bit:
+            //        break;
+            //    case cudaVideoSurfaceFormat_YUV444_16Bit:
 #ifdef VA_FOURCC_Q410
                     attrib_list[attrib_idx].type = VASurfaceAttribPixelFormat;
                     attrib_list[attrib_idx].flags = 0;
@@ -1839,19 +1844,19 @@ static VAStatus nvQuerySurfaceAttributes(
                     attrib_list[attrib_idx].value.value.i = VA_FOURCC_Q416;
                     attrib_idx += 1;
 #endif
-                    break;
-            }
+            //        break;
+            //}
 
         } else {
-            switch (cfg->surfaceFormat) {
-                case cudaVideoSurfaceFormat_NV12:
+            //switch (cfg->surfaceFormat) {
+            //    case cudaVideoSurfaceFormat_NV12:
                     attrib_list[attrib_idx].type = VASurfaceAttribPixelFormat;
                     attrib_list[attrib_idx].flags = 0;
                     attrib_list[attrib_idx].value.type = VAGenericValueTypeInteger;
                     attrib_list[attrib_idx].value.value.i = VA_FOURCC_NV12;
                     attrib_idx += 1;
-                    break;
-                case cudaVideoSurfaceFormat_P016:
+            //        break;
+            //    case cudaVideoSurfaceFormat_P016:
                     attrib_list[attrib_idx].type = VASurfaceAttribPixelFormat;
                     attrib_list[attrib_idx].flags = 0;
                     attrib_list[attrib_idx].value.type = VAGenericValueTypeInteger;
@@ -1867,8 +1872,8 @@ static VAStatus nvQuerySurfaceAttributes(
                     attrib_list[attrib_idx].value.type = VAGenericValueTypeInteger;
                     attrib_list[attrib_idx].value.value.i = VA_FOURCC_P016;
                     attrib_idx += 1;
-                    break;
-            }
+          //          break;
+          //  }
         }
     }
 
