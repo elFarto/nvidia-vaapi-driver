@@ -58,6 +58,7 @@ To install and use `nvidia-vaapi-driver`, follow the steps in installation and c
 | Arch<sup>AUR</sup> | [libva-nvidia-driver](https://aur.archlinux.org/packages/libva-nvidia-driver) |
 | Arch<sup>AUR</sup> | [nvidia-vaapi-driver-git](https://aur.archlinux.org/packages/nvidia-vaapi-driver-git) |
 | Debian,Ubuntu | nvidia-vaapi-driver<sup>[debian](https://tracker.debian.org/pkg/nvidia-vaapi-driver) [ubuntu](https://packages.ubuntu.com/kinetic/nvidia-vaapi-driver)</sup> |
+| Fedora, RHEL and derivates (Rocky, Alma, etc).| [nvidia-vaapi-driver](https://github.com/rpmfusion/nvidia-vaapi-driver) |
 
 Feel free to add your distributions package in an issue/PR.
 
@@ -69,6 +70,7 @@ You'll need `meson`, the `gstreamer-plugins-bad` library, and [`nv-codec-headers
 |-----------------|-------------------------------------------------|------------------------------------------------|
 | pacman          | meson gst-plugins-bad ffnvcodec-headers         |                                                |
 | apt             | meson gstreamer1.0-plugins-bad nv-codec-headers | libgstreamer-plugins-bad1.0-dev                |
+| yum/dnf         | meson libva-devel gstreamer1-plugins-bad-freeworld nv-codec-headers | gstreamer1-plugins-bad-free-devel |
 
 Then run the following commands:
 
