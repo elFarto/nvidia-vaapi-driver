@@ -573,9 +573,9 @@ static VAStatus nvGetConfigAttributes(
 
     for (int i = 0; i < num_attribs; i++)
     {
-        attrib_list[i].value = VA_RT_FORMAT_YUV420;
         if (attrib_list[i].type == VAConfigAttribRTFormat)
         {
+            attrib_list[i].value = VA_RT_FORMAT_YUV420;
             switch (profile) {
             case VAProfileHEVCMain12:
             case VAProfileVP9Profile2:
@@ -1767,15 +1767,25 @@ static VAStatus nvQuerySurfaceAttributes(
     }
 
     if (num_attribs != NULL) {
-        *num_attribs = 4;
+        int cnt = 4;
         if (cfg->chromaFormat == cudaVideoChromaFormat_444) {
-            *num_attribs += 4;
+            cnt += 1;
+#ifdef VA_FOURCC_Q410
+            cnt += 1;
+#endif
+#ifdef VA_FOURCC_Q412
+            cnt += 1;
+#endif
+#ifdef VA_FOURCC_Q416
+            cnt += 1;
+#endif
         } else {
-            *num_attribs += 1;
+            cnt += 1;
             if (drv->supports16BitSurface) {
-                *num_attribs += 3;
+                cnt += 3;
             }
         }
+        *num_attribs = cnt;
     }
 
     if (attrib_list != NULL) {
@@ -1813,67 +1823,57 @@ static VAStatus nvQuerySurfaceAttributes(
 
         int attrib_idx = 4;
 
+        /* returning all the surfaces here probably isn't the best thing we could do
+         * but we don't always have enough information to determine exactly which
+         * pixel formats should be used (for instance, AV1 10-bit videos) */
         if (cfg->chromaFormat == cudaVideoChromaFormat_444) {
-            //switch (cfg->surfaceFormat) {
-            //    case cudaVideoSurfaceFormat_YUV444:
-                    attrib_list[attrib_idx].type = VASurfaceAttribPixelFormat;
-                    attrib_list[attrib_idx].flags = 0;
-                    attrib_list[attrib_idx].value.type = VAGenericValueTypeInteger;
-                    attrib_list[attrib_idx].value.value.i = VA_FOURCC_444P;
-                    attrib_idx += 1;
-            //        break;
-            //    case cudaVideoSurfaceFormat_YUV444_16Bit:
+            attrib_list[attrib_idx].type = VASurfaceAttribPixelFormat;
+            attrib_list[attrib_idx].flags = 0;
+            attrib_list[attrib_idx].value.type = VAGenericValueTypeInteger;
+            attrib_list[attrib_idx].value.value.i = VA_FOURCC_444P;
+            attrib_idx += 1;
 #ifdef VA_FOURCC_Q410
-                    attrib_list[attrib_idx].type = VASurfaceAttribPixelFormat;
-                    attrib_list[attrib_idx].flags = 0;
-                    attrib_list[attrib_idx].value.type = VAGenericValueTypeInteger;
-                    attrib_list[attrib_idx].value.value.i = VA_FOURCC_Q410;
-                    attrib_idx += 1;
+            attrib_list[attrib_idx].type = VASurfaceAttribPixelFormat;
+            attrib_list[attrib_idx].flags = 0;
+            attrib_list[attrib_idx].value.type = VAGenericValueTypeInteger;
+            attrib_list[attrib_idx].value.value.i = VA_FOURCC_Q410;
+            attrib_idx += 1;
 #endif
 #ifdef VA_FOURCC_Q412
-                    attrib_list[attrib_idx].type = VASurfaceAttribPixelFormat;
-                    attrib_list[attrib_idx].flags = 0;
-                    attrib_list[attrib_idx].value.type = VAGenericValueTypeInteger;
-                    attrib_list[attrib_idx].value.value.i = VA_FOURCC_Q412;
-                    attrib_idx += 1;
+            attrib_list[attrib_idx].type = VASurfaceAttribPixelFormat;
+            attrib_list[attrib_idx].flags = 0;
+            attrib_list[attrib_idx].value.type = VAGenericValueTypeInteger;
+            attrib_list[attrib_idx].value.value.i = VA_FOURCC_Q412;
+            attrib_idx += 1;
 #endif
 #ifdef VA_FOURCC_Q416
-                    attrib_list[attrib_idx].type = VASurfaceAttribPixelFormat;
-                    attrib_list[attrib_idx].flags = 0;
-                    attrib_list[attrib_idx].value.type = VAGenericValueTypeInteger;
-                    attrib_list[attrib_idx].value.value.i = VA_FOURCC_Q416;
-                    attrib_idx += 1;
+            attrib_list[attrib_idx].type = VASurfaceAttribPixelFormat;
+            attrib_list[attrib_idx].flags = 0;
+            attrib_list[attrib_idx].value.type = VAGenericValueTypeInteger;
+            attrib_list[attrib_idx].value.value.i = VA_FOURCC_Q416;
+            attrib_idx += 1;
 #endif
-            //        break;
-            //}
-
         } else {
-            //switch (cfg->surfaceFormat) {
-            //    case cudaVideoSurfaceFormat_NV12:
-                    attrib_list[attrib_idx].type = VASurfaceAttribPixelFormat;
-                    attrib_list[attrib_idx].flags = 0;
-                    attrib_list[attrib_idx].value.type = VAGenericValueTypeInteger;
-                    attrib_list[attrib_idx].value.value.i = VA_FOURCC_NV12;
-                    attrib_idx += 1;
-            //        break;
-            //    case cudaVideoSurfaceFormat_P016:
-                    attrib_list[attrib_idx].type = VASurfaceAttribPixelFormat;
-                    attrib_list[attrib_idx].flags = 0;
-                    attrib_list[attrib_idx].value.type = VAGenericValueTypeInteger;
-                    attrib_list[attrib_idx].value.value.i = VA_FOURCC_P010;
-                    attrib_idx += 1;
-                    attrib_list[attrib_idx].type = VASurfaceAttribPixelFormat;
-                    attrib_list[attrib_idx].flags = 0;
-                    attrib_list[attrib_idx].value.type = VAGenericValueTypeInteger;
-                    attrib_list[attrib_idx].value.value.i = VA_FOURCC_P012;
-                    attrib_idx += 1;
-                    attrib_list[attrib_idx].type = VASurfaceAttribPixelFormat;
-                    attrib_list[attrib_idx].flags = 0;
-                    attrib_list[attrib_idx].value.type = VAGenericValueTypeInteger;
-                    attrib_list[attrib_idx].value.value.i = VA_FOURCC_P016;
-                    attrib_idx += 1;
-          //          break;
-          //  }
+            attrib_list[attrib_idx].type = VASurfaceAttribPixelFormat;
+            attrib_list[attrib_idx].flags = 0;
+            attrib_list[attrib_idx].value.type = VAGenericValueTypeInteger;
+            attrib_list[attrib_idx].value.value.i = VA_FOURCC_NV12;
+            attrib_idx += 1;
+            attrib_list[attrib_idx].type = VASurfaceAttribPixelFormat;
+            attrib_list[attrib_idx].flags = 0;
+            attrib_list[attrib_idx].value.type = VAGenericValueTypeInteger;
+            attrib_list[attrib_idx].value.value.i = VA_FOURCC_P010;
+            attrib_idx += 1;
+            attrib_list[attrib_idx].type = VASurfaceAttribPixelFormat;
+            attrib_list[attrib_idx].flags = 0;
+            attrib_list[attrib_idx].value.type = VAGenericValueTypeInteger;
+            attrib_list[attrib_idx].value.value.i = VA_FOURCC_P012;
+            attrib_idx += 1;
+            attrib_list[attrib_idx].type = VASurfaceAttribPixelFormat;
+            attrib_list[attrib_idx].flags = 0;
+            attrib_list[attrib_idx].value.type = VAGenericValueTypeInteger;
+            attrib_list[attrib_idx].value.value.i = VA_FOURCC_P016;
+            attrib_idx += 1;
         }
     }
 
