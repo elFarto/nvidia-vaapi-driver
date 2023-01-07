@@ -7,6 +7,7 @@
 #include <unistd.h>
 #include <string.h>
 #include <stdint.h>
+#include <errno.h>
 
 #if defined __has_include && __has_include(<libdrm/drm.h>)
 #  include <libdrm/drm_fourcc.h>
@@ -453,7 +454,7 @@ bool alloc_image(NVDriverContext *context, uint32_t width, uint32_t height, uint
     };
     int drmret = ioctl(context->drmFd, DRM_IOCTL_NVIDIA_GEM_IMPORT_NVKMS_MEMORY, &params);
     if (drmret != 0) {
-        LOG("DRM_IOCTL_NVIDIA_GEM_IMPORT_NVKMS_MEMORY failed: %d %d", drmret);
+        LOG("DRM_IOCTL_NVIDIA_GEM_IMPORT_NVKMS_MEMORY failed: %d %d", drmret, errno);
         goto err;
     }
 
@@ -463,7 +464,7 @@ bool alloc_image(NVDriverContext *context, uint32_t width, uint32_t height, uint
     };
     drmret = ioctl(context->drmFd, DRM_IOCTL_PRIME_HANDLE_TO_FD, &prime_handle);
     if (drmret != 0) {
-        LOG("DRM_IOCTL_PRIME_HANDLE_TO_FD failed: %d", drmret);
+        LOG("DRM_IOCTL_PRIME_HANDLE_TO_FD failed: %d %d", drmret, errno);
         goto err;
     }
 
@@ -472,7 +473,7 @@ bool alloc_image(NVDriverContext *context, uint32_t width, uint32_t height, uint
     };
     drmret = ioctl(context->drmFd, DRM_IOCTL_GEM_CLOSE, &gem_close);
     if (drmret != 0) {
-        LOG("DRM_IOCTL_GEM_CLOSE failed: %d", drmret);
+        LOG("DRM_IOCTL_GEM_CLOSE failed: %d %d", drmret, errno);
         goto prime_err;
     }
 
