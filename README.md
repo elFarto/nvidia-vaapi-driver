@@ -117,10 +117,15 @@ In addition the following environment variables need to be set. For permanent co
 
 | Variable | Value | Reason |
 |---|---|---|
-| LIBVA_DRIVER_NAME | nvidia | Forces libva to load the `nvidia` backend, as the current version doesn't know which driver to load for the nvidia-drm driver. |
 | MOZ_DISABLE_RDD_SANDBOX | 1 | Disables the sandbox for the RDD process that the decoder runs in. |
 | EGL_PLATFORM | wayland | Required on FF98+ when running on Wayland, due to a regression that has been introduced. |
+| LIBVA_DRIVER_NAME | nvidia | For libva versions prior to 2.15, this forces libva to load the `nvidia` backend. |
 | __EGL_VENDOR_LIBRARY_FILENAMES | /usr/share/glvnd/egl_vendor.d/10_nvidia.json | Required for the 470 driver series only. It overrides the list of drivers the glvnd library can use to prevent Firefox from using the MESA driver by mistake. |
+
+When libva is used it will log out some information, which can be excessive when Firefox initalises it multiple times per page. This logging can be suppressed by adding the following line to the `/etc/libva.conf` file:
+```
+LIBVA_MESSAGING_LEVEL=1
+```
 
 ## MPV
 
