@@ -34,7 +34,7 @@ bool nv_alloc_object(int fd, NvHandle hRoot, NvHandle hObjectParent, NvHandle* h
     int ret = ioctl(fd, _IOC(_IOC_READ|_IOC_WRITE, NV_IOCTL_MAGIC, NV_ESC_RM_ALLOC, sizeof(NVOS64_PARAMETERS)), &alloc);
 
     if (ret != 0 || alloc.status != NV_OK) {
-        LOG("nv_alloc_object failed: %d %X", ret, alloc.status);
+        LOG("nv_alloc_object failed: %d %X %d", ret, alloc.status, errno);
         return false;
     }
 
@@ -57,7 +57,7 @@ bool nv_free_object(int fd, NvHandle hRoot, NvHandle hObject) {
     int ret = ioctl(fd, _IOC(_IOC_READ|_IOC_WRITE, NV_IOCTL_MAGIC, NV_ESC_RM_FREE, sizeof(NVOS00_PARAMETERS)), &freeParams);
 
     if (ret != 0 || freeParams.status != NV_OK) {
-        LOG("nv_free_object failed: %d %X", ret, freeParams.status);
+        LOG("nv_free_object failed: %d %X %d", ret, freeParams.status, errno);
         return false;
     }
 
@@ -77,7 +77,7 @@ bool nv_rm_control(int fd, NvHandle hClient, NvHandle hObject, NvV32 cmd, NvU32 
     int ret = ioctl(fd, _IOC(_IOC_READ|_IOC_WRITE, NV_IOCTL_MAGIC, NV_ESC_RM_CONTROL, sizeof(NVOS54_PARAMETERS)), &control);
 
     if (ret != 0 || control.status != NV_OK) {
-        LOG("nv_rm_control failed: %d %X", ret, control.status);
+        LOG("nv_rm_control failed: %d %X %d", ret, control.status, errno);
         return false;
     }
 
@@ -93,7 +93,12 @@ bool nv_check_version(int fd, char *versionString) {
 
     int ret = ioctl(fd, _IOC(_IOC_READ|_IOC_WRITE, NV_IOCTL_MAGIC, NV_ESC_CHECK_VERSION_STR, sizeof(obj)), &obj);
 
-    return ret == 0 && obj.reply == NV_RM_API_VERSION_REPLY_RECOGNIZED;
+    if (ret != 0) {
+        LOG("nv_check_version failed: %d %d", ret, errno);
+        return false;
+    }
+
+    return obj.reply == NV_RM_API_VERSION_REPLY_RECOGNIZED;
 }
 
 NvU64 nv_sys_params(int fd) {
@@ -102,17 +107,32 @@ NvU64 nv_sys_params(int fd) {
 
     int ret = ioctl(fd, _IOC(_IOC_READ|_IOC_WRITE, NV_IOCTL_MAGIC, NV_ESC_SYS_PARAMS, sizeof(obj)), &obj);
 
-    return ret == 0 ? obj.memblock_size : 0;
+    if (ret != 0) {
+        LOG("nv_sys_params failed: %d %d", ret, errno);
+        return 0;
+    }
+
+    return obj.memblock_size;
 }
 
 bool nv_card_info(int fd, nv_ioctl_card_info_t (*card_info)[32]) {
     int ret = ioctl(fd, _IOC(_IOC_READ|_IOC_WRITE, NV_IOCTL_MAGIC, NV_ESC_CARD_INFO, sizeof(nv_ioctl_card_info_t) * 32), card_info);
+
+    if (ret != 0) {
+        LOG("nv_card_info failed: %d %d", ret, errno);
+        return false;
+    }
 
     return ret == 0;
 }
 
 bool nv_attach_gpus(int fd, int gpu) {
     int ret = ioctl(fd, _IOC(_IOC_READ|_IOC_WRITE, NV_IOCTL_MAGIC, NV_ESC_ATTACH_GPUS_TO_FD, sizeof(gpu)), &gpu);
+
+    if (ret != 0) {
+        LOG("nv_attach_gpus failed: %d %d", ret, errno);
+        return false;
+    }
 
     return ret == 0;
 }
@@ -157,15 +177,23 @@ bool nv_get_versions(int fd, NvHandle hClient, char **driverVersion) {
 
 bool nv0_register_fd(int nv0_fd, int nvctl_fd) {
     int ret = ioctl(nv0_fd, _IOC(_IOC_READ|_IOC_WRITE, NV_IOCTL_MAGIC, NV_ESC_REGISTER_FD, sizeof(int)), &nvctl_fd);
-    return ret == 0;
+
+    if (ret != 0) {
+        LOG("nv0_register_fd failed: %d %d", ret, errno);
+        return false;
+    }
+
+    return true;
 }
 
 bool get_device_info(int fd, struct drm_nvidia_get_dev_info_params *devInfo) {
     int ret = ioctl(fd, DRM_IOCTL_NVIDIA_GET_DEV_INFO, devInfo);
-    if (ret) {
-        LOG("DRM_IOCTL_NVIDIA_GET_DEV_INFO failed: %d", ret);
+
+    if (ret != 0) {
+        LOG("get_device_info failed: %d %d", ret, errno);
         return false;
     }
+
     return true;
 }
 
