@@ -1859,21 +1859,23 @@ static VAStatus nvQuerySurfaceAttributes(
             attrib_list[attrib_idx].value.type = VAGenericValueTypeInteger;
             attrib_list[attrib_idx].value.value.i = VA_FOURCC_NV12;
             attrib_idx += 1;
-            attrib_list[attrib_idx].type = VASurfaceAttribPixelFormat;
-            attrib_list[attrib_idx].flags = 0;
-            attrib_list[attrib_idx].value.type = VAGenericValueTypeInteger;
-            attrib_list[attrib_idx].value.value.i = VA_FOURCC_P010;
-            attrib_idx += 1;
-            attrib_list[attrib_idx].type = VASurfaceAttribPixelFormat;
-            attrib_list[attrib_idx].flags = 0;
-            attrib_list[attrib_idx].value.type = VAGenericValueTypeInteger;
-            attrib_list[attrib_idx].value.value.i = VA_FOURCC_P012;
-            attrib_idx += 1;
-            attrib_list[attrib_idx].type = VASurfaceAttribPixelFormat;
-            attrib_list[attrib_idx].flags = 0;
-            attrib_list[attrib_idx].value.type = VAGenericValueTypeInteger;
-            attrib_list[attrib_idx].value.value.i = VA_FOURCC_P016;
-            attrib_idx += 1;
+            if (drv->supports16BitSurface) {
+                attrib_list[attrib_idx].type = VASurfaceAttribPixelFormat;
+                attrib_list[attrib_idx].flags = 0;
+                attrib_list[attrib_idx].value.type = VAGenericValueTypeInteger;
+                attrib_list[attrib_idx].value.value.i = VA_FOURCC_P010;
+                attrib_idx += 1;
+                attrib_list[attrib_idx].type = VASurfaceAttribPixelFormat;
+                attrib_list[attrib_idx].flags = 0;
+                attrib_list[attrib_idx].value.type = VAGenericValueTypeInteger;
+                attrib_list[attrib_idx].value.value.i = VA_FOURCC_P012;
+                attrib_idx += 1;
+                attrib_list[attrib_idx].type = VASurfaceAttribPixelFormat;
+                attrib_list[attrib_idx].flags = 0;
+                attrib_list[attrib_idx].value.type = VAGenericValueTypeInteger;
+                attrib_list[attrib_idx].value.value.i = VA_FOURCC_P016;
+                attrib_idx += 1;
+            }
         }
     }
 
