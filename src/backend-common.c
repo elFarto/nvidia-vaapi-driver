@@ -15,7 +15,7 @@ bool checkModesetParameterFromFd(int fd) {
         }
         return true;
     }
-    return false;
+    return true;
 }
 
 bool isNvidiaDrmFd(int fd, bool log) {
