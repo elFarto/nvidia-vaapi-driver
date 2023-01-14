@@ -464,11 +464,12 @@ BackingImage *egl_allocateBackingImage(NVDriver *drv, const NVSurface *surface) 
     LOG("Presenting frame %d %dx%d (%p, %p, %p)", surface->pictureIdx, eglframe.width, eglframe.height, surface, eglframe.frame.pArray[0], eglframe.frame.pArray[1]);
     if (CHECK_CUDA_RESULT(drv->cu->cuEGLStreamProducerPresentFrame( &drv->cuStreamConnection, eglframe, NULL))) {
         //if we got an error here, try to reconnect to the EGLStream
-        if (!reconnect(drv)) {
+        if (!reconnect(drv) ||
+            CHECK_CUDA_RESULT(drv->cu->cuEGLStreamProducerPresentFrame( &drv->cuStreamConnection, eglframe, NULL))) {
+            pthread_mutex_unlock(&drv->exportMutex);
+
             return NULL;
         }
-        //and try again
-        CHECK_CUDA_RESULT_RETURN(drv->cu->cuEGLStreamProducerPresentFrame( &drv->cuStreamConnection, eglframe, NULL), NULL);
     }
 
     BackingImage *ret = NULL;
