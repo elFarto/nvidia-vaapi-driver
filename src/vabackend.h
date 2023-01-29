@@ -39,7 +39,7 @@ typedef struct Object_t
 
 typedef struct
 {
-    int             elements;
+    unsigned int    elements;
     int             size;
     VABufferType    bufferType;
     void            *ptr;

@@ -1409,7 +1409,7 @@ static VAStatus nvQueryImageFormats(
     LOG("In %s", __func__);
 
     *num_formats = 0;
-    for (int i = NV_FORMAT_NONE + 1; i < ARRAY_SIZE(formatsInfo); i++) {
+    for (unsigned int i = NV_FORMAT_NONE + 1; i < ARRAY_SIZE(formatsInfo); i++) {
         if (formatsInfo[i].is16bits && !drv->supports16BitSurface) {
             continue;
         }

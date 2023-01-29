@@ -307,7 +307,7 @@ static void copyAV1SliceParam(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *pic
 
 static void copyAV1SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams) {
     uint32_t offset = (uint32_t) ctx->bitstreamBuffer.size;
-    for (int i = 0; i < ctx->lastSliceParamsCount; i++) {
+    for (unsigned int i = 0; i < ctx->lastSliceParamsCount; i++) {
         VASliceParameterBufferAV1 *sliceParams = &((VASliceParameterBufferAV1*) ctx->lastSliceParams)[i];
 
         //copy just the slice we're looking at
