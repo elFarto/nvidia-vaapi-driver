@@ -68,7 +68,7 @@ static void copyVP9PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *pi
     }
 }
 
-GstVp9Parser *parser = NULL;
+static GstVp9Parser *parser;
 static void parseExtraInfo(void *buf, uint32_t size, CUVIDPICPARAMS *picParams) {
     //TODO a bit of a hack as we don't have per decoder init/deinit functions atm
     if (parser == NULL) {

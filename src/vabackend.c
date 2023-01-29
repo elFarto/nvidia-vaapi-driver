@@ -38,9 +38,9 @@ do {                        \
 #define unreachable(str) assert(!str)
 #endif
 
-pthread_mutex_t concurrency_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t concurrency_mutex = PTHREAD_MUTEX_INITIALIZER;
 static uint32_t instances;
-static uint32_t max_instances = 0;
+static uint32_t max_instances;
 
 static CudaFunctions *cu;
 static CuvidFunctions *cv;
@@ -87,8 +87,6 @@ static NVFormat nvFormatFromVaFormat(uint32_t fourcc) {
 
 __attribute__ ((constructor))
 static void init() {
-    LOG_OUTPUT = 0;
-
     char *nvdLog = getenv("NVD_LOG");
     if (nvdLog != NULL) {
         if (strcmp(nvdLog, "1") == 0) {

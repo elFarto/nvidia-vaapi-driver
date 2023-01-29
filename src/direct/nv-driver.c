@@ -15,7 +15,7 @@
 #include <nvidia.h>
 #include "../vabackend.h"
 
-static const NvHandle NULL_OBJECT = {0};
+static const NvHandle NULL_OBJECT;
 
 static bool nv_alloc_object(int fd, NvHandle hRoot, NvHandle hObjectParent, NvHandle* hObjectNew, NvV32 hClass, void* params) {
     NVOS64_PARAMETERS alloc = {
