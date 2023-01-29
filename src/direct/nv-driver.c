@@ -80,7 +80,8 @@ bool nv_rm_control(int fd, NvHandle hClient, NvHandle hObject, NvV32 cmd, NvU32 
     return true;
 }
 
-bool nv_check_version(int fd, char *versionString) {
+#if 0
+static bool nv_check_version(int fd, char *versionString) {
     nv_ioctl_rm_api_version_t obj = {
         .cmd = 0
     };
@@ -97,7 +98,7 @@ bool nv_check_version(int fd, char *versionString) {
     return obj.reply == NV_RM_API_VERSION_REPLY_RECOGNIZED;
 }
 
-NvU64 nv_sys_params(int fd) {
+static NvU64 nv_sys_params(int fd) {
     //read from /sys/devices/system/memory/block_size_bytes
     nv_ioctl_sys_params_t obj = { .memblock_size = 0x8000000 };
 
@@ -111,7 +112,7 @@ NvU64 nv_sys_params(int fd) {
     return obj.memblock_size;
 }
 
-bool nv_card_info(int fd, nv_ioctl_card_info_t (*card_info)[32]) {
+static bool nv_card_info(int fd, nv_ioctl_card_info_t (*card_info)[32]) {
     int ret = ioctl(fd, _IOC(_IOC_READ|_IOC_WRITE, NV_IOCTL_MAGIC, NV_ESC_CARD_INFO, sizeof(nv_ioctl_card_info_t) * 32), card_info);
 
     if (ret != 0) {
@@ -121,6 +122,7 @@ bool nv_card_info(int fd, nv_ioctl_card_info_t (*card_info)[32]) {
 
     return ret == 0;
 }
+#endif
 
 bool nv_attach_gpus(int fd, int gpu) {
     int ret = ioctl(fd, _IOC(_IOC_READ|_IOC_WRITE, NV_IOCTL_MAGIC, NV_ESC_ATTACH_GPUS_TO_FD, sizeof(gpu)), &gpu);
