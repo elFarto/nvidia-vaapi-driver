@@ -2171,11 +2171,32 @@ __attribute__((visibility("default")))
 VAStatus __vaDriverInit_1_0(VADriverContextP ctx) {
     LOG("Initialising NVIDIA VA-API Driver: %lX", ctx->display_type);
 
-    //drm_state can be passed in with any display type, including X11. But if it's X11, we don't
-    //want to use the fd as it'll likely be an Intel GPU, as NVIDIA doesn't support DRI3 at the moment
-    bool isDrm = ctx->drm_state != NULL && ((struct drm_state*) ctx->drm_state)->fd > 0 &&
-                 (((ctx->display_type & VA_DISPLAY_MAJOR_MASK) == VA_DISPLAY_DRM) ||
-                  ((ctx->display_type & VA_DISPLAY_MAJOR_MASK) == VA_DISPLAY_WAYLAND));
+    switch (ctx->display_type) {
+    case VA_DISPLAY_WAYLAND:
+    case VA_DISPLAY_DRM:
+    case VA_DISPLAY_DRM_RENDERNODES:
+        LOG("Initialising NVIDIA VA-API Driver: %lX", ctx->display_type);
+        break;
+    // The Android case is almost identical to DRM_RENDERNODE, although we
+    // internally open/hardcode /dev/dri/renderD128, and does not consider the
+    // native dpy at all. So error out for now.
+    case VA_DISPLAY_ANDROID:
+    // The Nvidia driver does not support DRI2 nor DRI3, thus the drm_state->fd
+    // (if available) will point to a misc other device. As such we cannot
+    // realistically support those setups.
+    case VA_DISPLAY_GLX:
+    case VA_DISPLAY_X11:
+    default:
+        LOG("Unsupported display type: %lX", ctx->display_type);
+        return VA_STATUS_ERROR_UNIMPLEMENTED;
+    }
+
+    const struct drm_state *drm_state = ctx->drm_state;
+
+    if (drm_state == NULL || drm_state->fd == -1) {
+        LOG("LIBVA did not provide a valid fd");
+        return VA_STATUS_ERROR_UNIMPLEMENTED;
+    }
 
     pthread_mutex_lock(&concurrency_mutex);
     LOG("Now have %d (%d max) instances", instances, max_instances);
@@ -2198,8 +2219,7 @@ VAStatus __vaDriverInit_1_0(VADriverContextP ctx) {
     drv->cv = cv;
     drv->useCorrectNV12Format = true;
     drv->cudaGpuId = gpu;
-    //make sure that we want the default GPU, and that a DRM fd that we care about is passed in
-    drv->drmFd = (gpu == -1 && isDrm && ctx->drm_state != NULL) ? ((struct drm_state*) ctx->drm_state)->fd : -1;
+    drv->drmFd = drm_state->fd;
     if (backend == EGL) {
         LOG("Selecting EGL backend");
         drv->backend = &EGL_BACKEND;

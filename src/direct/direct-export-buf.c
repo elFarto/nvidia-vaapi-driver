@@ -52,10 +52,6 @@ static bool direct_initExporter(NVDriver *drv) {
     PFNEGLDEBUGMESSAGECONTROLKHRPROC eglDebugMessageControlKHR = (PFNEGLDEBUGMESSAGECONTROLKHRPROC) eglGetProcAddress("eglDebugMessageControlKHR");
     eglDebugMessageControlKHR(debug, debugAttribs);
 
-    if (drv->drmFd == -1} {
-        return false;
-    }
-
     if (!isNvidiaDrmFd(drv->drmFd, true) || !checkModesetParameterFromFd(drv->drmFd)) {
         return false;
     }

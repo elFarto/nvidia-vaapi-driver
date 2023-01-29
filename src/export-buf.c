@@ -199,10 +199,6 @@ static void findGPUIndexFromFd(NVDriver *drv) {
 }
 
 static bool egl_initExporter(NVDriver *drv) {
-    if (drv->drmFd == -1) {
-        return false;
-    }
-
     findGPUIndexFromFd(drv);
 
     //if we didn't find an EGLDevice, then exit now
