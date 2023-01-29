@@ -2,6 +2,7 @@
 
 #include "vabackend.h"
 
+#include <assert.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -22,6 +23,20 @@
 #include <stdarg.h>
 
 #include <time.h>
+
+#ifndef __has_builtin
+#define __has_builtin(x) 0
+#endif
+
+#if __has_builtin(__builtin_unreachable)
+#define unreachable(str)    \
+do {                        \
+    assert(!str);           \
+    __builtin_unreachable();\
+} while (0)
+#else
+#define unreachable(str) assert(!str)
+#endif
 
 pthread_mutex_t concurrency_mutex = PTHREAD_MUTEX_INITIALIZER;
 static uint32_t instances;
@@ -593,6 +608,8 @@ static VAStatus nvGetConfigAttributes(
             case VAProfileVP9Profile1:
                 attrib_list[i].value |= VA_RT_FORMAT_YUV444;
                 break;
+            default:
+                unreachable("Unexpected profile");
             }
 
             if (!drv->supports16BitSurface) {
@@ -824,6 +841,8 @@ static VAStatus nvQueryConfigAttributes(
     case VAProfileVP9Profile1:
         attrib_list[i].value |= VA_RT_FORMAT_YUV444;
         break;
+    default:
+        unreachable("Unexpected profile");
     }
 
     if (!drv->supports16BitSurface) {
