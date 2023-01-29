@@ -30,6 +30,7 @@ if cc.get_argument_syntax() == 'gcc'
             '-Wno-unused-parameter',
             '-Werror=missing-declarations',
             '-Werror=missing-prototypes',
+            '-Wsuggest-attribute=format',
         ]),
         language: ['c'],
     )

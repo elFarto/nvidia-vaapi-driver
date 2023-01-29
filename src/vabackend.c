@@ -157,6 +157,14 @@ static void cleanup() {
     }
 }
 
+
+#ifndef __has_attribute
+#define __has_attribute(x) 0
+#endif
+
+#if __has_attribute(gnu_printf) || (defined(__GNUC__) && !defined(__clang__))
+__attribute((format(gnu_printf, 4, 5)))
+#endif
 void logger(const char *filename, const char *function, int line, const char *msg, ...) {
     if (LOG_OUTPUT == 0) {
         return;
