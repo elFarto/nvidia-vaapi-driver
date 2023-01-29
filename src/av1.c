@@ -2,7 +2,7 @@
 #include <sys/param.h>
 
 //TODO incomplete as no hardware to test with
-int get_relative_dist(CUVIDAV1PICPARAMS *pps, int ref_hint, int order_hint) {
+static int get_relative_dist(CUVIDAV1PICPARAMS *pps, int ref_hint, int order_hint) {
     if (!pps->enable_order_hint) {
         return 0;
     }

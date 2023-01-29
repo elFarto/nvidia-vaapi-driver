@@ -206,7 +206,7 @@ void appendBuffer(AppendableBuffer *ab, const void *buf, uint64_t size) {
   ab->size += size;
 }
 
-void freeBuffer(AppendableBuffer *ab) {
+static void freeBuffer(AppendableBuffer *ab) {
   if (ab->buf != NULL) {
       free(ab->buf);
       ab->buf = NULL;
@@ -2098,6 +2098,9 @@ static VAStatus nvTerminate( VADriverContextP ctx )
 
 extern const NVBackend DIRECT_BACKEND;
 extern const NVBackend EGL_BACKEND;
+
+__attribute__((visibility("default")))
+VAStatus __vaDriverInit_1_0(VADriverContextP ctx);
 
 __attribute__((visibility("default")))
 VAStatus __vaDriverInit_1_0(VADriverContextP ctx) {

@@ -55,8 +55,7 @@ static const uint8_t ff_hevc_diag_scan8x8_y[64] = {
     5, 7, 6, 7,
 };
 
-static int sortFunc(const unsigned char *a, const unsigned char *b, int *POCV)
-{
+static int sortFunc(const unsigned char *a, const unsigned char *b, int *POCV) {
     return POCV[*a] < POCV[*b] ? -1 : 1;
 }
 

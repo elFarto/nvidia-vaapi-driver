@@ -4,7 +4,7 @@
 
 #include "list.h"
 
-void ensure_capacity(Array *arr, uint32_t new_capacity) {
+static void ensure_capacity(Array *arr, uint32_t new_capacity) {
     if (new_capacity <= arr->capacity) {
         //we already have enough capacity to hold the new element
         return;
