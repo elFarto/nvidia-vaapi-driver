@@ -5,7 +5,7 @@ project(
     default_options: [
         'prefix=/usr',
         'c_std=c11',
-        'warning_level=0',
+        'warning_level=1',
     ],
     license: 'MIT',
     meson_version: '>= 0.58.0',
