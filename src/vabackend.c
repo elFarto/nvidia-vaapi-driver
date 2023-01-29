@@ -1130,7 +1130,7 @@ static VAStatus nvCreateBuffer(
     int offset = 0;
     if (nvCtx->profile == VAProfileVP8Version0_3 && type == VASliceDataBufferType) {
         offset = (int) (((uintptr_t) data) & 0xf);
-        data -= offset;
+        data = ((char *) data) - offset;
         size += offset;
     }
 
@@ -1586,7 +1586,7 @@ static VAStatus nvGetImage(
 
         .dstXInBytes = 0, .dstY = 0,
         .dstMemoryType = CU_MEMORYTYPE_HOST,
-        .dstHost = imageObj->imageBuffer->ptr + offset,
+        .dstHost = (char *)imageObj->imageBuffer->ptr + offset,
         .dstPitch = width * fmtInfo->bppc,
 
         .WidthInBytes = (width >> p->ss.x) * fmtInfo->bppc * p->channelCount,
