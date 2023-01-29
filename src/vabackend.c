@@ -2110,7 +2110,7 @@ VAStatus __vaDriverInit_1_0(VADriverContextP ctx);
 
 __attribute__((visibility("default")))
 VAStatus __vaDriverInit_1_0(VADriverContextP ctx) {
-    LOG("Initialising NVIDIA VA-API Driver: %X", ctx->display_type);
+    LOG("Initialising NVIDIA VA-API Driver: %lX", ctx->display_type);
 
     //drm_state can be passed in with any display type, including X11. But if it's X11, we don't
     //want to use the fd as it'll likely be an Intel GPU, as NVIDIA doesn't support DRI3 at the moment

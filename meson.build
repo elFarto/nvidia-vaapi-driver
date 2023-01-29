@@ -28,6 +28,8 @@ if cc.get_argument_syntax() == 'gcc'
     add_project_arguments(
         cc.get_supported_arguments([
             '-Wno-unused-parameter',
+            '-Werror=format',
+            '-Werror=format-security',
             '-Werror=missing-declarations',
             '-Werror=missing-prototypes',
             '-Wsuggest-attribute=format',
