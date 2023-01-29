@@ -5,7 +5,7 @@ project(
     default_options: [
         'prefix=/usr',
         'c_std=c11',
-        'warning_level=1',
+        'warning_level=2',
     ],
     license: 'MIT',
     meson_version: '>= 0.58.0',
@@ -23,6 +23,15 @@ deps = [
     dependency('threads'),
 ]
 gst_codecs_deps = dependency('gstreamer-codecparsers-1.0', required: false)
+
+if cc.get_argument_syntax() == 'gcc'
+    add_project_arguments(
+        cc.get_supported_arguments([
+            '-Wno-unused-parameter',
+        ]),
+        language: ['c'],
+    )
+endif
 
 sources = [
     'src/av1.c',
