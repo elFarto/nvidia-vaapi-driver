@@ -444,7 +444,6 @@ static VAStatus nvQueryConfigProfiles(
         profile_list[profiles++] = VAProfileVC1Advanced;
     }
     if (doesGPUSupportCodec(cudaVideoCodec_H264, 8, cudaVideoChromaFormat_420, NULL, NULL)) {
-        profile_list[profiles++] = VAProfileH264Baseline;
         profile_list[profiles++] = VAProfileH264Main;
         profile_list[profiles++] = VAProfileH264High;
         profile_list[profiles++] = VAProfileH264ConstrainedBaseline;
