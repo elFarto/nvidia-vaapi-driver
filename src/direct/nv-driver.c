@@ -414,10 +414,8 @@ bool alloc_memory(NVDriverContext *context, uint32_t size, int *fd) {
 }
 
 bool alloc_image(NVDriverContext *context, uint32_t width, uint32_t height, uint8_t channels, uint8_t bitsPerChannel, uint32_t fourcc, NVDriverImage *image) {
-    uint32_t depth = 1;
     uint32_t gobWidthInBytes = 64;
     uint32_t gobHeightInBytes = 8;
-    uint32_t gobDepthInBytes = 1;
 
     uint32_t bytesPerChannel = bitsPerChannel/8;
     uint32_t bytesPerPixel = channels * bytesPerChannel;

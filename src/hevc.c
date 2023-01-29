@@ -240,9 +240,6 @@ static void copyHEVCPicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *p
 
 static void copyHEVCSliceParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams)
 {
-    VASliceParameterBufferHEVC* buf = (VASliceParameterBufferHEVC*) buffer->ptr;
-    CUVIDHEVCPICPARAMS* ppc = &picParams->CodecSpecific.hevc;
-
     ctx->lastSliceParams = buffer->ptr;
     ctx->lastSliceParamsCount = buffer->elements;
 

@@ -114,7 +114,6 @@ static void parseExtraInfo(void *buf, uint32_t size, CUVIDPICPARAMS *picParams) 
 
 static void copyVP9SliceParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams)
 {
-    VASliceParameterBufferVP9* buf = (VASliceParameterBufferVP9*) buffer->ptr;
     //don't bother doing anything here, we can just read it from the reparsed header
 
     ctx->lastSliceParams = buffer->ptr;

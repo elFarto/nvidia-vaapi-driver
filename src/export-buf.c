@@ -265,8 +265,6 @@ bool egl_initExporter(NVDriver *drv) {
     if (eglQueryDmaBufFormatsEXT(drv->eglDisplay, 64, formats, &formatCount)) {
         bool r16 = false, rg1616 = false;
         for (int i = 0; i < formatCount; i++) {
-            const char *fourcc = (const char *)&formats[i];
-            //LOG("Found format: %c%c%c%c", fourcc[0], fourcc[1], fourcc[2], fourcc[3]);
             if (formats[i] == DRM_FORMAT_R16) {
                 r16 = true;
             } else if (formats[i] == DRM_FORMAT_RG1616) {
