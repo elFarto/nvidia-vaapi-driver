@@ -2105,6 +2105,65 @@ static VAStatus nvTerminate( VADriverContextP ctx )
 extern const NVBackend DIRECT_BACKEND;
 extern const NVBackend EGL_BACKEND;
 
+#define VTABLE(func) .va ## func = &nv ## func
+static const struct VADriverVTable vtable = {
+    VTABLE(Terminate),
+    VTABLE(QueryConfigProfiles),
+    VTABLE(QueryConfigEntrypoints),
+    VTABLE(QueryConfigAttributes),
+    VTABLE(CreateConfig),
+    VTABLE(DestroyConfig),
+    VTABLE(GetConfigAttributes),
+    VTABLE(CreateSurfaces),
+    VTABLE(CreateSurfaces2),
+    VTABLE(DestroySurfaces),
+    VTABLE(CreateContext),
+    VTABLE(DestroyContext),
+    VTABLE(CreateBuffer),
+    VTABLE(BufferSetNumElements),
+    VTABLE(MapBuffer),
+    VTABLE(UnmapBuffer),
+    VTABLE(DestroyBuffer),
+    VTABLE(BeginPicture),
+    VTABLE(RenderPicture),
+    VTABLE(EndPicture),
+    VTABLE(SyncSurface),
+    VTABLE(QuerySurfaceStatus),
+    VTABLE(QuerySurfaceError),
+    VTABLE(PutSurface),
+    VTABLE(QueryImageFormats),
+    VTABLE(CreateImage),
+    VTABLE(DeriveImage),
+    VTABLE(DestroyImage),
+    VTABLE(SetImagePalette),
+    VTABLE(GetImage),
+    VTABLE(PutImage),
+    VTABLE(QuerySubpictureFormats),
+    VTABLE(CreateSubpicture),
+    VTABLE(DestroySubpicture),
+    VTABLE(SetSubpictureImage),
+    VTABLE(SetSubpictureChromakey),
+    VTABLE(SetSubpictureGlobalAlpha),
+    VTABLE(AssociateSubpicture),
+    VTABLE(DeassociateSubpicture),
+    VTABLE(QueryDisplayAttributes),
+    VTABLE(GetDisplayAttributes),
+    VTABLE(SetDisplayAttributes),
+    VTABLE(QuerySurfaceAttributes),
+    VTABLE(BufferInfo),
+    VTABLE(AcquireBufferHandle),
+    VTABLE(ReleaseBufferHandle),
+    VTABLE(LockSurface),
+    VTABLE(UnlockSurface),
+    VTABLE(CreateMFContext),
+    VTABLE(MFAddContext),
+    VTABLE(MFReleaseContext),
+    VTABLE(MFSubmit),
+    VTABLE(CreateBuffer2),
+    VTABLE(QueryProcessingRate),
+    VTABLE(ExportSurfaceHandle),
+};
+
 __attribute__((visibility("default")))
 VAStatus __vaDriverInit_1_0(VADriverContextP ctx);
 
@@ -2180,63 +2239,6 @@ VAStatus __vaDriverInit_1_0(VADriverContextP ctx) {
         return VA_STATUS_ERROR_OPERATION_FAILED;
     }
 
-#define VTABLE(ctx, func) ctx->vtable->va ## func = nv ## func
-
-    VTABLE(ctx, Terminate);
-    VTABLE(ctx, QueryConfigProfiles);
-    VTABLE(ctx, QueryConfigEntrypoints);
-    VTABLE(ctx, QueryConfigAttributes);
-    VTABLE(ctx, CreateConfig);
-    VTABLE(ctx, DestroyConfig);
-    VTABLE(ctx, GetConfigAttributes);
-    VTABLE(ctx, CreateSurfaces);
-    VTABLE(ctx, CreateSurfaces2);
-    VTABLE(ctx, DestroySurfaces);
-    VTABLE(ctx, CreateContext);
-    VTABLE(ctx, DestroyContext);
-    VTABLE(ctx, CreateBuffer);
-    VTABLE(ctx, BufferSetNumElements);
-    VTABLE(ctx, MapBuffer);
-    VTABLE(ctx, UnmapBuffer);
-    VTABLE(ctx, DestroyBuffer);
-    VTABLE(ctx, BeginPicture);
-    VTABLE(ctx, RenderPicture);
-    VTABLE(ctx, EndPicture);
-    VTABLE(ctx, SyncSurface);
-    VTABLE(ctx, QuerySurfaceStatus);
-    VTABLE(ctx, QuerySurfaceError);
-    VTABLE(ctx, PutSurface);
-    VTABLE(ctx, QueryImageFormats);
-    VTABLE(ctx, CreateImage);
-    VTABLE(ctx, DeriveImage);
-    VTABLE(ctx, DestroyImage);
-    VTABLE(ctx, SetImagePalette);
-    VTABLE(ctx, GetImage);
-    VTABLE(ctx, PutImage);
-    VTABLE(ctx, QuerySubpictureFormats);
-    VTABLE(ctx, CreateSubpicture);
-    VTABLE(ctx, DestroySubpicture);
-    VTABLE(ctx, SetSubpictureImage);
-    VTABLE(ctx, SetSubpictureChromakey);
-    VTABLE(ctx, SetSubpictureGlobalAlpha);
-    VTABLE(ctx, AssociateSubpicture);
-    VTABLE(ctx, DeassociateSubpicture);
-    VTABLE(ctx, QueryDisplayAttributes);
-    VTABLE(ctx, GetDisplayAttributes);
-    VTABLE(ctx, SetDisplayAttributes);
-    VTABLE(ctx, QuerySurfaceAttributes);
-    VTABLE(ctx, BufferInfo);
-    VTABLE(ctx, AcquireBufferHandle);
-    VTABLE(ctx, ReleaseBufferHandle);
-    VTABLE(ctx, LockSurface);
-    VTABLE(ctx, UnlockSurface);
-    VTABLE(ctx, CreateMFContext);
-    VTABLE(ctx, MFAddContext);
-    VTABLE(ctx, MFReleaseContext);
-    VTABLE(ctx, MFSubmit);
-    VTABLE(ctx, CreateBuffer2);
-    VTABLE(ctx, QueryProcessingRate);
-    VTABLE(ctx, ExportSurfaceHandle);
-
+    *ctx->vtable = vtable;
     return VA_STATUS_SUCCESS;
 }
