@@ -102,8 +102,7 @@ static cudaVideoCodec computeMPEG4CudaCodec(VAProfile profile) {
             return cudaVideoCodec_NONE;
     }
 }
-//uncomment this to reenable MPEG-4 support
-/*
+
 static const VAProfile mpeg4SupportProfiles[] = {
     VAProfileH263Baseline,
     VAProfileMPEG4Main,
@@ -111,7 +110,8 @@ static const VAProfile mpeg4SupportProfiles[] = {
     VAProfileMPEG4AdvancedSimple,
 };
 
-const DECLARE_CODEC(mpeg4Codec) = {
+// change this to DECLARE_CODEC to reenable MPEG-4 support
+const DECLARE_DISABLED_CODEC(mpeg4Codec) = {
     .computeCudaCodec = computeMPEG4CudaCodec,
     .handlers = {
         [VAPictureParameterBufferType] = copyMPEG4PicParam,
@@ -122,7 +122,6 @@ const DECLARE_CODEC(mpeg4Codec) = {
     .supportedProfileCount = ARRAY_SIZE(mpeg4SupportProfiles),
     .supportedProfiles = mpeg4SupportProfiles,
 };
-*/
 
 /*
 This code needs to go in nvCreateBuffer, to realign the buffer to capture everything that's needed by NVDEC. However this hack is specific to ffmpeg

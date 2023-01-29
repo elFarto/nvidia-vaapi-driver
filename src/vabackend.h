@@ -249,4 +249,9 @@ void logger(const char *filename, const char *function, int line, const char *ms
     __attribute__((aligned(__alignof__(NVCodec)))) \
     NVCodec name
 
+#define DECLARE_DISABLED_CODEC(name) \
+    __attribute__((section("nvd_disabled_codecs"))) \
+    __attribute__((aligned(__alignof__(NVCodec)))) \
+    NVCodec name
+
 #endif // VABACKEND_H
