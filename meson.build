@@ -5,7 +5,7 @@ project(
     default_options: [
         'prefix=/usr',
         'c_std=c11',
-        'warning_level=0',
+        'warning_level=2',
     ],
     license: 'MIT',
     meson_version: '>= 0.58.0',
@@ -23,6 +23,28 @@ deps = [
     dependency('threads'),
 ]
 gst_codecs_deps = dependency('gstreamer-codecparsers-1.0', required: false)
+
+if cc.get_argument_syntax() == 'gcc'
+    add_project_arguments(
+        cc.get_supported_arguments([
+            '-Wno-missing-field-initializers',
+            '-Wno-unused-parameter',
+            '-Werror=format',
+            '-Werror=format-security',
+            '-Werror=incompatible-pointer-types',
+            '-Werror=init-self',
+            '-Werror=int-conversion',
+            '-Werror=missing-declarations',
+            '-Werror=missing-prototypes',
+            '-Werror=pointer-arith',
+            '-Werror=undef',
+            '-Werror=vla',
+            '-Wsuggest-attribute=format',
+            '-Wwrite-strings',
+        ]),
+        language: ['c'],
+    )
+endif
 
 sources = [
     'src/av1.c',

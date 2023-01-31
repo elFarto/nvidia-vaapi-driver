@@ -1,0 +1,34 @@
+name: ubuntu
+
+on: [push, pull_request]
+
+jobs:
+  ci:
+    strategy:
+      matrix:
+        compiler: [clang-15, gcc]
+        os: [ubuntu-22.04]
+    runs-on: ${{ matrix.os }}
+    env:
+      CC: ${{ matrix.compiler }}
+      DISTRO: ${{ matrix.os }}
+    steps:
+    - name: 'Checkout'
+      uses: actions/checkout@v3
+    - name: 'Install toolchain'
+      if: ${{ (matrix.compiler == 'clang-15') }}
+      run: .github/workflows/install-clang.sh 15
+    - name: 'Install prerequisites'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          libdrm-dev \
+          libva-dev \
+          libegl-dev \
+          meson
+    - name: 'Configure'
+      run: meson setup ./builddir --prefix=/usr -D werror=true
+    - name: 'Build'
+      run: meson compile -C ./builddir
+    - name: 'Install'
+      run: sudo meson install -C ./builddir

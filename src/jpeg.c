@@ -28,7 +28,7 @@ static void copyJPEGSliceParam(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *pi
 
 static void copyJPEGSliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
 {
-    for (int i = 0; i < ctx->lastSliceParamsCount; i++)
+    for (unsigned int i = 0; i < ctx->lastSliceParamsCount; i++)
     {
         VASliceParameterBufferJPEGBaseline *sliceParams = &((VASliceParameterBufferJPEGBaseline*) ctx->lastSliceParams)[i];
         uint32_t offset = (uint32_t) ctx->bitstreamBuffer.size;
@@ -47,20 +47,17 @@ static cudaVideoCodec computeJPEGCudaCodec(VAProfile profile) {
     }
 }
 
-/*
 static const VAProfile jpegSupportedProfiles[] = {
     VAProfileJPEGBaseline,
 };
 
-const DECLARE_CODEC(jpegCodec) = {
+const DECLARE_DISABLED_CODEC(jpegCodec) = {
     .computeCudaCodec = computeJPEGCudaCodec,
     .handlers = {
         [VAPictureParameterBufferType] = copyJPEGPicParam,
-        //[VAIQMatrixBufferType] = copyJPEGIQMatrix,
         [VASliceParameterBufferType] = copyJPEGSliceParam,
         [VASliceDataBufferType] = copyJPEGSliceData,
     },
     .supportedProfileCount = ARRAY_SIZE(jpegSupportedProfiles),
     .supportedProfiles = jpegSupportedProfiles,
 };
-*/

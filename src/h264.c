@@ -90,7 +90,7 @@ static void copyH264SliceParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS 
 
 static void copyH264SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
 {
-    for (int i = 0; i < ctx->lastSliceParamsCount; i++)
+    for (unsigned int i = 0; i < ctx->lastSliceParamsCount; i++)
     {
         static const uint8_t header[] = { 0, 0, 1 }; //1 as a 24-bit Big Endian
 
@@ -113,7 +113,7 @@ static void copyH264IQMatrix(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picP
 
 static cudaVideoCodec computeH264CudaCodec(VAProfile profile) {
     //cudaVideoCodec_H264_SVC missing in VA-API?
-    if (profile == VAProfileH264Baseline || profile == VAProfileH264ConstrainedBaseline || profile == VAProfileH264Main || profile == VAProfileH264High) {
+    if (profile == VAProfileH264ConstrainedBaseline || profile == VAProfileH264Main || profile == VAProfileH264High) {
         return cudaVideoCodec_H264;
     }
 
@@ -125,7 +125,6 @@ static cudaVideoCodec computeH264CudaCodec(VAProfile profile) {
 }
 
 static const VAProfile h264SupportedProfiles[] = {
-    VAProfileH264Baseline,
     VAProfileH264ConstrainedBaseline,
     VAProfileH264Main,
     VAProfileH264High,

@@ -39,7 +39,7 @@ typedef struct Object_t
 
 typedef struct
 {
-    int             elements;
+    unsigned int    elements;
     int             size;
     VABufferType    bufferType;
     void            *ptr;
@@ -246,6 +246,11 @@ void logger(const char *filename, const char *function, int line, const char *ms
     __attribute__((used)) \
     __attribute__((retain)) \
     __attribute__((section("nvd_codecs"))) \
+    __attribute__((aligned(__alignof__(NVCodec)))) \
+    NVCodec name
+
+#define DECLARE_DISABLED_CODEC(name) \
+    __attribute__((section("nvd_disabled_codecs"))) \
     __attribute__((aligned(__alignof__(NVCodec)))) \
     NVCodec name
 

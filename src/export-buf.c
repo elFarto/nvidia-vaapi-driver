@@ -56,7 +56,7 @@ static void debug(EGLenum error,const char *command,EGLint messageType,EGLLabelK
     LOG("[EGL] %s: %s", command, message);
 }
 
-void egl_releaseExporter(NVDriver *drv) {
+static void egl_releaseExporter(NVDriver *drv) {
     //TODO not sure if this is still needed as we don't return anything now
     LOG("Releasing exporter, %d outstanding frames", drv->numFramesPresented);
     while (true) {
@@ -220,7 +220,7 @@ static void findGPUIndexFromFd(NVDriver *drv) {
     drv->cudaGpuId = 0;
 }
 
-bool egl_initExporter(NVDriver *drv) {
+static bool egl_initExporter(NVDriver *drv) {
     findGPUIndexFromFd(drv);
 
     //if we didn't find an EGLDevice, then exit now
@@ -265,8 +265,6 @@ bool egl_initExporter(NVDriver *drv) {
     if (eglQueryDmaBufFormatsEXT(drv->eglDisplay, 64, formats, &formatCount)) {
         bool r16 = false, rg1616 = false;
         for (int i = 0; i < formatCount; i++) {
-            const char *fourcc = (const char *)&formats[i];
-            //LOG("Found format: %c%c%c%c", fourcc[0], fourcc[1], fourcc[2], fourcc[3]);
             if (formats[i] == DRM_FORMAT_R16) {
                 r16 = true;
             } else if (formats[i] == DRM_FORMAT_RG1616) {
@@ -321,7 +319,7 @@ static BackingImage* createBackingImage(NVDriver *drv, uint32_t width, uint32_t 
 }
 
 
-bool egl_destroyBackingImage(NVDriver *drv, BackingImage *img) {
+static bool egl_destroyBackingImage(NVDriver *drv, BackingImage *img) {
     //if we're attached to a surface, update the surface to remove us
     if (img->surface != NULL) {
         img->surface->backingImage = NULL;
@@ -344,12 +342,12 @@ bool egl_destroyBackingImage(NVDriver *drv, BackingImage *img) {
     return true;
 }
 
-void egl_attachBackingImageToSurface(NVSurface *surface, BackingImage *img) {
+static void egl_attachBackingImageToSurface(NVSurface *surface, BackingImage *img) {
     surface->backingImage = img;
     img->surface = surface;
 }
 
-void egl_detachBackingImageFromSurface(NVDriver *drv, NVSurface *surface) {
+static void egl_detachBackingImageFromSurface(NVDriver *drv, NVSurface *surface) {
     if (surface->backingImage == NULL) {
         LOG("Cannot detach NULL BackingImage from Surface");
         return;
@@ -377,7 +375,7 @@ void egl_detachBackingImageFromSurface(NVDriver *drv, NVSurface *surface) {
     surface->backingImage = NULL;
 }
 
-void egl_destroyAllBackingImage(NVDriver *drv) {
+static void egl_destroyAllBackingImage(NVDriver *drv) {
     pthread_mutex_lock(&drv->imagesMutex);
 
     ARRAY_FOR_EACH_REV(BackingImage*, it, &drv->images)
@@ -405,7 +403,7 @@ static BackingImage* findFreeBackingImage(NVDriver *drv, NVSurface *surface) {
 }
 
 
-BackingImage *egl_allocateBackingImage(NVDriver *drv, const NVSurface *surface) {
+static BackingImage *egl_allocateBackingImage(NVDriver *drv, const NVSurface *surface) {
     CUeglFrame eglframe = {
         .width = surface->width,
         .height = surface->height,
@@ -534,7 +532,7 @@ static bool copyFrameToSurface(NVDriver *drv, CUdeviceptr ptr, NVSurface *surfac
     return true;
 }
 
-bool egl_realiseSurface(NVDriver *drv, NVSurface *surface) {
+static bool egl_realiseSurface(NVDriver *drv, NVSurface *surface) {
     //make sure we're the only thread updating this surface
     pthread_mutex_lock(&surface->mutex);
     //check again to see if it's just been created
@@ -581,7 +579,7 @@ bool egl_realiseSurface(NVDriver *drv, NVSurface *surface) {
     return true;
 }
 
-bool egl_exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t pitch) {
+static bool egl_exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t pitch) {
     if (!egl_realiseSurface(drv, surface)) {
         return false;
     }
@@ -596,7 +594,7 @@ bool egl_exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint3
     return true;
 }
 
-bool egl_fillExportDescriptor(NVDriver *drv, NVSurface *surface, VADRMPRIMESurfaceDescriptor *desc) {
+static bool egl_fillExportDescriptor(NVDriver *drv, NVSurface *surface, VADRMPRIMESurfaceDescriptor *desc) {
     BackingImage *img = surface->backingImage;
 
     int bpp = img->fourcc == DRM_FORMAT_NV12 ? 1 : 2;

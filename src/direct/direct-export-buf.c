@@ -14,7 +14,7 @@
 #include <drm.h>
 #include <drm_fourcc.h>
 
-void findGPUIndexFromFd(NVDriver *drv) {
+static void findGPUIndexFromFd(NVDriver *drv) {
     //find the CUDA device id
     char drmUuid[16];
     get_device_uuid(&drv->driverContext, drmUuid);
@@ -42,7 +42,7 @@ static void debug(EGLenum error,const char *command,EGLint messageType,EGLLabelK
     LOG("[EGL] %s: %s", command, message);
 }
 
-bool direct_initExporter(NVDriver *drv) {
+static bool direct_initExporter(NVDriver *drv) {
     //this is only needed to see errors in firefox
     static const EGLAttrib debugAttribs[] = {EGL_DEBUG_MSG_WARN_KHR, EGL_TRUE, EGL_DEBUG_MSG_INFO_KHR, EGL_TRUE, EGL_NONE};
     PFNEGLDEBUGMESSAGECONTROLKHRPROC eglDebugMessageControlKHR = (PFNEGLDEBUGMESSAGECONTROLKHRPROC) eglGetProcAddress("eglDebugMessageControlKHR");
@@ -103,7 +103,7 @@ bool direct_initExporter(NVDriver *drv) {
     return ret;
 }
 
-void direct_releaseExporter(NVDriver *drv) {
+static void direct_releaseExporter(NVDriver *drv) {
     free_nvdriver(&drv->driverContext);
 }
 
@@ -146,7 +146,7 @@ static bool import_to_cuda(NVDriver *drv, NVDriverImage *image, int bpc, int cha
     return true;
 }
 
-BackingImage *direct_allocateBackingImage(NVDriver *drv, const NVSurface *surface) {
+static BackingImage *direct_allocateBackingImage(NVDriver *drv, const NVSurface *surface) {
     NVDriverImage driverImages[3] = { 0 };
     const NVFormatInfo *fmtInfo;
     const NVFormatPlane *p;
@@ -264,12 +264,12 @@ static void destroyBackingImage(NVDriver *drv, BackingImage *img) {
     free(img);
 }
 
-void direct_attachBackingImageToSurface(NVSurface *surface, BackingImage *img) {
+static void direct_attachBackingImageToSurface(NVSurface *surface, BackingImage *img) {
     surface->backingImage = img;
     img->surface = surface;
 }
 
-void direct_detachBackingImageFromSurface(NVDriver *drv, NVSurface *surface) {
+static void direct_detachBackingImageFromSurface(NVDriver *drv, NVSurface *surface) {
     if (surface->backingImage == NULL) {
         return;
     }
@@ -278,7 +278,7 @@ void direct_detachBackingImageFromSurface(NVDriver *drv, NVSurface *surface) {
     surface->backingImage = NULL;
 }
 
-void direct_destroyAllBackingImage(NVDriver *drv) {
+static void direct_destroyAllBackingImage(NVDriver *drv) {
     pthread_mutex_lock(&drv->imagesMutex);
 
     ARRAY_FOR_EACH_REV(BackingImage*, it, &drv->images)
@@ -323,7 +323,7 @@ static bool copyFrameToSurface(NVDriver *drv, CUdeviceptr ptr, NVSurface *surfac
     return true;
 }
 
-bool direct_realiseSurface(NVDriver *drv, NVSurface *surface) {
+static bool direct_realiseSurface(NVDriver *drv, NVSurface *surface) {
     //make sure we're the only thread updating this surface
     pthread_mutex_lock(&surface->mutex);
     //check again to see if it's just been created
@@ -343,7 +343,7 @@ bool direct_realiseSurface(NVDriver *drv, NVSurface *surface) {
     return true;
 }
 
-bool direct_exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t pitch) {
+static bool direct_exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t pitch) {
     if (!direct_realiseSurface(drv, surface)) {
         return false;
     }
@@ -358,7 +358,7 @@ bool direct_exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, ui
     return true;
 }
 
-bool direct_fillExportDescriptor(NVDriver *drv, NVSurface *surface, VADRMPRIMESurfaceDescriptor *desc) {
+static bool direct_fillExportDescriptor(NVDriver *drv, NVSurface *surface, VADRMPRIMESurfaceDescriptor *desc) {
     BackingImage *img = surface->backingImage;
     const NVFormatInfo *fmtInfo = &formatsInfo[img->format];
 

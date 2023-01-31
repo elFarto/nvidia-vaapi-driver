@@ -2,7 +2,7 @@
 #include <sys/param.h>
 
 //TODO incomplete as no hardware to test with
-int get_relative_dist(CUVIDAV1PICPARAMS *pps, int ref_hint, int order_hint) {
+static int get_relative_dist(CUVIDAV1PICPARAMS *pps, int ref_hint, int order_hint) {
     if (!pps->enable_order_hint) {
         return 0;
     }
@@ -307,7 +307,7 @@ static void copyAV1SliceParam(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *pic
 
 static void copyAV1SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams) {
     uint32_t offset = (uint32_t) ctx->bitstreamBuffer.size;
-    for (int i = 0; i < ctx->lastSliceParamsCount; i++) {
+    for (unsigned int i = 0; i < ctx->lastSliceParamsCount; i++) {
         VASliceParameterBufferAV1 *sliceParams = &((VASliceParameterBufferAV1*) ctx->lastSliceParams)[i];
 
         //copy just the slice we're looking at

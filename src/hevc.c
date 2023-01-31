@@ -55,11 +55,11 @@ static const uint8_t ff_hevc_diag_scan8x8_y[64] = {
     5, 7, 6, 7,
 };
 
-static int sortFunc(const char *a, const char * b, int *POCV) {
+static int sortFunc(const unsigned char *a, const unsigned char *b, int *POCV) {
     return POCV[*a] < POCV[*b] ? -1 : 1;
 }
 
-static int sortFuncRev(const char *a, const char * b, int *POCV) {
+static int sortFuncRev(const unsigned char *a, const unsigned char *b, int *POCV) {
     return POCV[*a] < POCV[*b] ? 1 : -1;
 }
 
@@ -240,9 +240,6 @@ static void copyHEVCPicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *p
 
 static void copyHEVCSliceParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams)
 {
-    VASliceParameterBufferHEVC* buf = (VASliceParameterBufferHEVC*) buffer->ptr;
-    CUVIDHEVCPICPARAMS* ppc = &picParams->CodecSpecific.hevc;
-
     ctx->lastSliceParams = buffer->ptr;
     ctx->lastSliceParamsCount = buffer->elements;
 
@@ -251,7 +248,7 @@ static void copyHEVCSliceParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS 
 
 static void copyHEVCSliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
 {
-    for (int i = 0; i < ctx->lastSliceParamsCount; i++)
+    for (unsigned int i = 0; i < ctx->lastSliceParamsCount; i++)
     {
         static const uint8_t header[] = { 0, 0, 1 }; //1 as a 24-bit Big Endian
 

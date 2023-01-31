@@ -2,6 +2,7 @@
 
 #include "vabackend.h"
 
+#include <assert.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -23,9 +24,23 @@
 
 #include <time.h>
 
-pthread_mutex_t concurrency_mutex = PTHREAD_MUTEX_INITIALIZER;
+#ifndef __has_builtin
+#define __has_builtin(x) 0
+#endif
+
+#if __has_builtin(__builtin_unreachable)
+#define unreachable(str)    \
+do {                        \
+    assert(!str);           \
+    __builtin_unreachable();\
+} while (0)
+#else
+#define unreachable(str) assert(!str)
+#endif
+
+static pthread_mutex_t concurrency_mutex = PTHREAD_MUTEX_INITIALIZER;
 static uint32_t instances;
-static uint32_t max_instances = 0;
+static uint32_t max_instances;
 
 static CudaFunctions *cu;
 static CuvidFunctions *cv;
@@ -72,8 +87,6 @@ static NVFormat nvFormatFromVaFormat(uint32_t fourcc) {
 
 __attribute__ ((constructor))
 static void init() {
-    LOG_OUTPUT = 0;
-
     char *nvdLog = getenv("NVD_LOG");
     if (nvdLog != NULL) {
         if (strcmp(nvdLog, "1") == 0) {
@@ -144,6 +157,14 @@ static void cleanup() {
     }
 }
 
+
+#ifndef __has_attribute
+#define __has_attribute(x) 0
+#endif
+
+#if __has_attribute(gnu_printf) || (defined(__GNUC__) && !defined(__clang__))
+__attribute((format(gnu_printf, 4, 5)))
+#endif
 void logger(const char *filename, const char *function, int line, const char *msg, ...) {
     if (LOG_OUTPUT == 0) {
         return;
@@ -191,7 +212,7 @@ void appendBuffer(AppendableBuffer *ab, const void *buf, uint64_t size) {
   ab->size += size;
 }
 
-void freeBuffer(AppendableBuffer *ab) {
+static void freeBuffer(AppendableBuffer *ab) {
   if (ab->buf != NULL) {
       free(ab->buf);
       ab->buf = NULL;
@@ -444,7 +465,6 @@ static VAStatus nvQueryConfigProfiles(
         profile_list[profiles++] = VAProfileVC1Advanced;
     }
     if (doesGPUSupportCodec(cudaVideoCodec_H264, 8, cudaVideoChromaFormat_420, NULL, NULL)) {
-        profile_list[profiles++] = VAProfileH264Baseline;
         profile_list[profiles++] = VAProfileH264Main;
         profile_list[profiles++] = VAProfileH264High;
         profile_list[profiles++] = VAProfileH264ConstrainedBaseline;
@@ -594,6 +614,8 @@ static VAStatus nvGetConfigAttributes(
             case VAProfileVP9Profile1:
                 attrib_list[i].value |= VA_RT_FORMAT_YUV444;
                 break;
+            default:
+                unreachable("Unexpected profile");
             }
 
             if (!drv->supports16BitSurface) {
@@ -825,6 +847,8 @@ static VAStatus nvQueryConfigAttributes(
     case VAProfileVP9Profile1:
         attrib_list[i].value |= VA_RT_FORMAT_YUV444;
         break;
+    default:
+        unreachable("Unexpected profile");
     }
 
     if (!drv->supports16BitSurface) {
@@ -1106,7 +1130,7 @@ static VAStatus nvCreateBuffer(
     int offset = 0;
     if (nvCtx->profile == VAProfileVP8Version0_3 && type == VASliceDataBufferType) {
         offset = (int) (((uintptr_t) data) & 0xf);
-        data -= offset;
+        data = ((char *) data) - offset;
         size += offset;
     }
 
@@ -1391,7 +1415,7 @@ static VAStatus nvQueryImageFormats(
     LOG("In %s", __func__);
 
     *num_formats = 0;
-    for (int i = NV_FORMAT_NONE + 1; i < ARRAY_SIZE(formatsInfo); i++) {
+    for (unsigned int i = NV_FORMAT_NONE + 1; i < ARRAY_SIZE(formatsInfo); i++) {
         if (formatsInfo[i].is16bits && !drv->supports16BitSurface) {
             continue;
         }
@@ -1562,7 +1586,7 @@ static VAStatus nvGetImage(
 
         .dstXInBytes = 0, .dstY = 0,
         .dstMemoryType = CU_MEMORYTYPE_HOST,
-        .dstHost = imageObj->imageBuffer->ptr + offset,
+        .dstHost = (char *)imageObj->imageBuffer->ptr + offset,
         .dstPitch = width * fmtInfo->bppc,
 
         .WidthInBytes = (width >> p->ss.x) * fmtInfo->bppc * p->channelCount,
@@ -2081,9 +2105,71 @@ static VAStatus nvTerminate( VADriverContextP ctx )
 extern const NVBackend DIRECT_BACKEND;
 extern const NVBackend EGL_BACKEND;
 
+#define VTABLE(func) .va ## func = &nv ## func
+static const struct VADriverVTable vtable = {
+    VTABLE(Terminate),
+    VTABLE(QueryConfigProfiles),
+    VTABLE(QueryConfigEntrypoints),
+    VTABLE(QueryConfigAttributes),
+    VTABLE(CreateConfig),
+    VTABLE(DestroyConfig),
+    VTABLE(GetConfigAttributes),
+    VTABLE(CreateSurfaces),
+    VTABLE(CreateSurfaces2),
+    VTABLE(DestroySurfaces),
+    VTABLE(CreateContext),
+    VTABLE(DestroyContext),
+    VTABLE(CreateBuffer),
+    VTABLE(BufferSetNumElements),
+    VTABLE(MapBuffer),
+    VTABLE(UnmapBuffer),
+    VTABLE(DestroyBuffer),
+    VTABLE(BeginPicture),
+    VTABLE(RenderPicture),
+    VTABLE(EndPicture),
+    VTABLE(SyncSurface),
+    VTABLE(QuerySurfaceStatus),
+    VTABLE(QuerySurfaceError),
+    VTABLE(PutSurface),
+    VTABLE(QueryImageFormats),
+    VTABLE(CreateImage),
+    VTABLE(DeriveImage),
+    VTABLE(DestroyImage),
+    VTABLE(SetImagePalette),
+    VTABLE(GetImage),
+    VTABLE(PutImage),
+    VTABLE(QuerySubpictureFormats),
+    VTABLE(CreateSubpicture),
+    VTABLE(DestroySubpicture),
+    VTABLE(SetSubpictureImage),
+    VTABLE(SetSubpictureChromakey),
+    VTABLE(SetSubpictureGlobalAlpha),
+    VTABLE(AssociateSubpicture),
+    VTABLE(DeassociateSubpicture),
+    VTABLE(QueryDisplayAttributes),
+    VTABLE(GetDisplayAttributes),
+    VTABLE(SetDisplayAttributes),
+    VTABLE(QuerySurfaceAttributes),
+    VTABLE(BufferInfo),
+    VTABLE(AcquireBufferHandle),
+    VTABLE(ReleaseBufferHandle),
+    VTABLE(LockSurface),
+    VTABLE(UnlockSurface),
+    VTABLE(CreateMFContext),
+    VTABLE(MFAddContext),
+    VTABLE(MFReleaseContext),
+    VTABLE(MFSubmit),
+    VTABLE(CreateBuffer2),
+    VTABLE(QueryProcessingRate),
+    VTABLE(ExportSurfaceHandle),
+};
+
+__attribute__((visibility("default")))
+VAStatus __vaDriverInit_1_0(VADriverContextP ctx);
+
 __attribute__((visibility("default")))
 VAStatus __vaDriverInit_1_0(VADriverContextP ctx) {
-    LOG("Initialising NVIDIA VA-API Driver: %X", ctx->display_type);
+    LOG("Initialising NVIDIA VA-API Driver: %lX", ctx->display_type);
 
     //drm_state can be passed in with any display type, including X11. But if it's X11, we don't
     //want to use the fd as it'll likely be an Intel GPU, as NVIDIA doesn't support DRI3 at the moment
@@ -2153,63 +2239,6 @@ VAStatus __vaDriverInit_1_0(VADriverContextP ctx) {
         return VA_STATUS_ERROR_OPERATION_FAILED;
     }
 
-#define VTABLE(ctx, func) ctx->vtable->va ## func = nv ## func
-
-    VTABLE(ctx, Terminate);
-    VTABLE(ctx, QueryConfigProfiles);
-    VTABLE(ctx, QueryConfigEntrypoints);
-    VTABLE(ctx, QueryConfigAttributes);
-    VTABLE(ctx, CreateConfig);
-    VTABLE(ctx, DestroyConfig);
-    VTABLE(ctx, GetConfigAttributes);
-    VTABLE(ctx, CreateSurfaces);
-    VTABLE(ctx, CreateSurfaces2);
-    VTABLE(ctx, DestroySurfaces);
-    VTABLE(ctx, CreateContext);
-    VTABLE(ctx, DestroyContext);
-    VTABLE(ctx, CreateBuffer);
-    VTABLE(ctx, BufferSetNumElements);
-    VTABLE(ctx, MapBuffer);
-    VTABLE(ctx, UnmapBuffer);
-    VTABLE(ctx, DestroyBuffer);
-    VTABLE(ctx, BeginPicture);
-    VTABLE(ctx, RenderPicture);
-    VTABLE(ctx, EndPicture);
-    VTABLE(ctx, SyncSurface);
-    VTABLE(ctx, QuerySurfaceStatus);
-    VTABLE(ctx, QuerySurfaceError);
-    VTABLE(ctx, PutSurface);
-    VTABLE(ctx, QueryImageFormats);
-    VTABLE(ctx, CreateImage);
-    VTABLE(ctx, DeriveImage);
-    VTABLE(ctx, DestroyImage);
-    VTABLE(ctx, SetImagePalette);
-    VTABLE(ctx, GetImage);
-    VTABLE(ctx, PutImage);
-    VTABLE(ctx, QuerySubpictureFormats);
-    VTABLE(ctx, CreateSubpicture);
-    VTABLE(ctx, DestroySubpicture);
-    VTABLE(ctx, SetSubpictureImage);
-    VTABLE(ctx, SetSubpictureChromakey);
-    VTABLE(ctx, SetSubpictureGlobalAlpha);
-    VTABLE(ctx, AssociateSubpicture);
-    VTABLE(ctx, DeassociateSubpicture);
-    VTABLE(ctx, QueryDisplayAttributes);
-    VTABLE(ctx, GetDisplayAttributes);
-    VTABLE(ctx, SetDisplayAttributes);
-    VTABLE(ctx, QuerySurfaceAttributes);
-    VTABLE(ctx, BufferInfo);
-    VTABLE(ctx, AcquireBufferHandle);
-    VTABLE(ctx, ReleaseBufferHandle);
-    VTABLE(ctx, LockSurface);
-    VTABLE(ctx, UnlockSurface);
-    VTABLE(ctx, CreateMFContext);
-    VTABLE(ctx, MFAddContext);
-    VTABLE(ctx, MFReleaseContext);
-    VTABLE(ctx, MFSubmit);
-    VTABLE(ctx, CreateBuffer2);
-    VTABLE(ctx, QueryProcessingRate);
-    VTABLE(ctx, ExportSurfaceHandle);
-
+    *ctx->vtable = vtable;
     return VA_STATUS_SUCCESS;
 }

@@ -15,9 +15,9 @@
 #include <nvidia.h>
 #include "../vabackend.h"
 
-static const NvHandle NULL_OBJECT = {0};
+static const NvHandle NULL_OBJECT;
 
-bool nv_alloc_object(int fd, NvHandle hRoot, NvHandle hObjectParent, NvHandle* hObjectNew, NvV32 hClass, void* params) {
+static bool nv_alloc_object(int fd, NvHandle hRoot, NvHandle hObjectParent, NvHandle* hObjectNew, NvV32 hClass, void* params) {
     NVOS64_PARAMETERS alloc = {
         .hRoot = hRoot,
         .hObjectParent = hObjectParent,
@@ -39,7 +39,7 @@ bool nv_alloc_object(int fd, NvHandle hRoot, NvHandle hObjectParent, NvHandle* h
     return true;
 }
 
-bool nv_free_object(int fd, NvHandle hRoot, NvHandle hObject) {
+static bool nv_free_object(int fd, NvHandle hRoot, NvHandle hObject) {
     if (hObject == 0) {
         return true;
     }
@@ -60,7 +60,7 @@ bool nv_free_object(int fd, NvHandle hRoot, NvHandle hObject) {
     return true;
 }
 
-bool nv_rm_control(int fd, NvHandle hClient, NvHandle hObject, NvV32 cmd, NvU32 flags, int paramSize, void* params) {
+static bool nv_rm_control(int fd, NvHandle hClient, NvHandle hObject, NvV32 cmd, NvU32 flags, int paramSize, void* params) {
     NVOS54_PARAMETERS control = {
         .hClient = hClient,
         .hObject = hObject,
@@ -80,7 +80,8 @@ bool nv_rm_control(int fd, NvHandle hClient, NvHandle hObject, NvV32 cmd, NvU32 
     return true;
 }
 
-bool nv_check_version(int fd, char *versionString) {
+#if 0
+static bool nv_check_version(int fd, char *versionString) {
     nv_ioctl_rm_api_version_t obj = {
         .cmd = 0
     };
@@ -97,7 +98,7 @@ bool nv_check_version(int fd, char *versionString) {
     return obj.reply == NV_RM_API_VERSION_REPLY_RECOGNIZED;
 }
 
-NvU64 nv_sys_params(int fd) {
+static NvU64 nv_sys_params(int fd) {
     //read from /sys/devices/system/memory/block_size_bytes
     nv_ioctl_sys_params_t obj = { .memblock_size = 0x8000000 };
 
@@ -111,7 +112,7 @@ NvU64 nv_sys_params(int fd) {
     return obj.memblock_size;
 }
 
-bool nv_card_info(int fd, nv_ioctl_card_info_t (*card_info)[32]) {
+static bool nv_card_info(int fd, nv_ioctl_card_info_t (*card_info)[32]) {
     int ret = ioctl(fd, _IOC(_IOC_READ|_IOC_WRITE, NV_IOCTL_MAGIC, NV_ESC_CARD_INFO, sizeof(nv_ioctl_card_info_t) * 32), card_info);
 
     if (ret != 0) {
@@ -121,8 +122,9 @@ bool nv_card_info(int fd, nv_ioctl_card_info_t (*card_info)[32]) {
 
     return ret == 0;
 }
+#endif
 
-bool nv_attach_gpus(int fd, int gpu) {
+static bool nv_attach_gpus(int fd, int gpu) {
     int ret = ioctl(fd, _IOC(_IOC_READ|_IOC_WRITE, NV_IOCTL_MAGIC, NV_ESC_ATTACH_GPUS_TO_FD, sizeof(gpu)), &gpu);
 
     if (ret != 0) {
@@ -133,7 +135,7 @@ bool nv_attach_gpus(int fd, int gpu) {
     return ret == 0;
 }
 
-bool nv_export_object_to_fd(int fd, int export_fd, NvHandle hClient, NvHandle hDevice, NvHandle hParent, NvHandle hObject) {
+static bool nv_export_object_to_fd(int fd, int export_fd, NvHandle hClient, NvHandle hDevice, NvHandle hParent, NvHandle hObject) {
     NV0000_CTRL_OS_UNIX_EXPORT_OBJECT_TO_FD_PARAMS params = {
         .fd = export_fd,
         .flags = 0,
@@ -150,7 +152,7 @@ bool nv_export_object_to_fd(int fd, int export_fd, NvHandle hClient, NvHandle hD
     return nv_rm_control(fd, hClient, hClient, NV0000_CTRL_CMD_OS_UNIX_EXPORT_OBJECT_TO_FD, 0, sizeof(params), &params);
 }
 
-bool nv_get_versions(int fd, NvHandle hClient, char **driverVersion) {
+static bool nv_get_versions(int fd, NvHandle hClient, char **driverVersion) {
     char driverVersionBuffer[64];
     char versionBuffer[64];
     char titleBuffer[64];
@@ -171,7 +173,7 @@ bool nv_get_versions(int fd, NvHandle hClient, char **driverVersion) {
     return true;
 }
 
-bool nv0_register_fd(int nv0_fd, int nvctl_fd) {
+static bool nv0_register_fd(int nv0_fd, int nvctl_fd) {
     int ret = ioctl(nv0_fd, _IOC(_IOC_READ|_IOC_WRITE, NV_IOCTL_MAGIC, NV_ESC_REGISTER_FD, sizeof(int)), &nvctl_fd);
 
     if (ret != 0) {
@@ -182,7 +184,7 @@ bool nv0_register_fd(int nv0_fd, int nvctl_fd) {
     return true;
 }
 
-bool get_device_info(int fd, struct drm_nvidia_get_dev_info_params *devInfo) {
+static bool get_device_info(int fd, struct drm_nvidia_get_dev_info_params *devInfo) {
     int ret = ioctl(fd, DRM_IOCTL_NVIDIA_GET_DEV_INFO, devInfo);
 
     if (ret != 0) {
@@ -414,10 +416,8 @@ bool alloc_memory(NVDriverContext *context, uint32_t size, int *fd) {
 }
 
 bool alloc_image(NVDriverContext *context, uint32_t width, uint32_t height, uint8_t channels, uint8_t bitsPerChannel, uint32_t fourcc, NVDriverImage *image) {
-    uint32_t depth = 1;
     uint32_t gobWidthInBytes = 64;
     uint32_t gobHeightInBytes = 8;
-    uint32_t gobDepthInBytes = 1;
 
     uint32_t bytesPerChannel = bitsPerChannel/8;
     uint32_t bytesPerPixel = channels * bytesPerChannel;
