@@ -127,14 +127,10 @@ static void findGPUIndexFromFd(NVDriver *drv) {
         LOG("No support for EGL_EXT_device_enumeration");
         drv->cudaGpuId = 0;
         return;
-    } else if (drv->cudaGpuId == -1 && drv->drmFd == -1) {
-        //there's no point scanning here as we don't have anything to match, just return GPU ID 0
-        LOG("Defaulting to CUDA GPU ID 0. Use NVD_GPU to select a specific CUDA GPU");
-        drv->cudaGpuId = 0;
     }
 
     //work out how we're searching for the GPU
-    if (drv->cudaGpuId == -1 && drv->drmFd != -1) {
+    if (drv->cudaGpuId == -1) {
         //figure out the 'drm device index', basically the minor number of the device node & 0x7f
         //since we don't know/want to care if we're dealing with a master or render node
 
@@ -170,7 +166,7 @@ static void findGPUIndexFromFd(NVDriver *drv) {
                 LOG("Got EGL_CUDA_DEVICE_NV value '%d' for EGLDevice %d", attr, i);
 
                 //if we're looking for a matching drm device index check it here
-                if (drv->cudaGpuId == -1 && drv->drmFd != -1) {
+                if (drv->cudaGpuId == -1) {
                     stat(drmDeviceFile, &buf);
                     int foundDrmDeviceIndex = minor(buf.st_rdev) & 0x7f;
                     LOG("Found drmDeviceIndex: %d", foundDrmDeviceIndex);
@@ -182,26 +178,8 @@ static void findGPUIndexFromFd(NVDriver *drv) {
                     continue;
                 }
 
-                bool closeDevice = false;
-                if (drv->drmFd == -1) {
-                    //we've found a matching device, but don't have an fd for it (likely running under X11)
-                    //so open it manually, but we need to remember to close it again afterwards
-                    const char* drmRenderNodeFile = eglQueryDeviceStringEXT(devices[i], EGL_DRM_RENDER_NODE_FILE_EXT);
-                    if (drmRenderNodeFile) {
-                        drv->drmFd = open(drmRenderNodeFile, O_RDWR);
-                        closeDevice = true;
-                    }
-                }
-
                 //if it's the device we're looking for, check the modeset parameter on it.
-                bool checkModeset = checkModesetParameterFromFd(drv->drmFd);
-
-                if (closeDevice && drv->drmFd != -1) {
-                    close(drv->drmFd);
-                    drv->drmFd = -1;
-                }
-
-                if  (!checkModeset) {
+                if (!checkModesetParameterFromFd(drv->drmFd))
                     continue;
                 }
 
@@ -221,6 +199,10 @@ static void findGPUIndexFromFd(NVDriver *drv) {
 }
 
 static bool egl_initExporter(NVDriver *drv) {
+    if (drv->drmFd == -1) {
+        return false;
+    }
+
     findGPUIndexFromFd(drv);
 
     //if we didn't find an EGLDevice, then exit now
