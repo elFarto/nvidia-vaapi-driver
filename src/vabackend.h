@@ -136,6 +136,7 @@ typedef struct _NVDriver
     bool                    supports16BitSurface;
     bool                    supports444Surface;
     int                     cudaGpuId;
+    CUDevice                cudaDevice;
     int                     drmFd;
     int                     surfaceCount;
     pthread_mutex_t         exportMutex;

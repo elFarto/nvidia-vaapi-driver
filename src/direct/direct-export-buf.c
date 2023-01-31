@@ -60,7 +60,8 @@ static bool direct_initExporter(NVDriver *drv) {
         return false;
     }
 
-    if (!init_nvdriver(&drv->driverContext, drv->drmFd) || !findGPUIndex(drv)) {
+    if (!init_nvdriver(&drv->driverContext, drv->drmFd) || !findGPUIndex(drv) ||
+        CHECK_CUDA_RESULT(drv->cu->cuDeviceGet(&drv->cudaDevice, drv->cudaGpuId)))
         return false;
     }
 
