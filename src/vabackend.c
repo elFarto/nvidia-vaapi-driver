@@ -99,17 +99,17 @@ static void init() {
         }
     }
 
-    char *nvdGpu = getenv("NVD_GPU");
+    const char *nvdGpu = getenv("NVD_GPU");
     if (nvdGpu != NULL) {
         gpu = atoi(nvdGpu);
     }
 
-    char *nvdMaxInstances = getenv("NVD_MAX_INSTANCES");
+    const char *nvdMaxInstances = getenv("NVD_MAX_INSTANCES");
     if (nvdMaxInstances != NULL) {
         max_instances = atoi(nvdMaxInstances);
     }
 
-    char *nvdBackend = getenv("NVD_BACKEND");
+    const char *nvdBackend = getenv("NVD_BACKEND");
     if (nvdBackend != NULL && strncmp(nvdBackend, "direct", 6) == 0) {
         backend = DIRECT;
     }
