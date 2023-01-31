@@ -14,14 +14,14 @@
 #include <drm.h>
 #include <drm_fourcc.h>
 
-static void findGPUIndex(NVDriver *drv) {
+static bool findGPUIndex(NVDriver *drv) {
     //find the CUDA device id
     char drmUuid[16];
     get_device_uuid(&drv->driverContext, drmUuid);
 
     int gpuCount = 0;
-    if (CHECK_CUDA_RESULT(drv->cu->cuDeviceGetCount(&gpuCount))) {
-        return;
+    if (CHECK_CUDA_RESULT(drv->cu->cuDeviceGetCount(&gpuCount)) || gpuCount < 1) {
+        return false;
     }
 
     for (int i = 0; i < gpuCount; i++) {
@@ -29,13 +29,14 @@ static void findGPUIndex(NVDriver *drv) {
         if (!CHECK_CUDA_RESULT(drv->cu->cuDeviceGetUuid(&uuid, i))) {
             if (memcmp(drmUuid, uuid.bytes, 16) == 0) {
                 drv->cudaGpuId = i;
-                return;
+                return true;
             }
         }
     }
 
     //default to index 0
     drv->cudaGpuId = 0;
+    return true;
 }
 
 static void debug(EGLenum error,const char *command,EGLint messageType,EGLLabelKHR threadLabel,EGLLabelKHR objectLabel,const char* message) {
@@ -56,15 +57,16 @@ static bool direct_initExporter(NVDriver *drv) {
         return false;
     }
 
-    bool ret = init_nvdriver(&drv->driverContext, drv->drmFd);
+    if (!init_nvdriver(&drv->driverContext, drv->drmFd) || !findGPUIndex(drv)) {
+        return false;
+    }
 
     //TODO this isn't really correct as we don't know if the driver version actually supports importing them
     //but we don't have an easy way to find out.
     drv->supports16BitSurface = true;
     drv->supports444Surface = true;
-    findGPUIndex(drv);
 
-    return ret;
+    return true;
 }
 
 static void direct_releaseExporter(NVDriver *drv) {
