@@ -115,12 +115,30 @@ static bool reconnect(NVDriver *drv) {
     return true;
 }
 
-static void findGPUIndexFromFd(NVDriver *drv) {
+static int getNodeMinor(EGLDeviceEXT device, int i, int file_type)
+{
+    PFNEGLQUERYDEVICESTRINGEXTPROC eglQueryDeviceStringEXT = (PFNEGLQUERYDEVICESTRINGEXTPROC) eglGetProcAddress("eglQueryDeviceStringEXT");
+    if (eglQueryDeviceStringEXT == NULL) {
+        LOG("No support for EGL_EXT_device_enumeration");
+        return -1;
+    }
+
+    const char* drmFile = eglQueryDeviceStringEXT(device, file_type);
+    if (!drmFile) {
+        LOG("No DRM device/render_node file for EGLDevice %d", i);
+        return -1;
+    }
     struct stat buf;
-    int drmDeviceIndex;
+    stat(drmFile, &buf);
+
+    LOG("Found drm Minor: %d", minor(buf.st_rdev));
+    return minor(buf.st_rdev);
+}
+
+static void findGPUIndexFromFd(NVDriver *drv) {
     PFNEGLQUERYDEVICESEXTPROC eglQueryDevicesEXT = (PFNEGLQUERYDEVICESEXTPROC) eglGetProcAddress("eglQueryDevicesEXT");
     PFNEGLQUERYDEVICEATTRIBEXTPROC eglQueryDeviceAttribEXT = (PFNEGLQUERYDEVICEATTRIBEXTPROC) eglGetProcAddress("eglQueryDeviceAttribEXT");
-    PFNEGLQUERYDEVICESTRINGEXTPROC eglQueryDeviceStringEXT = (PFNEGLQUERYDEVICESTRINGEXTPROC) eglGetProcAddress("eglQueryDeviceStringEXT");
+    int drmDeviceMinor;
 
     if (eglQueryDevicesEXT == NULL || eglQueryDeviceAttribEXT == NULL) {
         LOG("No support for EGL_EXT_device_enumeration");
@@ -130,12 +148,11 @@ static void findGPUIndexFromFd(NVDriver *drv) {
 
     //work out how we're searching for the GPU
     if (drv->cudaGpuId == -1) {
-        //figure out the 'drm device index', basically the minor number of the device node & 0x7f
-        //since we don't know/want to care if we're dealing with a master or render node
+        struct stat buf;
 
         fstat(drv->drmFd, &buf);
-        drmDeviceIndex = minor(buf.st_rdev) & 0x7f;
-        LOG("Looking for DRM device index: %d", drmDeviceIndex);
+        drmDeviceMinor = minor(buf.st_rdev);
+        LOG("Looking for DRM device minor: %d", drmDeviceMinor);
     } else {
         LOG("Looking for GPU index: %d", drv->cudaGpuId);
     }
@@ -151,38 +168,29 @@ static void findGPUIndexFromFd(NVDriver *drv) {
 
     LOG("Found %d EGL devices", num_devices);
     for (int i = 0; i < num_devices; i++) {
-        EGLAttrib attr = -1;
+        EGLAttrib attr;
 
-        //retrieve the DRM device path for this EGLDevice
-        const char* drmDeviceFile = eglQueryDeviceStringEXT(devices[i], EGL_DRM_DEVICE_FILE_EXT);
-        if (drmDeviceFile != NULL) {
-            //if we have one, try and get the CUDA device id
-            if (eglQueryDeviceAttribEXT(devices[i], EGL_CUDA_DEVICE_NV, &attr)) {
-                LOG("Got EGL_CUDA_DEVICE_NV value '%d' for EGLDevice %d", attr, i);
-
-                //if we're looking for a matching drm device index check it here
-                if (drv->cudaGpuId == -1) {
-                    stat(drmDeviceFile, &buf);
-                    int foundDrmDeviceIndex = minor(buf.st_rdev) & 0x7f;
-                    LOG("Found drmDeviceIndex: %d", foundDrmDeviceIndex);
-                    if (foundDrmDeviceIndex != drmDeviceIndex) {
-                        continue;
-                    }
-                } else if (drv->cudaGpuId != attr) {
-                    //LOG("Not selected device, skipping");
-                    continue;
-                }
-
-                LOG("Selecting EGLDevice %d", i);
-                drv->eglDevice = devices[i];
-                drv->cudaGpuId = attr;
-                return;
-            } else {
-                LOG("No EGL_CUDA_DEVICE_NV support for EGLDevice %d", i);
-            }
-        } else {
-            LOG("No DRM device file for EGLDevice %d", i);
+        if (!eglQueryDeviceAttribEXT(devices[i], EGL_CUDA_DEVICE_NV, &attr)) {
+            LOG("No EGL_CUDA_DEVICE_NV support for EGLDevice %d", i);
+            continue;
         }
+
+        LOG("Got EGL_CUDA_DEVICE_NV value '%d' for EGLDevice %d", attr, i);
+
+        if (drv->cudaGpuId == -1) {
+            if (getNodeMinor(devices[i], i, EGL_DRM_DEVICE_FILE_EXT) != drmDeviceMinor &&
+                getNodeMinor(devices[i], i, EGL_DRM_RENDER_NODE_FILE_EXT) != drmDeviceMinor) {
+                continue;
+            }
+        } else if (drv->cudaGpuId != attr) {
+            //LOG("Not selected device, skipping");
+            continue;
+        }
+
+        LOG("Selecting EGLDevice %d", i);
+        drv->eglDevice = devices[i];
+        drv->cudaGpuId = attr;
+        return;
     }
     LOG("No match found, falling back to default device");
     drv->cudaGpuId = 0;
