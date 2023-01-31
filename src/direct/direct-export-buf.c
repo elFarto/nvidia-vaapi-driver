@@ -9,7 +9,6 @@
 #include <unistd.h>
 #include <sys/sysmacros.h>
 #include <string.h>
-#include "../backend-common.h"
 
 #include <drm.h>
 #include <drm_fourcc.h>
@@ -52,12 +51,8 @@ static bool direct_initExporter(NVDriver *drv) {
     PFNEGLDEBUGMESSAGECONTROLKHRPROC eglDebugMessageControlKHR = (PFNEGLDEBUGMESSAGECONTROLKHRPROC) eglGetProcAddress("eglDebugMessageControlKHR");
     eglDebugMessageControlKHR(debug, debugAttribs);
 
-    if (!isNvidiaDrmFd(drv->drmFd, true) || !checkModesetParameterFromFd(drv->drmFd)) {
-        return false;
-    }
-
     if (!init_nvdriver(&drv->driverContext, drv->drmFd) || !findGPUIndex(drv) ||
-        CHECK_CUDA_RESULT(drv->cu->cuDeviceGet(&drv->cudaDevice, drv->cudaGpuId)))
+        CHECK_CUDA_RESULT(drv->cu->cuDeviceGet(&drv->cudaDevice, drv->cudaGpuId))) {
         return false;
     }
 

@@ -1,5 +1,4 @@
 #include "vabackend.h"
-#include "backend-common.h"
 #include <stdio.h>
 #include <ffnvcodec/dynlink_loader.h>
 #include <EGL/egl.h>
@@ -134,10 +133,6 @@ static void findGPUIndexFromFd(NVDriver *drv) {
         //figure out the 'drm device index', basically the minor number of the device node & 0x7f
         //since we don't know/want to care if we're dealing with a master or render node
 
-        if (!isNvidiaDrmFd(drv->drmFd, true) || !checkModesetParameterFromFd(drv->drmFd)) {
-            return;
-        }
-
         fstat(drv->drmFd, &buf);
         drmDeviceIndex = minor(buf.st_rdev) & 0x7f;
         LOG("Looking for DRM device index: %d", drmDeviceIndex);
@@ -175,11 +170,6 @@ static void findGPUIndexFromFd(NVDriver *drv) {
                     }
                 } else if (drv->cudaGpuId != attr) {
                     //LOG("Not selected device, skipping");
-                    continue;
-                }
-
-                //if it's the device we're looking for, check the modeset parameter on it.
-                if (!checkModesetParameterFromFd(drv->drmFd))
                     continue;
                 }
 
