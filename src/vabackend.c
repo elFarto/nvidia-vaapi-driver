@@ -2179,7 +2179,7 @@ static bool checkModesetParameterFromFd(int fd) {
     return true;
 }
 
-static bool isNvidiaDrmFd(int fd, bool log) {
+static bool isNvidiaDrmFd(int fd) {
     if (fd > 0) {
         char name[16] = {0};
         struct drm_version ver = {
@@ -2188,9 +2188,7 @@ static bool isNvidiaDrmFd(int fd, bool log) {
         };
         int ret = ioctl(fd, DRM_IOCTL_VERSION, &ver);
         if (ret || strncmp(name, "nvidia-drm", 10)) {
-            if (log) {
-                LOG("Invalid driver for DRM device: %s", ver.name);
-            }
+            LOG("Invalid driver for DRM device: %s", ver.name);
             return false;
         }
         return true;
@@ -2232,7 +2230,7 @@ VAStatus __vaDriverInit_1_0(VADriverContextP ctx) {
         return VA_STATUS_ERROR_UNIMPLEMENTED;
     }
 
-    if (!isNvidiaDrmFd(drm_state->fd, true) || !checkModesetParameterFromFd(drm_state->fd)) {
+    if (!isNvidiaDrmFd(drm_state->fd) || !checkModesetParameterFromFd(drm_state->fd)) {
         return VA_STATUS_ERROR_OPERATION_FAILED;
     }
 
