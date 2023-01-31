@@ -25,8 +25,11 @@ static bool findGPUIndex(NVDriver *drv) {
     }
 
     for (int i = 0; i < gpuCount; i++) {
+        CUdevice device;
         CUuuid uuid;
-        if (!CHECK_CUDA_RESULT(drv->cu->cuDeviceGetUuid(&uuid, i))) {
+
+        if (!CHECK_CUDA_RESULT(drv->cu->cuDeviceGet(&device, i)) ||
+            !CHECK_CUDA_RESULT(drv->cu->cuDeviceGetUuid(&uuid, device))) {
             if (memcmp(drmUuid, uuid.bytes, 16) == 0) {
                 drv->cudaGpuId = i;
                 return true;
