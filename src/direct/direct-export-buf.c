@@ -14,7 +14,7 @@
 #include <drm.h>
 #include <drm_fourcc.h>
 
-static void findGPUIndexFromFd(NVDriver *drv) {
+static void findGPUIndex(NVDriver *drv) {
     //find the CUDA device id
     char drmUuid[16];
     get_device_uuid(&drv->driverContext, drmUuid);
@@ -98,7 +98,7 @@ static bool direct_initExporter(NVDriver *drv) {
     //but we don't have an easy way to find out.
     drv->supports16BitSurface = true;
     drv->supports444Surface = true;
-    findGPUIndexFromFd(drv);
+    findGPUIndex(drv);
 
     return ret;
 }
