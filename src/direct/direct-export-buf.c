@@ -48,48 +48,12 @@ static bool direct_initExporter(NVDriver *drv) {
     PFNEGLDEBUGMESSAGECONTROLKHRPROC eglDebugMessageControlKHR = (PFNEGLDEBUGMESSAGECONTROLKHRPROC) eglGetProcAddress("eglDebugMessageControlKHR");
     eglDebugMessageControlKHR(debug, debugAttribs);
 
-    //make sure we have a drm fd
-    if (drv->drmFd == -1) {
-        int nvdGpu = drv->cudaGpuId;
-        if (nvdGpu == -1) {
-            // The default GPU is the first one we find.
-            nvdGpu = 0;
-        }
+    if (drv->drmFd == -1} {
+        return false;
+    }
 
-        int fd = -1;
-        int nvIdx = 0;
-        uint8_t drmIdx = 128;
-        char node[20] = {0, };
-        do {
-            snprintf(node, 20, "/dev/dri/renderD%d", drmIdx++);
-            fd = open(node, O_RDWR|O_CLOEXEC);
-            if (fd == -1) {
-                LOG("Unable to find NVIDIA GPU %d", nvdGpu);
-                return false;
-            }
-
-            if (!isNvidiaDrmFd(fd, true) || !checkModesetParameterFromFd(fd)) {
-                close(fd);
-                continue;
-            }
-
-            if (nvIdx != nvdGpu) {
-                close(fd);
-                nvIdx++;
-                continue;
-            }
-            break;
-        } while (fd != -1);
-
-        drv->drmFd = fd;
-        LOG("Found NVIDIA GPU %d at %s", nvdGpu, node);
-    } else {
-        if (!isNvidiaDrmFd(drv->drmFd, true) || !checkModesetParameterFromFd(drv->drmFd)) {
-            return false;
-        }
-
-        //dup it so we can close it later and not effect firefox
-        drv->drmFd = dup(drv->drmFd);
+    if (!isNvidiaDrmFd(drv->drmFd, true) || !checkModesetParameterFromFd(drv->drmFd)) {
+        return false;
     }
 
     bool ret = init_nvdriver(&drv->driverContext, drv->drmFd);

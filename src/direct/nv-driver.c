@@ -320,9 +320,6 @@ bool free_nvdriver(NVDriverContext *context) {
     if (context->nvctlFd > 0) {
         close(context->nvctlFd);
     }
-    if (context->drmFd > 0) {
-        close(context->drmFd);
-    }
     if (context->nv0Fd > 0) {
         close(context->nv0Fd);
     }
