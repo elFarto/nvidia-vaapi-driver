@@ -28,16 +28,6 @@
 #define __has_builtin(x) 0
 #endif
 
-#if __has_builtin(__builtin_unreachable)
-#define unreachable(str)    \
-do {                        \
-    assert(!str);           \
-    __builtin_unreachable();\
-} while (0)
-#else
-#define unreachable(str) assert(!str)
-#endif
-
 static pthread_mutex_t concurrency_mutex = PTHREAD_MUTEX_INITIALIZER;
 static uint32_t instances;
 static uint32_t max_instances;
@@ -586,6 +576,7 @@ static VAStatus nvGetConfigAttributes(
     if (vaToCuCodec(profile) == cudaVideoCodec_NONE) {
         return VA_STATUS_ERROR_UNSUPPORTED_PROFILE;
     }
+    LOG("Got here with profile: %d == %d", profile, vaToCuCodec(profile));
 
     for (int i = 0; i < num_attribs; i++)
     {
@@ -615,7 +606,8 @@ static VAStatus nvGetConfigAttributes(
                 attrib_list[i].value |= VA_RT_FORMAT_YUV444;
                 break;
             default:
-                unreachable("Unexpected profile");
+                //do nothing
+                break;
             }
 
             if (!drv->supports16BitSurface) {
@@ -848,7 +840,8 @@ static VAStatus nvQueryConfigAttributes(
         attrib_list[i].value |= VA_RT_FORMAT_YUV444;
         break;
     default:
-        unreachable("Unexpected profile");
+        //do nothing
+        break;
     }
 
     if (!drv->supports16BitSurface) {
