@@ -415,7 +415,7 @@ static void* resolveSurfaces(void *param) {
         if (CHECK_CUDA_RESULT(cv->cuvidMapVideoFrame(ctx->decoder, surface->pictureIdx, &deviceMemory, &pitch, &procParams))) {
             continue;
         }
-        LOG("Mapped surface %d to %llX (%d)", surface->pictureIdx, deviceMemory, pitch);
+        LOG("Mapped surface %d to %p (%d)", surface->pictureIdx, (void*)deviceMemory, pitch);
 
         //update cuarray
         drv->backend->exportCudaPtr(drv, deviceMemory, surface, pitch);
