@@ -23,8 +23,8 @@ static bool nv_alloc_object(int fd, NvHandle hRoot, NvHandle hObjectParent, NvHa
         .hObjectParent = hObjectParent,
         .hObjectNew = *hObjectNew,
         .hClass = hClass,
-        .pRightsRequested = NULL,
-        .pAllocParms = params
+        .pRightsRequested = (NvP64)NULL,
+        .pAllocParms = (NvP64)params
     };
 
     int ret = ioctl(fd, _IOC(_IOC_READ|_IOC_WRITE, NV_IOCTL_MAGIC, NV_ESC_RM_ALLOC, sizeof(NVOS64_PARAMETERS)), &alloc);
@@ -66,7 +66,7 @@ static bool nv_rm_control(int fd, NvHandle hClient, NvHandle hObject, NvV32 cmd,
         .hObject = hObject,
         .cmd = cmd,
         .flags = flags,
-        .params = params,
+        .params = (NvP64)params,
         .paramsSize = paramSize
     };
 
@@ -158,9 +158,9 @@ static bool nv_get_versions(int fd, NvHandle hClient, char **driverVersion) {
     char titleBuffer[64];
     NV0000_CTRL_SYSTEM_GET_BUILD_VERSION_PARAMS params = {
         .sizeOfStrings = 64,
-        .pDriverVersionBuffer = driverVersionBuffer,
-        .pVersionBuffer = versionBuffer,
-        .pTitleBuffer = titleBuffer
+        .pDriverVersionBuffer = (NvP64)driverVersionBuffer,
+        .pVersionBuffer = (NvP64)versionBuffer,
+        .pTitleBuffer = (NvP64)titleBuffer
     };
     bool ret = nv_rm_control(fd, hClient, hClient, NV0000_CTRL_CMD_SYSTEM_GET_BUILD_VERSION, 0, sizeof(params), &params);
     if (!ret) {
@@ -278,7 +278,7 @@ bool init_nvdriver(NVDriverContext *context, int drmFd) {
         goto err;
     }
 
-    char *ver;
+    char *ver = NULL;
     nv_get_versions(nvctlFd, context->clientObject, &ver);
     LOG("NVIDIA kernel driver version: %s", ver);
     context->driverMajorVersion = atoi(ver);
