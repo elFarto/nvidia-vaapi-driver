@@ -16,7 +16,7 @@ cc = meson.get_compiler('c')
 deps = [
     cc.find_library('m'),
     cc.find_library('dl', required : false),
-    cc.find_library('EGL'),
+    dependency('egl'),
     dependency('ffnvcodec', version: '>= 11.1.5.1'),
     dependency('libva', version: '>= 1.8.0').partial_dependency(compile_args: true),
     dependency('libdrm', version: '>=2.4.60').partial_dependency(compile_args: true),
