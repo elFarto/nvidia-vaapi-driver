@@ -1571,6 +1571,7 @@ static VAStatus nvGetImage(
     //wait for the surface to be decoded
     nvSyncSurface(ctx, surface);
 
+    CHECK_CUDA_RESULT_RETURN(cu->cuCtxPushCurrent(drv->cudaContext), VA_STATUS_ERROR_OPERATION_FAILED);
     for (uint32_t i = 0; i < fmtInfo->numPlanes; i++) {
         const NVFormatPlane *p = &fmtInfo->plane[i];
         CUDA_MEMCPY2D memcpy2d = {
@@ -1595,6 +1596,7 @@ static VAStatus nvGetImage(
         }
         offset += ((width * height) >> (p->ss.x + p->ss.y)) * fmtInfo->bppc * p->channelCount;
     }
+    CHECK_CUDA_RESULT_RETURN(cu->cuCtxPopCurrent(NULL), VA_STATUS_ERROR_OPERATION_FAILED);
 
     return VA_STATUS_SUCCESS;
 }
