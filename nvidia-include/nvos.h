@@ -451,6 +451,8 @@ typedef struct
     NvV32    hClass;                              // [in] class num of new object
     NvP64    pAllocParms NV_ALIGN_BYTES(8);       // [IN] class-specific alloc parameters
     NvP64    pRightsRequested NV_ALIGN_BYTES(8);  // [IN] RS_ACCESS_MASK to request rights, or NULL
+    NvU32    paramsSize;                          // [IN] Size of alloc params
+    NvU32    flags;
     NvV32    status;                              // [OUT] status
 } NVOS64_PARAMETERS;
 

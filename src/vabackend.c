@@ -2228,6 +2228,7 @@ VAStatus __vaDriverInit_1_0(VADriverContextP ctx) {
     pthread_mutex_init(&drv->exportMutex, NULL);
 
     if (!drv->backend->initExporter(drv)) {
+        LOG("Exporter failed");
         free(drv);
         return VA_STATUS_ERROR_OPERATION_FAILED;
     }

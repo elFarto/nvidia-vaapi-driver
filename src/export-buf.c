@@ -143,7 +143,7 @@ static void findGPUIndexFromFd(NVDriver *drv) {
         }
 
         fstat(drv->drmFd, &buf);
-        drmDeviceIndex = minor(buf.st_rdev) & 0x7f;
+        drmDeviceIndex = minor(buf.st_rdev);
         LOG("Looking for DRM device index: %d", drmDeviceIndex);
     } else {
         LOG("Looking for GPU index: %d", drv->cudaGpuId);
@@ -163,16 +163,16 @@ static void findGPUIndexFromFd(NVDriver *drv) {
         EGLAttrib attr = -1;
 
         //retrieve the DRM device path for this EGLDevice
-        const char* drmDeviceFile = eglQueryDeviceStringEXT(devices[i], EGL_DRM_DEVICE_FILE_EXT);
-        if (drmDeviceFile != NULL) {
+        const char* drmRenderNodeFile = eglQueryDeviceStringEXT(devices[i], EGL_DRM_RENDER_NODE_FILE_EXT);
+        if (drmRenderNodeFile != NULL) {
             //if we have one, try and get the CUDA device id
             if (eglQueryDeviceAttribEXT(devices[i], EGL_CUDA_DEVICE_NV, &attr)) {
                 LOG("Got EGL_CUDA_DEVICE_NV value '%d' for EGLDevice %d", attr, i);
 
                 //if we're looking for a matching drm device index check it here
                 if (drv->cudaGpuId == -1 && drv->drmFd != -1) {
-                    stat(drmDeviceFile, &buf);
-                    int foundDrmDeviceIndex = minor(buf.st_rdev) & 0x7f;
+                    stat(drmRenderNodeFile, &buf);
+                    int foundDrmDeviceIndex = minor(buf.st_rdev);
                     LOG("Found drmDeviceIndex: %d", foundDrmDeviceIndex);
                     if (foundDrmDeviceIndex != drmDeviceIndex) {
                         continue;
@@ -182,26 +182,9 @@ static void findGPUIndexFromFd(NVDriver *drv) {
                     continue;
                 }
 
-                bool closeDevice = false;
-                if (drv->drmFd == -1) {
-                    //we've found a matching device, but don't have an fd for it (likely running under X11)
-                    //so open it manually, but we need to remember to close it again afterwards
-                    const char* drmRenderNodeFile = eglQueryDeviceStringEXT(devices[i], EGL_DRM_RENDER_NODE_FILE_EXT);
-                    if (drmRenderNodeFile) {
-                        drv->drmFd = open(drmRenderNodeFile, O_RDWR);
-                        closeDevice = true;
-                    }
-                }
-
                 //if it's the device we're looking for, check the modeset parameter on it.
                 bool checkModeset = checkModesetParameterFromFd(drv->drmFd);
-
-                if (closeDevice && drv->drmFd != -1) {
-                    close(drv->drmFd);
-                    drv->drmFd = -1;
-                }
-
-                if  (!checkModeset) {
+                if (!checkModeset) {
                     continue;
                 }
 
