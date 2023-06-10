@@ -35,11 +35,12 @@ static bool nv_alloc_object(int fd, int driverMajorVersion, NvHandle hRoot, NvHa
         alloc.paramsSize = 0;
     }
 
+    //v525 is the base and is 40 bytes large
+    //v530 has an extra `flags` field, and is *still* 40 bytes large
+    //v535 has `paramsSize` and `flags` fields, and is 48 bytes large
     int size = sizeof(NVOS64_PARAMETERS);
-    if (driverMajorVersion < 525) {
+    if (driverMajorVersion < 535) {
         size -= 8;
-    } else if (driverMajorVersion < 535) {
-        size -= 4;
     }
 
     int ret = ioctl(fd, _IOC(_IOC_READ|_IOC_WRITE, NV_IOCTL_MAGIC, NV_ESC_RM_ALLOC, size), &alloc);
