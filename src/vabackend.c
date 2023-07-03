@@ -35,6 +35,7 @@
 
 #if __has_include(<pthread_np.h>)
 #include <pthread_np.h>
+#define gettid pthread_getthreadid_np
 #endif
 
 static pthread_mutex_t concurrency_mutex = PTHREAD_MUTEX_INITIALIZER;
