@@ -3,6 +3,10 @@
 #include "vabackend.h"
 #include <stdlib.h>
 
+#if !defined(__GLIBC__)
+typedef int (*__compar_d_fn_t) (const void *, const void *, void *);
+#endif
+
 static const uint8_t ff_hevc_diag_scan4x4_x[16] = {
     0, 0, 1, 0,
     1, 2, 0, 1,
