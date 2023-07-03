@@ -180,7 +180,7 @@ void logger(const char *filename, const char *function, int line, const char *ms
     struct timespec tp;
     clock_gettime(CLOCK_MONOTONIC, &tp);
 
-    fprintf(LOG_OUTPUT, "%10ld.%09ld [%d-%d] %s:%4d %24s %s\n", tp.tv_sec, tp.tv_nsec, getpid(), gettid(), filename, line, function, formattedMessage);
+    fprintf(LOG_OUTPUT, "%10ld.%09ld [%d-%d] %s:%4d %24s %s\n", (long)tp.tv_sec, tp.tv_nsec, getpid(), gettid(), filename, line, function, formattedMessage);
     fflush(LOG_OUTPUT);
 }
 
