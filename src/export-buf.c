@@ -8,7 +8,9 @@
 #include <sys/ioctl.h>
 #include <fcntl.h>
 #include <unistd.h>
+#ifdef __linux__
 #include <sys/sysmacros.h>
+#endif
 
 #include <drm.h>
 #include <drm_fourcc.h>
