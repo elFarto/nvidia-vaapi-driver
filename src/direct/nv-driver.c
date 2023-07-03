@@ -15,6 +15,14 @@
 #include <nvidia.h>
 #include "../vabackend.h"
 
+#if !defined(_IOC_READ) && defined(IOC_OUT)
+#define _IOC_READ IOC_OUT
+#endif
+
+#if !defined(_IOC_WRITE) && defined(IOC_IN)
+#define _IOC_WRITE IOC_IN
+#endif
+
 static const NvHandle NULL_OBJECT;
 
 static bool nv_alloc_object(int fd, int driverMajorVersion, NvHandle hRoot, NvHandle hObjectParent, NvHandle* hObjectNew,
