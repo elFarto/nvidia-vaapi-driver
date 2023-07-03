@@ -29,6 +29,14 @@
 #define __has_builtin(x) 0
 #endif
 
+#ifndef __has_include
+#define __has_include(x) 0
+#endif
+
+#if __has_include(<pthread_np.h>)
+#include <pthread_np.h>
+#endif
+
 static pthread_mutex_t concurrency_mutex = PTHREAD_MUTEX_INITIALIZER;
 static uint32_t instances;
 static uint32_t max_instances;
