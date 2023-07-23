@@ -76,8 +76,6 @@ typedef enum
     NV_FORMAT_P012,
     NV_FORMAT_P016,
     NV_FORMAT_444P,
-    NV_FORMAT_Q410,
-    NV_FORMAT_Q412,
     NV_FORMAT_Q416
 } NVFormat;
 
