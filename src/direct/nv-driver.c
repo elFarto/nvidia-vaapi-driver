@@ -339,23 +339,14 @@ bool alloc_memory(NVDriverContext *context, uint32_t size, int *fd) {
     int nvctlFd2 = -1;
     NvHandle bufferObject = {0};
 
-    //we don't have huge pages available on all hardware
-    //turns out we don't need to know that anyway, although this will probably result is less optimal page size
-    /*
-    NvU32 pageSizeAttr = context->hasHugePage ? DRF_DEF(OS32, _ATTR, _PAGE_SIZE, _HUGE)
-                                              : DRF_DEF(OS32, _ATTR, _PAGE_SIZE, _BIG);
-    NvU32 pageSizeAttr2 = context->hasHugePage ? DRF_DEF(OS32, _ATTR2, _PAGE_SIZE_HUGE, _2MB)
-                                               : 0;*/
-
     NV_MEMORY_ALLOCATION_PARAMS memParams = {
         .owner = context->clientObject,
         .type = NVOS32_TYPE_IMAGE,
         .flags = NVOS32_ALLOC_FLAGS_IGNORE_BANK_PLACEMENT |
-                 //NVOS32_ALLOC_FLAGS_ALIGNMENT_FORCE | //this doesn't seem to be needed
                  NVOS32_ALLOC_FLAGS_MAP_NOT_REQUIRED |
                  NVOS32_ALLOC_FLAGS_PERSISTENT_VIDMEM,
 
-        .attr = //pageSizeAttr |
+        .attr = DRF_DEF(OS32, _ATTR, _PAGE_SIZE, _BIG) |
                 DRF_DEF(OS32, _ATTR, _DEPTH, _UNKNOWN) |
                 DRF_DEF(OS32, _ATTR, _FORMAT, _BLOCK_LINEAR) |
                 DRF_DEF(OS32, _ATTR, _PHYSICALITY, _CONTIGUOUS),
@@ -364,8 +355,7 @@ bool alloc_memory(NVDriverContext *context, uint32_t size, int *fd) {
         .height = 0,
         .size = size,
         .alignment = 0, //see flags above
-        .attr2 = //pageSizeAttr2 |
-                 DRF_DEF(OS32, _ATTR2, _ZBC, _PREFER_NO_ZBC) |
+        .attr2 = DRF_DEF(OS32, _ATTR2, _ZBC, _PREFER_NO_ZBC) |
                  DRF_DEF(OS32, _ATTR2, _GPU_CACHEABLE, _YES)
     };
     bool ret = nv_alloc_object(context->nvctlFd, context->driverMajorVersion, context->clientObject, context->deviceObject, &bufferObject, NV01_MEMORY_LOCAL_USER, sizeof(memParams), &memParams);
