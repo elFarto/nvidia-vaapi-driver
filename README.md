@@ -118,7 +118,6 @@ In addition the following environment variables need to be set. For permanent co
 | Variable | Value | Reason |
 |---|---|---|
 | MOZ_DISABLE_RDD_SANDBOX | 1 | Disables the sandbox for the RDD process that the decoder runs in. |
-| EGL_PLATFORM | wayland | Required on FF98+ when running on Wayland, due to a regression that has been introduced. |
 | LIBVA_DRIVER_NAME | nvidia | For libva versions prior to 2.15, this forces libva to load the `nvidia` backend. |
 | __EGL_VENDOR_LIBRARY_FILENAMES | /usr/share/glvnd/egl_vendor.d/10_nvidia.json | Required for the 470 driver series only. It overrides the list of drivers the glvnd library can use to prevent Firefox from using the MESA driver by mistake. |
 
