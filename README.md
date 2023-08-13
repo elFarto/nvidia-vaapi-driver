@@ -103,7 +103,7 @@ Environment variables used to control the behavior of this library.
 
 ## Firefox
 
-To use the driver with firefox you will need at least Firefox 96, `ffmpeg` compiled with vaapi support (search ffmpeg output for --enable-vaapi), and the following config options need to be set in the `about:config` page:
+To use the driver with firefox you will need at least Firefox 96, `ffmpeg` compiled with vaapi support (`ffmpeg -hwaccels` output should include vaapi), and the following config options need to be set in the `about:config` page:
 
 | Option | Value | Reason |
 |---|---|---|
