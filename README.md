@@ -8,7 +8,7 @@ This is an VA-API implementation that uses NVDEC as a backend. This implementati
 - [Table of contents](#table-of-contents)
 - [Codec Support](#codec-support)
 - [Installation](#installation)
-  - [Package manager](#package-manager)
+  - [Packaging status](#packaging-status)
   - [Building](#building)
   - [Removal](#removal)
 - [Configuration](#configuration)
