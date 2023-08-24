@@ -57,6 +57,10 @@ To install and use `nvidia-vaapi-driver`, follow the steps in installation and c
 
 [pkgs.org/nvidia-vaapi-driver](https://pkgs.org/search/?q=nvidia-vaapi-driver) [pkgs.org/libva-nvidia-driver](https://pkgs.org/search/?q=libva-nvidia-driver)
 
+[openSUSE](https://software.opensuse.org/package/libva-nvidia-driver)
+
+Feel free to add your distributions package in an issue/PR, if it isn't on these websites.
+
 ## Building
 
 You'll need `meson`, the `gstreamer-plugins-bad` library, and [`nv-codec-headers`](https://git.videolan.org/?p=ffmpeg/nv-codec-headers.git) installed.
