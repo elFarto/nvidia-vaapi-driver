@@ -57,7 +57,7 @@ To install and use `nvidia-vaapi-driver`, follow the steps in installation and c
 
 [pkgs.org/nvidia-vaapi-driver](https://pkgs.org/search/?q=nvidia-vaapi-driver) [pkgs.org/libva-nvidia-driver](https://pkgs.org/search/?q=libva-nvidia-driver)
 
-[openSUSE](https://software.opensuse.org/package/libva-nvidia-driver)
+openSUSE: [1](https://software.opensuse.org/package/nvidia-vaapi-driver), [2](https://software.opensuse.org/package/libva-nvidia-driver).
 
 Feel free to add your distributions package in an issue/PR, if it isn't on these websites.
 
