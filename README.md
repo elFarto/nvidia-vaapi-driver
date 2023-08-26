@@ -8,7 +8,7 @@ This is an VA-API implementation that uses NVDEC as a backend. This implementati
 - [Table of contents](#table-of-contents)
 - [Codec Support](#codec-support)
 - [Installation](#installation)
-  - [Package manager](#package-manager)
+  - [Packaging status](#packaging-status)
   - [Building](#building)
   - [Removal](#removal)
 - [Configuration](#configuration)
@@ -51,16 +51,15 @@ To install and use `nvidia-vaapi-driver`, follow the steps in installation and c
 
 * NVIDIA driver series 470 or 500+
 
-## Package manager
+## Packaging status
 
-| Distribution | Package name |
-|---|---|
-| Arch<sup>AUR</sup> | [libva-nvidia-driver](https://aur.archlinux.org/packages/libva-nvidia-driver) |
-| Arch<sup>AUR</sup> | [libva-nvidia-driver-git](https://aur.archlinux.org/packages/libva-nvidia-driver-git) |
-| Debian,Ubuntu | nvidia-vaapi-driver<sup>[debian](https://tracker.debian.org/pkg/nvidia-vaapi-driver) [ubuntu](https://packages.ubuntu.com/kinetic/nvidia-vaapi-driver)</sup> |
-| Fedora, RHEL and derivates (Rocky, Alma, etc).| [nvidia-vaapi-driver](https://github.com/rpmfusion/nvidia-vaapi-driver) |
+<p align="top"><a href="https://repology.org/project/nvidia-vaapi-driver/versions"><img src="https://repology.org/badge/vertical-allrepos/nvidia-vaapi-driver.svg" alt="repology"><a href="https://repology.org/project/libva-nvidia-driver/versions"><img src="https://repology.org/badge/vertical-allrepos/libva-nvidia-driver.svg" alt="repology" align="top" width="%"></p>
 
-Feel free to add your distributions package in an issue/PR.
+[pkgs.org/nvidia-vaapi-driver](https://pkgs.org/search/?q=nvidia-vaapi-driver) [pkgs.org/libva-nvidia-driver](https://pkgs.org/search/?q=libva-nvidia-driver)
+
+openSUSE: [1](https://software.opensuse.org/package/nvidia-vaapi-driver), [2](https://software.opensuse.org/package/libva-nvidia-driver).
+
+Feel free to add your distributions package in an issue/PR, if it isn't on these websites.
 
 ## Building
 
