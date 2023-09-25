@@ -12,9 +12,11 @@ This is an VA-API implementation that uses NVDEC as a backend. This implementati
   - [Building](#building)
   - [Removal](#removal)
 - [Configuration](#configuration)
+  - [Upstream regressions](#upstream-regressions)
   - [Kernel parameters](#kernel-parameters)
   - [Environment Variables](#environment-variables)
   - [Firefox](#firefox)
+  - [Chrome](#chrome)
   - [MPV](#mpv)
   - [Direct Backend](#direct-backend)
 - [Testing](#testing)
@@ -84,7 +86,11 @@ By default the driver installs itself as `/usr/lib64/dri/nvidia_drv_video.so` (t
 
 # Configuration
 
-**IMPORTANT**: The [direct backend](#direct-backend) is currently required on NVIDIA driver series 525 due to a regression (see [issue #126](/../../issues/126)).
+## Upstream regressions
+
+The EGL backend is broken on driver versions 525 or later due to a regression. Users running these drivers should use the [direct backend](#direct-backend) instead.
+
+For more information read the [upstream bug report](https://forums.developer.nvidia.com/t/cueglstreamproducerconnect-returns-error-801-on-525-53-driver/233610) or [issue #126](/../../issues/126).
 
 ## Kernel parameters
 
