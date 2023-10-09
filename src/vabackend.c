@@ -54,9 +54,7 @@ const NVFormatInfo formatsInfo[] =
     [NV_FORMAT_P012] = {2, 2, DRM_FORMAT_P012,     true,  false, {{1, DRM_FORMAT_R16,      {0,0}}, {2, DRM_FORMAT_RG1616, {1,1}}},                            {VA_FOURCC_P012, VA_LSB_FIRST,   24, 0,0,0,0,0}},
     [NV_FORMAT_P016] = {2, 2, DRM_FORMAT_P016,     true,  false, {{1, DRM_FORMAT_R16,      {0,0}}, {2, DRM_FORMAT_RG1616, {1,1}}},                            {VA_FOURCC_P016, VA_LSB_FIRST,   24, 0,0,0,0,0}},
     [NV_FORMAT_444P] = {1, 3, DRM_FORMAT_YUV444,   false, true,  {{1, DRM_FORMAT_R8,       {0,0}}, {1, DRM_FORMAT_R8,     {0,0}}, {1, DRM_FORMAT_R8, {0,0}}}, {VA_FOURCC_444P, VA_LSB_FIRST,   24, 0,0,0,0,0}},
-    // Nvidia decoder only supports YUV444 planar formats with 3 planes so we can't use VA_FOURCC_Y416.
-    // VA_FOURCC_Q416 isn't defined in va.h yet.
-#if defined(VA_FOURCC_Q416)
+#if VA_CHECK_VERSION(1, 20, 0)
     [NV_FORMAT_Q416] = {2, 3, DRM_FORMAT_INVALID,  true,  true,  {{1, DRM_FORMAT_R16,      {0,0}}, {1, DRM_FORMAT_R16,    {0,0}}, {1, DRM_FORMAT_R16,{0,0}}}, {VA_FOURCC_Q416, VA_LSB_FIRST,   48, 0,0,0,0,0}},
 #endif
 };
@@ -499,8 +497,7 @@ static VAStatus nvQueryConfigProfiles(
             profile_list[profiles++] = VAProfileAV1Profile1;
         }
 
-    // Currently VAAPI doesn't support yuv444p10 yuv444p12 and yuv444p16
-#if defined(VA_FOURCC_Q416)
+#if VA_CHECK_VERSION(1, 20, 0)
         if (drv->supports16BitSurface) {
             if (doesGPUSupportCodec(cudaVideoCodec_HEVC, 10, cudaVideoChromaFormat_444, NULL, NULL)) {
                 profile_list[profiles++] = VAProfileHEVCMain444_10;
@@ -1778,7 +1775,7 @@ static VAStatus nvQuerySurfaceAttributes(
         int cnt = 4;
         if (cfg->chromaFormat == cudaVideoChromaFormat_444) {
             cnt += 1;
-#ifdef VA_FOURCC_Q416
+#if VA_CHECK_VERSION(1, 20, 0)
             cnt += 1;
 #endif
         } else {
@@ -1834,7 +1831,7 @@ static VAStatus nvQuerySurfaceAttributes(
             attrib_list[attrib_idx].value.type = VAGenericValueTypeInteger;
             attrib_list[attrib_idx].value.value.i = VA_FOURCC_444P;
             attrib_idx += 1;
-#ifdef VA_FOURCC_Q416
+#if VA_CHECK_VERSION(1, 20, 0)
             attrib_list[attrib_idx].type = VASurfaceAttribPixelFormat;
             attrib_list[attrib_idx].flags = 0;
             attrib_list[attrib_idx].value.type = VAGenericValueTypeInteger;
