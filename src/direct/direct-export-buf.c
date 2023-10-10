@@ -170,17 +170,7 @@ static BackingImage *direct_allocateBackingImage(NVDriver *drv, const NVSurface 
         break;
 
     case cudaVideoSurfaceFormat_YUV444_16Bit:
-        switch (surface->bitDepth) {
-        case 10:
-            backingImage->format = NV_FORMAT_Q410;
-            break;
-        case 12:
-            backingImage->format = NV_FORMAT_Q412;
-            break;
-        default:
-            backingImage->format = NV_FORMAT_Q416;
-            break;
-        }
+        backingImage->format = NV_FORMAT_Q416;
         break;
 
     case cudaVideoSurfaceFormat_YUV444:
