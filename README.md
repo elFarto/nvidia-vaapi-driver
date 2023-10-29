@@ -131,6 +131,8 @@ When libva is used it will log out some information, which can be excessive when
 LIBVA_MESSAGING_LEVEL=1
 ```
 
+If you're using the Snap version of Firefox, it will be unable to access the host version of the driver that is installed.
+
 ## Chrome
 
 Chrome is currently unsupported, and will not function.
