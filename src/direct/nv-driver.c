@@ -190,12 +190,35 @@ static bool nv0_register_fd(int nv0_fd, int nvctl_fd) {
     return true;
 }
 
-static bool get_device_info(int fd, struct drm_nvidia_get_dev_info_params *devInfo) {
-    int ret = ioctl(fd, DRM_IOCTL_NVIDIA_GET_DEV_INFO, devInfo);
+static bool get_device_info(int fd, NVDriverContext *context) {
+    //NVIDIA driver v545.29.02 changed the devInfo struct, and partly broke it in the process
+    //...who adds a field to the middle of an existing struct....
+    if (context->driverMajorVersion >= 545 && context->driverMinorVersion >= 29) {
+        struct drm_nvidia_get_dev_info_params_545 devInfo545;
+        int ret = ioctl(fd, DRM_IOCTL_NVIDIA_GET_DEV_INFO_545, &devInfo545);
 
-    if (ret != 0) {
-        LOG("get_device_info failed: %d %d", ret, errno);
-        return false;
+        if (ret != 0) {
+            LOG("get_device_info failed: %d %d", ret, errno);
+            return false;
+        }
+
+        context->gpu_id = devInfo545.gpu_id;
+        context->sector_layout = devInfo545.sector_layout;
+        context->page_kind_generation = devInfo545.page_kind_generation;
+        context->generic_page_kind = devInfo545.generic_page_kind;
+    } else {
+        struct drm_nvidia_get_dev_info_params devInfo;
+        int ret = ioctl(fd, DRM_IOCTL_NVIDIA_GET_DEV_INFO, &devInfo);
+
+        if (ret != 0) {
+            LOG("get_device_info failed: %d %d", ret, errno);
+            return false;
+        }
+
+        context->gpu_id = devInfo.gpu_id;
+        context->sector_layout = devInfo.sector_layout;
+        context->page_kind_generation = devInfo.page_kind_generation;
+        context->generic_page_kind = devInfo.generic_page_kind;
     }
 
     return true;
@@ -203,7 +226,7 @@ static bool get_device_info(int fd, struct drm_nvidia_get_dev_info_params *devIn
 
 bool get_device_uuid(NVDriverContext *context, char uuid[16]) {
     NV0000_CTRL_GPU_GET_UUID_FROM_GPU_ID_PARAMS uuidParams = {
-        .gpuId = context->devInfo.gpu_id,
+        .gpuId = context->gpu_id,
         .flags = NV0000_CTRL_CMD_GPU_GET_UUID_FROM_GPU_ID_FLAGS_FORMAT_BINARY |
                  NV0000_CTRL_CMD_GPU_GET_UUID_FROM_GPU_ID_FLAGS_TYPE_SHA1
     };
@@ -221,12 +244,6 @@ bool get_device_uuid(NVDriverContext *context, char uuid[16]) {
 
 bool init_nvdriver(NVDriverContext *context, int drmFd) {
     LOG("Initing nvdriver...");
-    if (!get_device_info(drmFd, &context->devInfo)) {
-        return false;
-    }
-
-    LOG("Got dev info: %x %x %x %x", context->devInfo.gpu_id, context->devInfo.sector_layout, context->devInfo.page_kind_generation, context->devInfo.generic_page_kind);
-
     int nvctlFd = -1, nv0Fd = -1;
 
     nvctlFd = open("/dev/nvidiactl", O_RDWR|O_CLOEXEC);
@@ -243,8 +260,15 @@ bool init_nvdriver(NVDriverContext *context, int drmFd) {
     char *ver = NULL;
     nv_get_versions(nvctlFd, &ver);
     context->driverMajorVersion = atoi(ver);
-    LOG("NVIDIA kernel driver version: %s, major version: %d", ver, context->driverMajorVersion);
+    context->driverMinorVersion = atoi(ver+4);
+    LOG("NVIDIA kernel driver version: %s, major version: %d, minor version: %d", ver, context->driverMajorVersion, context->driverMinorVersion);
     free(ver);
+
+    if (!get_device_info(drmFd, context)) {
+        return false;
+    }
+
+    LOG("Got dev info: %x %x %x %x", context->gpu_id, context->sector_layout, context->page_kind_generation, context->generic_page_kind);
 
     //allocate the root object
     bool ret = nv_alloc_object(nvctlFd, context->driverMajorVersion, NULL_OBJECT, NULL_OBJECT, &context->clientObject, NV01_ROOT_CLIENT, 0, (void*)0);
@@ -254,7 +278,7 @@ bool init_nvdriver(NVDriverContext *context, int drmFd) {
     }
 
     //attach the drm fd to this handle
-    ret = nv_attach_gpus(nvctlFd, context->devInfo.gpu_id);
+    ret = nv_attach_gpus(nvctlFd, context->gpu_id);
     if (!ret) {
         LOG("nv_attach_gpu failed");
         goto err;
@@ -372,7 +396,7 @@ bool alloc_memory(NVDriverContext *context, uint32_t size, int *fd) {
     }
 
     //attach the new fd to the correct gpus
-    ret = nv_attach_gpus(nvctlFd2, context->devInfo.gpu_id);
+    ret = nv_attach_gpus(nvctlFd2, context->gpu_id);
     if (!ret) {
         LOG("nv_attach_gpus failed");
         goto err;
@@ -499,7 +523,7 @@ bool alloc_image(NVDriverContext *context, uint32_t width, uint32_t height, uint
     image->nvFd = memFd;
     image->nvFd2 = memFd2; //not sure why we can't close this one, we shouldn't need it after importing the image
     image->drmFd = prime_handle.fd;
-    image->mods = DRM_FORMAT_MOD_NVIDIA_BLOCK_LINEAR_2D(0, context->devInfo.sector_layout, context->devInfo.page_kind_generation, context->devInfo.generic_page_kind, log2GobsPerBlockY);
+    image->mods = DRM_FORMAT_MOD_NVIDIA_BLOCK_LINEAR_2D(0, context->sector_layout, context->page_kind_generation, context->generic_page_kind, log2GobsPerBlockY);
     image->offset = 0;
     image->pitch = widthInBytes;
     image->memorySize = imageSizeInBytes;

@@ -12,12 +12,16 @@ typedef struct {
     int nvctlFd;
     int nv0Fd;
     int drmFd;
-    struct drm_nvidia_get_dev_info_params devInfo;
     uint32_t clientObject;
     uint32_t deviceObject;
     uint32_t subdeviceObject;
     uint32_t driverMajorVersion;
+    uint32_t driverMinorVersion;
     //bool hasHugePage;
+    uint32_t gpu_id;
+    uint32_t generic_page_kind;
+    uint32_t page_kind_generation;
+    uint32_t sector_layout;
 } NVDriverContext;
 
 typedef struct {
