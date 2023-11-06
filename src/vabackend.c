@@ -1006,6 +1006,11 @@ static VAStatus nvCreateContext(
         cfg->bitDepth = surface->bitDepth;
     }
 
+    if (drv->surfaceCount == 0 && num_render_targets == 0) {
+        LOG("0 surfaces have been passed to vaCreateContext, this might cause errors. Setting surface count to 16");
+        num_render_targets = 16;
+    }
+
     CUVIDDECODECREATEINFO vdci = {
         .ulWidth             = vdci.ulMaxWidth  = vdci.ulTargetWidth  = picture_width,
         .ulHeight            = vdci.ulMaxHeight = vdci.ulTargetHeight = picture_height,
