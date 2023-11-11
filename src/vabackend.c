@@ -2039,7 +2039,7 @@ static VAStatus nvExportSurfaceHandle(
 
     drv->backend->fillExportDescriptor(drv, surface, ptr);
 
-    LOG("Exporting with %d %d %d %d %" PRIx64 " %d %d %" PRIx64, ptr->width, ptr->height, ptr->layers[0].offset[0],
+    LOG("Exporting with w:%d h:%d o:%d p:%d m:%" PRIx64 " o:%d p:%d m:%" PRIx64, ptr->width, ptr->height, ptr->layers[0].offset[0],
                                                                  ptr->layers[0].pitch[0], ptr->objects[0].drm_format_modifier,
                                                                  ptr->layers[1].offset[0], ptr->layers[1].pitch[0],
                                                                  ptr->objects[1].drm_format_modifier);

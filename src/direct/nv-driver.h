@@ -42,5 +42,7 @@ bool free_nvdriver(NVDriverContext *context);
 bool get_device_uuid(NVDriverContext *context, char uuid[16]);
 bool alloc_memory(NVDriverContext *context, uint32_t size, int *fd);
 bool alloc_image(NVDriverContext *context, uint32_t width, uint32_t height, uint8_t channels, uint8_t bytesPerChannel, uint32_t fourcc, NVDriverImage *image);
+bool alloc_buffer(NVDriverContext *context, uint32_t size, uint32_t widthInBytes, int *fd1, int *fd2, int *drmFd);
+uint32_t calculate_image_size(uint32_t width, uint32_t height, uint8_t channels, uint8_t bitsPerChannel, uint32_t* widthInBytesOut);
 
 #endif
