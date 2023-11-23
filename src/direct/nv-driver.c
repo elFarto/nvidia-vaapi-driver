@@ -13,6 +13,8 @@
 
 #include "nv-driver.h"
 #include <nvidia.h>
+#include <sys/param.h>
+
 #include "../vabackend.h"
 
 //Technically these can vary per architecture, but all the ones we support have the same values
@@ -442,6 +444,7 @@ uint32_t calculate_image_size(const NVDriverContext *context, NVDriverImage imag
     //first figure out the gob layout
     const uint32_t log2GobsPerBlockX = 0;
     const uint32_t log2GobsPerBlockZ = 0;
+    const uint32_t log2GobsPerBlockY = 4;
 
     uint32_t offset = 0;
     for (uint32_t i = 0; i < numPlanes; i++) {
@@ -450,15 +453,19 @@ uint32_t calculate_image_size(const NVDriverContext *context, NVDriverImage imag
         const uint32_t planeHeight = height >> planes[i].ss.y;
         const uint32_t bytesPerPixel = planes[i].channelCount * bppc;
 
-        const uint32_t log2GobsPerBlockY = planeHeight < 88 ? 3 : 4; //TODO 88 is a guess, 80px high needs 3, 112px needs 4, 96px needs 4, 88px needs 4
-
-        LOG("Calculated GOB size: %dx%d (%dx%d)", GOB_WIDTH_IN_BYTES << log2GobsPerBlockX, GOB_HEIGHT_IN_BYTES << log2GobsPerBlockY, log2GobsPerBlockX, log2GobsPerBlockY);
+        //Depending on the height of the allocated image, the modifiers
+        //needed for the exported image to work correctly change. However this can cause problems if the Y surface
+        //needs one modifier, and UV need another when attempting to use a single surface export (as only one modifier
+        //is possible). So for now we're just going to limit the minimum height to 88 pixels so we can use a single
+        //modifier.
+        //const uint32_t log2GobsPerBlockY = planeHeight < 88 ? 3 : 4;
+        //LOG("Calculated GOB size: %dx%d (%dx%d)", GOB_WIDTH_IN_BYTES << log2GobsPerBlockX, GOB_HEIGHT_IN_BYTES << log2GobsPerBlockY, log2GobsPerBlockX, log2GobsPerBlockY);
 
         //These two seem to be correct, but it was discovered by trial and error so I'm not 100% sure
         const uint32_t widthInBytes = ROUND_UP(planeWidth * bytesPerPixel, GOB_WIDTH_IN_BYTES << log2GobsPerBlockX);
-        const uint32_t alignedHeight = ROUND_UP(planeHeight, GOB_HEIGHT_IN_BYTES << log2GobsPerBlockY);
+        const uint32_t alignedHeight = MAX(ROUND_UP(planeHeight, GOB_HEIGHT_IN_BYTES << log2GobsPerBlockY), 88);
         images[i].width = planeWidth;
-        images[i].height = planeHeight;
+        images[i].height = alignedHeight;
         images[i].offset = offset;
         images[i].memorySize = widthInBytes * alignedHeight;
         images[i].pitch = widthInBytes;
