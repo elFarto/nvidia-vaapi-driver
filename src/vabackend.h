@@ -11,6 +11,7 @@
 #include <pthread.h>
 #include "list.h"
 #include "direct/nv-driver.h"
+#include "common.h"
 
 #define SURFACE_QUEUE_SIZE 16
 #define MAX_IMAGE_COUNT 64
@@ -107,6 +108,8 @@ typedef struct _BackingImage {
     //direct backend only
     NVCudaImage cudaImages[3];
     NVFormat    format;
+    uint32_t    totalSize;
+    CUexternalMemory extMem;
 } BackingImage;
 
 struct _NVDriver;
@@ -202,19 +205,6 @@ struct _NVCodec {
 };
 
 typedef struct _NVCodec NVCodec;
-
-typedef struct
-{
-    uint32_t x;
-    uint32_t y;
-} NVSubSampling;
-
-typedef struct
-{
-    uint32_t channelCount;
-    uint32_t fourcc;
-    NVSubSampling ss; // subsampling
-} NVFormatPlane;
 
 typedef struct
 {
