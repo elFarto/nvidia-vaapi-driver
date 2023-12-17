@@ -44,7 +44,7 @@ static FILE *LOG_OUTPUT;
 static int gpu = -1;
 static enum {
     EGL, DIRECT
-} backend = EGL;
+} backend = DIRECT;
 
 const NVFormatInfo formatsInfo[] =
 {
@@ -93,8 +93,12 @@ static void init() {
     }
 
     char *nvdBackend = getenv("NVD_BACKEND");
-    if (nvdBackend != NULL && strncmp(nvdBackend, "direct", 6) == 0) {
-        backend = DIRECT;
+    if (nvdBackend != NULL) {
+        if (strncmp(nvdBackend, "direct", 6) == 0) {
+            backend = DIRECT;
+        } else if (strncmp(nvdBackend, "egl", 6) == 0) {
+            backend = EGL;
+        }
     }
 
     //try to detect the Firefox sandbox and skip loading CUDA if detected
