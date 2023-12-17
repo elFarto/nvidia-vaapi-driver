@@ -1015,6 +1015,12 @@ static VAStatus nvCreateContext(
         num_render_targets = 16;
     }
 
+    int surfaceCount = drv->surfaceCount != 0 ? drv->surfaceCount : num_render_targets;
+    if (surfaceCount > 32) {
+        LOG("Application requested %d surface(s), limiting to 32. This may cause issues.", surfaceCount);
+        surfaceCount = 32;
+    }
+
     CUVIDDECODECREATEINFO vdci = {
         .ulWidth             = vdci.ulMaxWidth  = vdci.ulTargetWidth  = picture_width,
         .ulHeight            = vdci.ulMaxHeight = vdci.ulTargetHeight = picture_height,
@@ -1032,7 +1038,7 @@ static VAStatus nvCreateContext(
         //it isn't particually efficient to do this, but it is simple
         .ulNumOutputSurfaces = 1,
         //just allocate as many surfaces as have been created since we can never have as much information as the decode to guess correctly
-        .ulNumDecodeSurfaces = drv->surfaceCount != 0 ? drv->surfaceCount : num_render_targets,
+        .ulNumDecodeSurfaces = surfaceCount,
 
     };
 
