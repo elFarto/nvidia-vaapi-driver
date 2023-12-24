@@ -63,6 +63,7 @@ static bool direct_initExporter(NVDriver *drv) {
         uint8_t drmIdx = 128;
         char node[20] = {0, };
         do {
+            LOG("Searching for GPU: %d %d %d", nvIdx, nvdGpu, drmIdx)
             snprintf(node, 20, "/dev/dri/renderD%d", drmIdx++);
             fd = open(node, O_RDWR|O_CLOEXEC);
             if (fd == -1) {
@@ -164,7 +165,7 @@ static BackingImage *direct_allocateBackingImage(NVDriver *drv, NVSurface *surfa
         .size      = backingImage->totalSize
     };
 
-    LOG("Importing memory to CUDA");
+    LOG("Importing memory to CUDA")
     if (CHECK_CUDA_RESULT(drv->cu->cuImportExternalMemory(&backingImage->extMem, &extMemDesc))) {
         goto import_fail;
     }
@@ -321,7 +322,7 @@ static bool direct_realiseSurface(NVDriver *drv, NVSurface *surface) {
     //check again to see if it's just been created
     if (surface->backingImage == NULL) {
         //try to find a free surface
-        BackingImage *img = img = direct_allocateBackingImage(drv, surface);
+        BackingImage *img = direct_allocateBackingImage(drv, surface);
         if (img == NULL) {
             LOG("Unable to realise surface: %p (%d)", surface, surface->pictureIdx)
             pthread_mutex_unlock(&surface->mutex);
@@ -343,7 +344,7 @@ static bool direct_exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surf
     if (ptr != 0) {
         copyFrameToSurface(drv, ptr, surface, pitch);
     } else {
-        LOG("exporting with null ptr");
+        LOG("exporting with null ptr")
     }
 
     return true;

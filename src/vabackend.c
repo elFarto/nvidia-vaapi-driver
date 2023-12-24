@@ -392,7 +392,7 @@ static void* resolveSurfaces(void *param) {
         }
         pthread_mutex_unlock(&ctx->resolveMutex);
         //find the last item
-        LOG("Reading from queue: %d %d", ctx->surfaceQueueReadIdx, ctx->surfaceQueueWriteIdx);
+        //LOG("Reading from queue: %d %d", ctx->surfaceQueueReadIdx, ctx->surfaceQueueWriteIdx);
         NVSurface *surface = ctx->surfaceQueue[ctx->surfaceQueueReadIdx++];
         if (ctx->surfaceQueueReadIdx >= SURFACE_QUEUE_SIZE) {
             ctx->surfaceQueueReadIdx = 0;
@@ -408,15 +408,15 @@ static void* resolveSurfaces(void *param) {
             .second_field = surface->secondField
         };
 
-        LOG("Mapping surface %d", surface->pictureIdx);
+        //LOG("Mapping surface %d", surface->pictureIdx);
         if (CHECK_CUDA_RESULT(cv->cuvidMapVideoFrame(ctx->decoder, surface->pictureIdx, &deviceMemory, &pitch, &procParams))) {
             continue;
         }
-        LOG("Mapped surface %d to %p (%d)", surface->pictureIdx, (void*)deviceMemory, pitch);
+        //LOG("Mapped surface %d to %p (%d)", surface->pictureIdx, (void*)deviceMemory, pitch);
 
         //update cuarray
         drv->backend->exportCudaPtr(drv, deviceMemory, surface, pitch);
-        LOG("Surface %d exported", surface->pictureIdx);
+        //LOG("Surface %d exported", surface->pictureIdx);
         //unmap frame
         CHECK_CUDA_RESULT(cv->cuvidUnmapVideoFrame(ctx->decoder, deviceMemory));
     }
@@ -529,7 +529,6 @@ static VAStatus nvQueryConfigProfiles(
     //now filter out the codecs we don't support
     for (int i = 0; i < profiles; i++) {
         if (vaToCuCodec(profile_list[i]) == cudaVideoCodec_NONE) {
-            //LOG("Removing profile: %d", profile_list[i])
             for (int x = i; x < profiles-1; x++) {
                 profile_list[x] = profile_list[x+1];
             }
@@ -985,7 +984,7 @@ static VAStatus nvCreateContext(
         return VA_STATUS_ERROR_INVALID_CONFIG;
     }
 
-    LOG("with %d render targets, %d surfaces, at %dx%d", num_render_targets, drv->surfaceCount, picture_width, picture_height);
+    LOG("creating context with %d render targets, %d surfaces, at %dx%d", num_render_targets, drv->surfaceCount, picture_width, picture_height);
 
     //find the codec they've selected
     const NVCodec *selectedCodec = NULL;
@@ -1312,7 +1311,7 @@ static VAStatus nvEndPicture(
         LOG("cuvidDecodePicture failed: %d", result);
         return VA_STATUS_ERROR_DECODING_ERROR;
     }
-    LOG("Decoded frame successfully to idx: %d (%p)", picParams->CurrPicIdx, nvCtx->renderTarget);
+    //LOG("Decoded frame successfully to idx: %d (%p)", picParams->CurrPicIdx, nvCtx->renderTarget);
 
     NVSurface *surface = nvCtx->renderTarget;
 
@@ -1351,7 +1350,7 @@ static VAStatus nvSyncSurface(
     //wait for resolve to occur before synchronising
     pthread_mutex_lock(&surface->mutex);
     if (surface->resolving) {
-        LOG("Surface %d not resolved, waiting", surface->pictureIdx);
+        //LOG("Surface %d not resolved, waiting", surface->pictureIdx);
         pthread_cond_wait(&surface->cond, &surface->mutex);
     }
     pthread_mutex_unlock(&surface->mutex);
@@ -2036,7 +2035,7 @@ static VAStatus nvExportSurfaceHandle(
         return VA_STATUS_ERROR_INVALID_SURFACE;
     }
 
-    LOG("Exporting surface: %d (%p)", surface->pictureIdx, surface);
+    //LOG("Exporting surface: %d (%p)", surface->pictureIdx, surface);
 
     CHECK_CUDA_RESULT_RETURN(cu->cuCtxPushCurrent(drv->cudaContext), VA_STATUS_ERROR_OPERATION_FAILED);
 
@@ -2049,10 +2048,10 @@ static VAStatus nvExportSurfaceHandle(
 
     drv->backend->fillExportDescriptor(drv, surface, ptr);
 
-    LOG("Exporting with w:%d h:%d o:%d p:%d m:%" PRIx64 " o:%d p:%d m:%" PRIx64, ptr->width, ptr->height, ptr->layers[0].offset[0],
-                                                                 ptr->layers[0].pitch[0], ptr->objects[0].drm_format_modifier,
-                                                                 ptr->layers[1].offset[0], ptr->layers[1].pitch[0],
-                                                                 ptr->objects[1].drm_format_modifier);
+    //LOG("Exporting with w:%d h:%d o:%d p:%d m:%" PRIx64 " o:%d p:%d m:%" PRIx64, ptr->width, ptr->height, ptr->layers[0].offset[0],
+    //                                                             ptr->layers[0].pitch[0], ptr->objects[0].drm_format_modifier,
+    //                                                             ptr->layers[1].offset[0], ptr->layers[1].pitch[0],
+    //                                                             ptr->objects[1].drm_format_modifier);
 
     CHECK_CUDA_RESULT_RETURN(cu->cuCtxPopCurrent(NULL), VA_STATUS_ERROR_OPERATION_FAILED);
 
