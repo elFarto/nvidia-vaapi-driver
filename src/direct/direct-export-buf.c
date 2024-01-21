@@ -82,7 +82,7 @@ static bool direct_initExporter(NVDriver *drv) {
                 continue;
             }
             break;
-        } while (drmIdx < 16);
+        } while (drmIdx < 128 + 16);
 
         drv->drmFd = fd;
         LOG("Found NVIDIA GPU %d at %s", nvdGpu, node);
