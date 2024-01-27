@@ -1010,8 +1010,8 @@ static VAStatus nvCreateContext(
     }
 
     if (drv->surfaceCount == 0 && num_render_targets == 0) {
-        LOG("0 surfaces have been passed to vaCreateContext, this might cause errors. Setting surface count to 16");
-        num_render_targets = 16;
+        LOG("0 surfaces have been passed to vaCreateContext, this might cause errors. Setting surface count to 32");
+        num_render_targets = 32;
     }
 
     int surfaceCount = drv->surfaceCount != 0 ? drv->surfaceCount : num_render_targets;
