@@ -172,12 +172,22 @@ static bool nv_export_object_to_fd(const int fd, const int export_fd, const NvHa
 
 static bool nv_get_versions(const int fd, char **versionString) {
     nv_ioctl_rm_api_version_t obj = {
-        .cmd = '0' //query
+        .cmd = '2' //query
     };
 
-    ioctl(fd, _IOC(_IOC_READ|_IOC_WRITE, NV_IOCTL_MAGIC, NV_ESC_CHECK_VERSION_STR, sizeof(obj)), &obj);
+    const int ret = ioctl(fd, _IOC(_IOC_READ|_IOC_WRITE, NV_IOCTL_MAGIC, NV_ESC_CHECK_VERSION_STR, sizeof(obj)), &obj);
 
-     *versionString = strdup(obj.versionString);
+    if (ret != 0) {
+        LOG("nv_check_version failed: %d %d", ret, errno);
+        return false;
+    }
+
+    if (strlen(obj.versionString) == 0) {
+        //the newer 470 series of drivers don't actually return the version number, so just substitute in a dummy one
+        *versionString = strdup("470.123.45");
+    } else {
+        *versionString = strdup(obj.versionString);
+    }
 
     return obj.reply == NV_RM_API_VERSION_REPLY_RECOGNIZED;
 }
