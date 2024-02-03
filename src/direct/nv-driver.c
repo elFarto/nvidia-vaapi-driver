@@ -175,7 +175,7 @@ static bool nv_get_versions(const int fd, char **versionString) {
         .cmd = '0' //query
     };
 
-    const int ret = ioctl(fd, _IOC(_IOC_READ|_IOC_WRITE, NV_IOCTL_MAGIC, NV_ESC_CHECK_VERSION_STR, sizeof(obj)), &obj);
+    ioctl(fd, _IOC(_IOC_READ|_IOC_WRITE, NV_IOCTL_MAGIC, NV_ESC_CHECK_VERSION_STR, sizeof(obj)), &obj);
 
      *versionString = strdup(obj.versionString);
 
