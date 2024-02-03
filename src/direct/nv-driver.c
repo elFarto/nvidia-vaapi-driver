@@ -172,15 +172,10 @@ static bool nv_export_object_to_fd(const int fd, const int export_fd, const NvHa
 
 static bool nv_get_versions(const int fd, char **versionString) {
     nv_ioctl_rm_api_version_t obj = {
-        .cmd = '2' //query
+        .cmd = '0' //query
     };
 
     const int ret = ioctl(fd, _IOC(_IOC_READ|_IOC_WRITE, NV_IOCTL_MAGIC, NV_ESC_CHECK_VERSION_STR, sizeof(obj)), &obj);
-
-    if (ret != 0) {
-        LOG("nv_check_version failed: %d %d", ret, errno);
-        return false;
-    }
 
      *versionString = strdup(obj.versionString);
 
