@@ -29,6 +29,15 @@
 #define __has_builtin(x) 0
 #endif
 
+#ifndef __has_include
+#define __has_include(x) 0
+#endif
+
+#if __has_include(<pthread_np.h>)
+#include <pthread_np.h>
+#define gettid pthread_getthreadid_np
+#endif
+
 static pthread_mutex_t concurrency_mutex = PTHREAD_MUTEX_INITIALIZER;
 static uint32_t instances;
 static uint32_t max_instances;
@@ -167,7 +176,7 @@ void logger(const char *filename, const char *function, int line, const char *ms
     struct timespec tp;
     clock_gettime(CLOCK_MONOTONIC, &tp);
 
-    fprintf(LOG_OUTPUT, "%10ld.%09ld [%d-%d] %s:%4d %24s %s\n", tp.tv_sec, tp.tv_nsec, getpid(), gettid(), filename, line, function, formattedMessage);
+    fprintf(LOG_OUTPUT, "%10ld.%09ld [%d-%d] %s:%4d %24s %s\n", (long)tp.tv_sec, tp.tv_nsec, getpid(), gettid(), filename, line, function, formattedMessage);
     fflush(LOG_OUTPUT);
 }
 

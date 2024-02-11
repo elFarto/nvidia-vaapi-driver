@@ -17,6 +17,14 @@
 
 #include "../vabackend.h"
 
+#if !defined(_IOC_READ) && defined(IOC_OUT)
+#define _IOC_READ IOC_OUT
+#endif
+
+#if !defined(_IOC_WRITE) && defined(IOC_IN)
+#define _IOC_WRITE IOC_IN
+#endif
+
 //Technically these can vary per architecture, but all the ones we support have the same values
 #define GOB_WIDTH_IN_BYTES  64
 #define GOB_HEIGHT_IN_BYTES 8
