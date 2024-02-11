@@ -8,13 +8,15 @@ This is an VA-API implementation that uses NVDEC as a backend. This implementati
 - [Table of contents](#table-of-contents)
 - [Codec Support](#codec-support)
 - [Installation](#installation)
-  - [Package manager](#package-manager)
+  - [Packaging status](#packaging-status)
   - [Building](#building)
   - [Removal](#removal)
 - [Configuration](#configuration)
+  - [Upstream regressions](#upstream-regressions)
   - [Kernel parameters](#kernel-parameters)
   - [Environment Variables](#environment-variables)
   - [Firefox](#firefox)
+  - [Chrome](#chrome)
   - [MPV](#mpv)
   - [Direct Backend](#direct-backend)
 - [Testing](#testing)
@@ -51,16 +53,15 @@ To install and use `nvidia-vaapi-driver`, follow the steps in installation and c
 
 * NVIDIA driver series 470 or 500+
 
-## Package manager
+## Packaging status
 
-| Distribution | Package name |
-|---|---|
-| Arch<sup>AUR</sup> | [libva-nvidia-driver](https://aur.archlinux.org/packages/libva-nvidia-driver) |
-| Arch<sup>AUR</sup> | [libva-nvidia-driver-git](https://aur.archlinux.org/packages/libva-nvidia-driver-git) |
-| Debian,Ubuntu | nvidia-vaapi-driver<sup>[debian](https://tracker.debian.org/pkg/nvidia-vaapi-driver) [ubuntu](https://packages.ubuntu.com/kinetic/nvidia-vaapi-driver)</sup> |
-| Fedora, RHEL and derivates (Rocky, Alma, etc).| [nvidia-vaapi-driver](https://github.com/rpmfusion/nvidia-vaapi-driver) |
+<p align="top"><a href="https://repology.org/project/nvidia-vaapi-driver/versions"><img src="https://repology.org/badge/vertical-allrepos/nvidia-vaapi-driver.svg" alt="repology"><a href="https://repology.org/project/libva-nvidia-driver/versions"><img src="https://repology.org/badge/vertical-allrepos/libva-nvidia-driver.svg" alt="repology" align="top" width="%"></p>
 
-Feel free to add your distributions package in an issue/PR.
+[pkgs.org/nvidia-vaapi-driver](https://pkgs.org/search/?q=nvidia-vaapi-driver) [pkgs.org/libva-nvidia-driver](https://pkgs.org/search/?q=libva-nvidia-driver)
+
+openSUSE: [1](https://software.opensuse.org/package/nvidia-vaapi-driver), [2](https://software.opensuse.org/package/libva-nvidia-driver).
+
+Feel free to add your distributions package in an issue/PR, if it isn't on these websites.
 
 ## Building
 
@@ -85,7 +86,11 @@ By default the driver installs itself as `/usr/lib64/dri/nvidia_drv_video.so` (t
 
 # Configuration
 
-**IMPORTANT**: The [direct backend](#direct-backend) is currently required on NVIDIA driver series 525 due to a regression (see [issue #126](/../../issues/126)).
+## Upstream regressions
+
+The EGL backend is broken on driver versions 525 or later due to a regression. Users running these drivers should use the [direct backend](#direct-backend) instead.
+
+For more information read the [upstream bug report](https://forums.developer.nvidia.com/t/cueglstreamproducerconnect-returns-error-801-on-525-53-driver/233610) or [issue #126](/../../issues/126).
 
 ## Kernel parameters
 
@@ -103,7 +108,7 @@ Environment variables used to control the behavior of this library.
 
 ## Firefox
 
-To use the driver with firefox you will need at least Firefox 96, `ffmpeg` compiled with vaapi support (search ffmpeg output for --enable-vaapi), and the following config options need to be set in the `about:config` page:
+To use the driver with firefox you will need at least Firefox 96, `ffmpeg` compiled with vaapi support (`ffmpeg -hwaccels` output should include vaapi), and the following config options need to be set in the `about:config` page:
 
 | Option | Value | Reason |
 |---|---|---|
@@ -118,14 +123,15 @@ In addition the following environment variables need to be set. For permanent co
 | Variable | Value | Reason |
 |---|---|---|
 | MOZ_DISABLE_RDD_SANDBOX | 1 | Disables the sandbox for the RDD process that the decoder runs in. |
-| EGL_PLATFORM | wayland | Required on FF98+ when running on Wayland, due to a regression that has been introduced. |
-| LIBVA_DRIVER_NAME | nvidia | For libva versions prior to 2.15, this forces libva to load the `nvidia` backend. |
+| LIBVA_DRIVER_NAME | nvidia | Required for libva 2.20+, forces libva to load this driver. |
 | __EGL_VENDOR_LIBRARY_FILENAMES | /usr/share/glvnd/egl_vendor.d/10_nvidia.json | Required for the 470 driver series only. It overrides the list of drivers the glvnd library can use to prevent Firefox from using the MESA driver by mistake. |
 
 When libva is used it will log out some information, which can be excessive when Firefox initalises it multiple times per page. This logging can be suppressed by adding the following line to the `/etc/libva.conf` file:
 ```
 LIBVA_MESSAGING_LEVEL=1
 ```
+
+If you're using the Snap version of Firefox, it will be unable to access the host version of the driver that is installed.
 
 ## Chrome
 

@@ -53,7 +53,7 @@ static FILE *LOG_OUTPUT;
 static int gpu = -1;
 static enum {
     EGL, DIRECT
-} backend = EGL;
+} backend = DIRECT;
 
 const NVFormatInfo formatsInfo[] =
 {
@@ -63,16 +63,8 @@ const NVFormatInfo formatsInfo[] =
     [NV_FORMAT_P012] = {2, 2, DRM_FORMAT_P012,     true,  false, {{1, DRM_FORMAT_R16,      {0,0}}, {2, DRM_FORMAT_RG1616, {1,1}}},                            {VA_FOURCC_P012, VA_LSB_FIRST,   24, 0,0,0,0,0}},
     [NV_FORMAT_P016] = {2, 2, DRM_FORMAT_P016,     true,  false, {{1, DRM_FORMAT_R16,      {0,0}}, {2, DRM_FORMAT_RG1616, {1,1}}},                            {VA_FOURCC_P016, VA_LSB_FIRST,   24, 0,0,0,0,0}},
     [NV_FORMAT_444P] = {1, 3, DRM_FORMAT_YUV444,   false, true,  {{1, DRM_FORMAT_R8,       {0,0}}, {1, DRM_FORMAT_R8,     {0,0}}, {1, DRM_FORMAT_R8, {0,0}}}, {VA_FOURCC_444P, VA_LSB_FIRST,   24, 0,0,0,0,0}},
-    // Nvidia decoder only supports YUV444 planar formats with 3 planes so we can't use VA_FOURCC_Y410, VA_FOURCC_Y412 and VA_FOURCC_Y416.
-    // VA_FOURCC_Q410, VA_FOURCC_Q412 and VA_FOURCC_Q416 aren't defined in va.h yet.
-#if defined(VA_FOURCC_Q410) && defined(DRM_FORMAT_Q410)
-    [NV_FORMAT_Q410] = {2, 3, DRM_FORMAT_Q410,     true,  true,  {{1, DRM_FORMAT_R16,      {0,0}}, {1, DRM_FORMAT_R16,    {0,0}}, {1, DRM_FORMAT_R16,{0,0}}}, {VA_FOURCC_Q410, VA_LSB_FIRST,   48, 0,0,0,0,0}},
-#endif
-#if defined(VA_FOURCC_Q412) && defined(DRM_FORMAT_Q412)
-    [NV_FORMAT_Q412] = {2, 3, DRM_FORMAT_Q412,     true,  true,  {{1, DRM_FORMAT_R16,      {0,0}}, {1, DRM_FORMAT_R16,    {0,0}}, {1, DRM_FORMAT_R16,{0,0}}}, {VA_FOURCC_Q412, VA_LSB_FIRST,   48, 0,0,0,0,0}},
-#endif
-#if defined(VA_FOURCC_Q416) && defined(DRM_FORMAT_Q416)
-    [NV_FORMAT_Q416] = {2, 3, DRM_FORMAT_Q416,     true,  true,  {{1, DRM_FORMAT_R16,      {0,0}}, {1, DRM_FORMAT_R16,    {0,0}}, {1, DRM_FORMAT_R16,{0,0}}}, {VA_FOURCC_Q416, VA_LSB_FIRST,   48, 0,0,0,0,0}},
+#if VA_CHECK_VERSION(1, 20, 0)
+    [NV_FORMAT_Q416] = {2, 3, DRM_FORMAT_INVALID,  true,  true,  {{1, DRM_FORMAT_R16,      {0,0}}, {1, DRM_FORMAT_R16,    {0,0}}, {1, DRM_FORMAT_R16,{0,0}}}, {VA_FOURCC_Q416, VA_LSB_FIRST,   48, 0,0,0,0,0}},
 #endif
 };
 
@@ -110,8 +102,12 @@ static void init() {
     }
 
     char *nvdBackend = getenv("NVD_BACKEND");
-    if (nvdBackend != NULL && strncmp(nvdBackend, "direct", 6) == 0) {
-        backend = DIRECT;
+    if (nvdBackend != NULL) {
+        if (strncmp(nvdBackend, "direct", 6) == 0) {
+            backend = DIRECT;
+        } else if (strncmp(nvdBackend, "egl", 6) == 0) {
+            backend = EGL;
+        }
     }
 
     //try to detect the Firefox sandbox and skip loading CUDA if detected
@@ -405,7 +401,7 @@ static void* resolveSurfaces(void *param) {
         }
         pthread_mutex_unlock(&ctx->resolveMutex);
         //find the last item
-        LOG("Reading from queue: %d %d", ctx->surfaceQueueReadIdx, ctx->surfaceQueueWriteIdx);
+        //LOG("Reading from queue: %d %d", ctx->surfaceQueueReadIdx, ctx->surfaceQueueWriteIdx);
         NVSurface *surface = ctx->surfaceQueue[ctx->surfaceQueueReadIdx++];
         if (ctx->surfaceQueueReadIdx >= SURFACE_QUEUE_SIZE) {
             ctx->surfaceQueueReadIdx = 0;
@@ -421,15 +417,15 @@ static void* resolveSurfaces(void *param) {
             .second_field = surface->secondField
         };
 
-        LOG("Mapping surface %d", surface->pictureIdx);
+        //LOG("Mapping surface %d", surface->pictureIdx);
         if (CHECK_CUDA_RESULT(cv->cuvidMapVideoFrame(ctx->decoder, surface->pictureIdx, &deviceMemory, &pitch, &procParams))) {
             continue;
         }
-        LOG("Mapped surface %d to %p (%d)", surface->pictureIdx, (void*)deviceMemory, pitch);
+        //LOG("Mapped surface %d to %p (%d)", surface->pictureIdx, (void*)deviceMemory, pitch);
 
         //update cuarray
         drv->backend->exportCudaPtr(drv, deviceMemory, surface, pitch);
-        LOG("Surface %d exported", surface->pictureIdx);
+        //LOG("Surface %d exported", surface->pictureIdx);
         //unmap frame
         CHECK_CUDA_RESULT(cv->cuvidUnmapVideoFrame(ctx->decoder, deviceMemory));
     }
@@ -514,17 +510,14 @@ static VAStatus nvQueryConfigProfiles(
             profile_list[profiles++] = VAProfileAV1Profile1;
         }
 
-    // Currently VAAPI doesn't support yuv444p10 yuv444p12 and yuv444p16
-#if defined(VA_FOURCC_Q410) && defined(DRM_FORMAT_Q410)
+#if VA_CHECK_VERSION(1, 20, 0)
         if (drv->supports16BitSurface) {
             if (doesGPUSupportCodec(cudaVideoCodec_HEVC, 10, cudaVideoChromaFormat_444, NULL, NULL)) {
                 profile_list[profiles++] = VAProfileHEVCMain444_10;
             }
-#if (defined(VA_FOURCC_Q412) && defined(DRM_FORMAT_Q412)) || (defined(VA_FOURCC_Q416) && defined(DRM_FORMAT_Q416))
             if (doesGPUSupportCodec(cudaVideoCodec_HEVC, 12, cudaVideoChromaFormat_444, NULL, NULL)) {
                 profile_list[profiles++] = VAProfileHEVCMain444_12;
             }
-#endif
             if (doesGPUSupportCodec(cudaVideoCodec_VP9, 10, cudaVideoChromaFormat_444, NULL, NULL)) {
                 profile_list[profiles++] = VAProfileVP9Profile3; //color depth: 10–12 bit, 4:2:2, 4:4:0, 4:4:4
             }
@@ -545,7 +538,6 @@ static VAStatus nvQueryConfigProfiles(
     //now filter out the codecs we don't support
     for (int i = 0; i < profiles; i++) {
         if (vaToCuCodec(profile_list[i]) == cudaVideoCodec_NONE) {
-            //LOG("Removing profile: %d", profile_list[i])
             for (int x = i; x < profiles-1; x++) {
                 profile_list[x] = profile_list[x+1];
             }
@@ -1001,7 +993,7 @@ static VAStatus nvCreateContext(
         return VA_STATUS_ERROR_INVALID_CONFIG;
     }
 
-    LOG("with %d render targets, %d surfaces, at %dx%d", num_render_targets, drv->surfaceCount, picture_width, picture_height);
+    LOG("creating context with %d render targets, %d surfaces, at %dx%d", num_render_targets, drv->surfaceCount, picture_width, picture_height);
 
     //find the codec they've selected
     const NVCodec *selectedCodec = NULL;
@@ -1026,6 +1018,17 @@ static VAStatus nvCreateContext(
         cfg->bitDepth = surface->bitDepth;
     }
 
+    if (drv->surfaceCount == 0 && num_render_targets == 0) {
+        LOG("0 surfaces have been passed to vaCreateContext, this might cause errors. Setting surface count to 16");
+        num_render_targets = 16;
+    }
+
+    int surfaceCount = drv->surfaceCount != 0 ? drv->surfaceCount : num_render_targets;
+    if (surfaceCount > 32) {
+        LOG("Application requested %d surface(s), limiting to 32. This may cause issues.", surfaceCount);
+        surfaceCount = 32;
+    }
+
     CUVIDDECODECREATEINFO vdci = {
         .ulWidth             = vdci.ulMaxWidth  = vdci.ulTargetWidth  = picture_width,
         .ulHeight            = vdci.ulMaxHeight = vdci.ulTargetHeight = picture_height,
@@ -1043,7 +1046,7 @@ static VAStatus nvCreateContext(
         //it isn't particually efficient to do this, but it is simple
         .ulNumOutputSurfaces = 1,
         //just allocate as many surfaces as have been created since we can never have as much information as the decode to guess correctly
-        .ulNumDecodeSurfaces = drv->surfaceCount != 0 ? drv->surfaceCount : num_render_targets,
+        .ulNumDecodeSurfaces = surfaceCount,
 
     };
 
@@ -1317,7 +1320,7 @@ static VAStatus nvEndPicture(
         LOG("cuvidDecodePicture failed: %d", result);
         return VA_STATUS_ERROR_DECODING_ERROR;
     }
-    LOG("Decoded frame successfully to idx: %d (%p)", picParams->CurrPicIdx, nvCtx->renderTarget);
+    //LOG("Decoded frame successfully to idx: %d (%p)", picParams->CurrPicIdx, nvCtx->renderTarget);
 
     NVSurface *surface = nvCtx->renderTarget;
 
@@ -1356,7 +1359,7 @@ static VAStatus nvSyncSurface(
     //wait for resolve to occur before synchronising
     pthread_mutex_lock(&surface->mutex);
     if (surface->resolving) {
-        LOG("Surface %d not resolved, waiting", surface->pictureIdx);
+        //LOG("Surface %d not resolved, waiting", surface->pictureIdx);
         pthread_cond_wait(&surface->cond, &surface->mutex);
     }
     pthread_mutex_unlock(&surface->mutex);
@@ -1795,13 +1798,7 @@ static VAStatus nvQuerySurfaceAttributes(
         int cnt = 4;
         if (cfg->chromaFormat == cudaVideoChromaFormat_444) {
             cnt += 1;
-#ifdef VA_FOURCC_Q410
-            cnt += 1;
-#endif
-#ifdef VA_FOURCC_Q412
-            cnt += 1;
-#endif
-#ifdef VA_FOURCC_Q416
+#if VA_CHECK_VERSION(1, 20, 0)
             cnt += 1;
 #endif
         } else {
@@ -1857,21 +1854,7 @@ static VAStatus nvQuerySurfaceAttributes(
             attrib_list[attrib_idx].value.type = VAGenericValueTypeInteger;
             attrib_list[attrib_idx].value.value.i = VA_FOURCC_444P;
             attrib_idx += 1;
-#ifdef VA_FOURCC_Q410
-            attrib_list[attrib_idx].type = VASurfaceAttribPixelFormat;
-            attrib_list[attrib_idx].flags = 0;
-            attrib_list[attrib_idx].value.type = VAGenericValueTypeInteger;
-            attrib_list[attrib_idx].value.value.i = VA_FOURCC_Q410;
-            attrib_idx += 1;
-#endif
-#ifdef VA_FOURCC_Q412
-            attrib_list[attrib_idx].type = VASurfaceAttribPixelFormat;
-            attrib_list[attrib_idx].flags = 0;
-            attrib_list[attrib_idx].value.type = VAGenericValueTypeInteger;
-            attrib_list[attrib_idx].value.value.i = VA_FOURCC_Q412;
-            attrib_idx += 1;
-#endif
-#ifdef VA_FOURCC_Q416
+#if VA_CHECK_VERSION(1, 20, 0)
             attrib_list[attrib_idx].type = VASurfaceAttribPixelFormat;
             attrib_list[attrib_idx].flags = 0;
             attrib_list[attrib_idx].value.type = VAGenericValueTypeInteger;
@@ -2061,7 +2044,7 @@ static VAStatus nvExportSurfaceHandle(
         return VA_STATUS_ERROR_INVALID_SURFACE;
     }
 
-    LOG("Exporting surface: %d (%p)", surface->pictureIdx, surface);
+    //LOG("Exporting surface: %d (%p)", surface->pictureIdx, surface);
 
     CHECK_CUDA_RESULT_RETURN(cu->cuCtxPushCurrent(drv->cudaContext), VA_STATUS_ERROR_OPERATION_FAILED);
 
@@ -2074,10 +2057,10 @@ static VAStatus nvExportSurfaceHandle(
 
     drv->backend->fillExportDescriptor(drv, surface, ptr);
 
-    LOG("Exporting with %d %d %d %d %" PRIx64 " %d %d %" PRIx64, ptr->width, ptr->height, ptr->layers[0].offset[0],
-                                                                 ptr->layers[0].pitch[0], ptr->objects[0].drm_format_modifier,
-                                                                 ptr->layers[1].offset[0], ptr->layers[1].pitch[0],
-                                                                 ptr->objects[1].drm_format_modifier);
+    //LOG("Exporting with w:%d h:%d o:%d p:%d m:%" PRIx64 " o:%d p:%d m:%" PRIx64, ptr->width, ptr->height, ptr->layers[0].offset[0],
+    //                                                             ptr->layers[0].pitch[0], ptr->objects[0].drm_format_modifier,
+    //                                                             ptr->layers[1].offset[0], ptr->layers[1].pitch[0],
+    //                                                             ptr->objects[1].drm_format_modifier);
 
     CHECK_CUDA_RESULT_RETURN(cu->cuCtxPopCurrent(NULL), VA_STATUS_ERROR_OPERATION_FAILED);
 

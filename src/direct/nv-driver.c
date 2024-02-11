@@ -13,6 +13,8 @@
 
 #include "nv-driver.h"
 #include <nvidia.h>
+#include <sys/param.h>
+
 #include "../vabackend.h"
 
 #if !defined(_IOC_READ) && defined(IOC_OUT)
@@ -23,10 +25,14 @@
 #define _IOC_WRITE IOC_IN
 #endif
 
+//Technically these can vary per architecture, but all the ones we support have the same values
+#define GOB_WIDTH_IN_BYTES  64
+#define GOB_HEIGHT_IN_BYTES 8
+
 static const NvHandle NULL_OBJECT;
 
-static bool nv_alloc_object(int fd, int driverMajorVersion, NvHandle hRoot, NvHandle hObjectParent, NvHandle* hObjectNew,
-                            NvV32 hClass, uint32_t paramSize, void* params) {
+static bool nv_alloc_object(const int fd, const int driverMajorVersion, const NvHandle hRoot, const NvHandle hObjectParent,
+                            NvHandle* hObjectNew,const NvV32 hClass, const uint32_t paramSize, void* params) {
     NVOS64_PARAMETERS alloc = {
         .hRoot = hRoot,
         .hObjectParent = hObjectParent,
@@ -51,7 +57,7 @@ static bool nv_alloc_object(int fd, int driverMajorVersion, NvHandle hRoot, NvHa
         size -= 8;
     }
 
-    int ret = ioctl(fd, _IOC(_IOC_READ|_IOC_WRITE, NV_IOCTL_MAGIC, NV_ESC_RM_ALLOC, size), &alloc);
+    const int ret = ioctl(fd, _IOC(_IOC_READ|_IOC_WRITE, NV_IOCTL_MAGIC, NV_ESC_RM_ALLOC, size), &alloc);
 
     //this structure changed over the versions, make sure we read the status from the correct place
     //luckily the two new fields are the same width as the status field, so we can just read from that directly
@@ -74,7 +80,7 @@ static bool nv_alloc_object(int fd, int driverMajorVersion, NvHandle hRoot, NvHa
     return true;
 }
 
-static bool nv_free_object(int fd, NvHandle hRoot, NvHandle hObject) {
+static bool nv_free_object(const int fd, const NvHandle hRoot, const NvHandle hObject) {
     if (hObject == 0) {
         return true;
     }
@@ -85,7 +91,7 @@ static bool nv_free_object(int fd, NvHandle hRoot, NvHandle hObject) {
         .hObjectOld = hObject
     };
 
-    int ret = ioctl(fd, _IOC(_IOC_READ|_IOC_WRITE, NV_IOCTL_MAGIC, NV_ESC_RM_FREE, sizeof(NVOS00_PARAMETERS)), &freeParams);
+    const int ret = ioctl(fd, _IOC(_IOC_READ|_IOC_WRITE, NV_IOCTL_MAGIC, NV_ESC_RM_FREE, sizeof(NVOS00_PARAMETERS)), &freeParams);
 
     if (ret != 0 || freeParams.status != NV_OK) {
         LOG("nv_free_object failed: %d %X %d", ret, freeParams.status, errno);
@@ -95,7 +101,8 @@ static bool nv_free_object(int fd, NvHandle hRoot, NvHandle hObject) {
     return true;
 }
 
-static bool nv_rm_control(int fd, NvHandle hClient, NvHandle hObject, NvV32 cmd, NvU32 flags, int paramSize, void* params) {
+static bool nv_rm_control(const int fd, const NvHandle hClient, const NvHandle hObject, const NvV32 cmd,
+                          const NvU32 flags, const int paramSize, void* params) {
     NVOS54_PARAMETERS control = {
         .hClient = hClient,
         .hObject = hObject,
@@ -105,7 +112,7 @@ static bool nv_rm_control(int fd, NvHandle hClient, NvHandle hObject, NvV32 cmd,
         .paramsSize = paramSize
     };
 
-    int ret = ioctl(fd, _IOC(_IOC_READ|_IOC_WRITE, NV_IOCTL_MAGIC, NV_ESC_RM_CONTROL, sizeof(NVOS54_PARAMETERS)), &control);
+    const int ret = ioctl(fd, _IOC(_IOC_READ|_IOC_WRITE, NV_IOCTL_MAGIC, NV_ESC_RM_CONTROL, sizeof(NVOS54_PARAMETERS)), &control);
 
     if (ret != 0 || control.status != NV_OK) {
         LOG("nv_rm_control failed: %d %X %d", ret, control.status, errno);
@@ -142,18 +149,19 @@ static bool nv_card_info(int fd, nv_ioctl_card_info_t (*card_info)[32]) {
 }
 #endif
 
-static bool nv_attach_gpus(int fd, int gpu) {
-    int ret = ioctl(fd, _IOC(_IOC_READ|_IOC_WRITE, NV_IOCTL_MAGIC, NV_ESC_ATTACH_GPUS_TO_FD, sizeof(gpu)), &gpu);
+static bool nv_attach_gpus(const int fd, int gpu) {
+    const int ret = ioctl(fd, _IOC(_IOC_READ|_IOC_WRITE, NV_IOCTL_MAGIC, NV_ESC_ATTACH_GPUS_TO_FD, sizeof(gpu)), &gpu);
 
     if (ret != 0) {
         LOG("nv_attach_gpus failed: %d %d", ret, errno);
         return false;
     }
 
-    return ret == 0;
+    return true;
 }
 
-static bool nv_export_object_to_fd(int fd, int export_fd, NvHandle hClient, NvHandle hDevice, NvHandle hParent, NvHandle hObject) {
+static bool nv_export_object_to_fd(const int fd, const int export_fd, const NvHandle hClient, const NvHandle hDevice,
+                                   const NvHandle hParent,const  NvHandle hObject) {
     NV0000_CTRL_OS_UNIX_EXPORT_OBJECT_TO_FD_PARAMS params = {
         .fd = export_fd,
         .flags = 0,
@@ -170,25 +178,30 @@ static bool nv_export_object_to_fd(int fd, int export_fd, NvHandle hClient, NvHa
     return nv_rm_control(fd, hClient, hClient, NV0000_CTRL_CMD_OS_UNIX_EXPORT_OBJECT_TO_FD, 0, sizeof(params), &params);
 }
 
-static bool nv_get_versions(int fd, char **versionString) {
+static bool nv_get_versions(const int fd, char **versionString) {
     nv_ioctl_rm_api_version_t obj = {
         .cmd = '2' //query
     };
 
-    int ret = ioctl(fd, _IOC(_IOC_READ|_IOC_WRITE, NV_IOCTL_MAGIC, NV_ESC_CHECK_VERSION_STR, sizeof(obj)), &obj);
+    const int ret = ioctl(fd, _IOC(_IOC_READ|_IOC_WRITE, NV_IOCTL_MAGIC, NV_ESC_CHECK_VERSION_STR, sizeof(obj)), &obj);
 
     if (ret != 0) {
         LOG("nv_check_version failed: %d %d", ret, errno);
         return false;
     }
 
-     *versionString = strdup(obj.versionString);
+    if (strlen(obj.versionString) == 0) {
+        //the newer 470 series of drivers don't actually return the version number, so just substitute in a dummy one
+        *versionString = strdup("470.123.45");
+    } else {
+        *versionString = strdup(obj.versionString);
+    }
 
     return obj.reply == NV_RM_API_VERSION_REPLY_RECOGNIZED;
 }
 
-static bool nv0_register_fd(int nv0_fd, int nvctl_fd) {
-    int ret = ioctl(nv0_fd, _IOC(_IOC_READ|_IOC_WRITE, NV_IOCTL_MAGIC, NV_ESC_REGISTER_FD, sizeof(int)), &nvctl_fd);
+static bool nv0_register_fd(const int nv0_fd, int nvctl_fd) {
+    const int ret = ioctl(nv0_fd, _IOC(_IOC_READ|_IOC_WRITE, NV_IOCTL_MAGIC, NV_ESC_REGISTER_FD, sizeof(int)), &nvctl_fd);
 
     if (ret != 0) {
         LOG("nv0_register_fd failed: %d %d", ret, errno);
@@ -198,24 +211,47 @@ static bool nv0_register_fd(int nv0_fd, int nvctl_fd) {
     return true;
 }
 
-static bool get_device_info(int fd, struct drm_nvidia_get_dev_info_params *devInfo) {
-    int ret = ioctl(fd, DRM_IOCTL_NVIDIA_GET_DEV_INFO, devInfo);
+static bool get_device_info(const int fd, NVDriverContext *context) {
+    //NVIDIA driver v545.29.02 changed the devInfo struct, and partly broke it in the process
+    //...who adds a field to the middle of an existing struct....
+    if (context->driverMajorVersion >= 545 && context->driverMinorVersion >= 29) {
+        struct drm_nvidia_get_dev_info_params_545 devInfo545;
+        const int ret = ioctl(fd, DRM_IOCTL_NVIDIA_GET_DEV_INFO_545, &devInfo545);
 
-    if (ret != 0) {
-        LOG("get_device_info failed: %d %d", ret, errno);
-        return false;
+        if (ret != 0) {
+            LOG("get_device_info failed: %d %d", ret, errno);
+            return false;
+        }
+
+        context->gpu_id = devInfo545.gpu_id;
+        context->sector_layout = devInfo545.sector_layout;
+        context->page_kind_generation = devInfo545.page_kind_generation;
+        context->generic_page_kind = devInfo545.generic_page_kind;
+    } else {
+        struct drm_nvidia_get_dev_info_params devInfo;
+        const int ret = ioctl(fd, DRM_IOCTL_NVIDIA_GET_DEV_INFO, &devInfo);
+
+        if (ret != 0) {
+            LOG("get_device_info failed: %d %d", ret, errno);
+            return false;
+        }
+
+        context->gpu_id = devInfo.gpu_id;
+        context->sector_layout = devInfo.sector_layout;
+        context->page_kind_generation = devInfo.page_kind_generation;
+        context->generic_page_kind = devInfo.generic_page_kind;
     }
 
     return true;
 }
 
-bool get_device_uuid(NVDriverContext *context, char uuid[16]) {
+bool get_device_uuid(const NVDriverContext *context, char uuid[16]) {
     NV0000_CTRL_GPU_GET_UUID_FROM_GPU_ID_PARAMS uuidParams = {
-        .gpuId = context->devInfo.gpu_id,
+        .gpuId = context->gpu_id,
         .flags = NV0000_CTRL_CMD_GPU_GET_UUID_FROM_GPU_ID_FLAGS_FORMAT_BINARY |
                  NV0000_CTRL_CMD_GPU_GET_UUID_FROM_GPU_ID_FLAGS_TYPE_SHA1
     };
-    int ret = nv_rm_control(context->nvctlFd, context->clientObject, context->clientObject, NV0000_CTRL_CMD_GPU_GET_UUID_FROM_GPU_ID, 0, sizeof(uuidParams), &uuidParams);
+    const int ret = nv_rm_control(context->nvctlFd, context->clientObject, context->clientObject, NV0000_CTRL_CMD_GPU_GET_UUID_FROM_GPU_ID, 0, sizeof(uuidParams), &uuidParams);
     if (ret) {
         return false;
     }
@@ -227,14 +263,8 @@ bool get_device_uuid(NVDriverContext *context, char uuid[16]) {
     return true;
 }
 
-bool init_nvdriver(NVDriverContext *context, int drmFd) {
+bool init_nvdriver(NVDriverContext *context, const int drmFd) {
     LOG("Initing nvdriver...");
-    if (!get_device_info(drmFd, &context->devInfo)) {
-        return false;
-    }
-
-    LOG("Got dev info: %x %x %x %x", context->devInfo.gpu_id, context->devInfo.sector_layout, context->devInfo.page_kind_generation, context->devInfo.generic_page_kind);
-
     int nvctlFd = -1, nv0Fd = -1;
 
     nvctlFd = open("/dev/nvidiactl", O_RDWR|O_CLOEXEC);
@@ -251,8 +281,15 @@ bool init_nvdriver(NVDriverContext *context, int drmFd) {
     char *ver = NULL;
     nv_get_versions(nvctlFd, &ver);
     context->driverMajorVersion = atoi(ver);
-    LOG("NVIDIA kernel driver version: %s, major version: %d", ver, context->driverMajorVersion);
+    context->driverMinorVersion = atoi(ver+4);
+    LOG("NVIDIA kernel driver version: %s, major version: %d, minor version: %d", ver, context->driverMajorVersion, context->driverMinorVersion);
     free(ver);
+
+    if (!get_device_info(drmFd, context)) {
+        return false;
+    }
+
+    LOG("Got dev info: %x %x %x %x", context->gpu_id, context->sector_layout, context->page_kind_generation, context->generic_page_kind);
 
     //allocate the root object
     bool ret = nv_alloc_object(nvctlFd, context->driverMajorVersion, NULL_OBJECT, NULL_OBJECT, &context->clientObject, NV01_ROOT_CLIENT, 0, (void*)0);
@@ -262,7 +299,7 @@ bool init_nvdriver(NVDriverContext *context, int drmFd) {
     }
 
     //attach the drm fd to this handle
-    ret = nv_attach_gpus(nvctlFd, context->devInfo.gpu_id);
+    ret = nv_attach_gpus(nvctlFd, context->gpu_id);
     if (!ret) {
         LOG("nv_attach_gpu failed");
         goto err;
@@ -342,28 +379,19 @@ bool free_nvdriver(NVDriverContext *context) {
     return true;
 }
 
-bool alloc_memory(NVDriverContext *context, uint32_t size, int *fd) {
+bool alloc_memory(const NVDriverContext *context, const uint32_t size, int *fd) {
     //allocate the buffer
     int nvctlFd2 = -1;
     NvHandle bufferObject = {0};
-
-    //we don't have huge pages available on all hardware
-    //turns out we don't need to know that anyway, although this will probably result is less optimal page size
-    /*
-    NvU32 pageSizeAttr = context->hasHugePage ? DRF_DEF(OS32, _ATTR, _PAGE_SIZE, _HUGE)
-                                              : DRF_DEF(OS32, _ATTR, _PAGE_SIZE, _BIG);
-    NvU32 pageSizeAttr2 = context->hasHugePage ? DRF_DEF(OS32, _ATTR2, _PAGE_SIZE_HUGE, _2MB)
-                                               : 0;*/
 
     NV_MEMORY_ALLOCATION_PARAMS memParams = {
         .owner = context->clientObject,
         .type = NVOS32_TYPE_IMAGE,
         .flags = NVOS32_ALLOC_FLAGS_IGNORE_BANK_PLACEMENT |
-                 //NVOS32_ALLOC_FLAGS_ALIGNMENT_FORCE | //this doesn't seem to be needed
                  NVOS32_ALLOC_FLAGS_MAP_NOT_REQUIRED |
                  NVOS32_ALLOC_FLAGS_PERSISTENT_VIDMEM,
 
-        .attr = //pageSizeAttr |
+        .attr = DRF_DEF(OS32, _ATTR, _PAGE_SIZE, _BIG) |
                 DRF_DEF(OS32, _ATTR, _DEPTH, _UNKNOWN) |
                 DRF_DEF(OS32, _ATTR, _FORMAT, _BLOCK_LINEAR) |
                 DRF_DEF(OS32, _ATTR, _PHYSICALITY, _CONTIGUOUS),
@@ -372,8 +400,7 @@ bool alloc_memory(NVDriverContext *context, uint32_t size, int *fd) {
         .height = 0,
         .size = size,
         .alignment = 0, //see flags above
-        .attr2 = //pageSizeAttr2 |
-                 DRF_DEF(OS32, _ATTR2, _ZBC, _PREFER_NO_ZBC) |
+        .attr2 = DRF_DEF(OS32, _ATTR2, _ZBC, _PREFER_NO_ZBC) |
                  DRF_DEF(OS32, _ATTR2, _GPU_CACHEABLE, _YES)
     };
     bool ret = nv_alloc_object(context->nvctlFd, context->driverMajorVersion, context->clientObject, context->deviceObject, &bufferObject, NV01_MEMORY_LOCAL_USER, sizeof(memParams), &memParams);
@@ -390,7 +417,7 @@ bool alloc_memory(NVDriverContext *context, uint32_t size, int *fd) {
     }
 
     //attach the new fd to the correct gpus
-    ret = nv_attach_gpus(nvctlFd2, context->devInfo.gpu_id);
+    ret = nv_attach_gpus(nvctlFd2, context->gpu_id);
     if (!ret) {
         LOG("nv_attach_gpus failed");
         goto err;
@@ -425,44 +452,59 @@ bool alloc_memory(NVDriverContext *context, uint32_t size, int *fd) {
 
     return false;
 }
-
-bool alloc_image(NVDriverContext *context, uint32_t width, uint32_t height, uint8_t channels, uint8_t bitsPerChannel, uint32_t fourcc, NVDriverImage *image) {
-    uint32_t gobWidthInBytes = 64;
-    uint32_t gobHeightInBytes = 8;
-
-    uint32_t bytesPerChannel = bitsPerChannel/8;
-    uint32_t bytesPerPixel = channels * bytesPerChannel;
-
+uint32_t calculate_image_size(const NVDriverContext *context, NVDriverImage images[], const uint32_t width, const uint32_t height,
+                              const uint32_t bppc, const uint32_t numPlanes, const NVFormatPlane planes[]) {
     //first figure out the gob layout
-    uint32_t log2GobsPerBlockX = 0; //TODO not sure if these are the correct numbers to start with, but they're the largest ones i've seen used
-    uint32_t log2GobsPerBlockY = height < 88 ? 3 : 4; //TODO 88 is a guess, 80px high needs 3, 112px needs 4, 96px needs 4, 88px needs 4
-    uint32_t log2GobsPerBlockZ = 0;
+    const uint32_t log2GobsPerBlockX = 0;
+    const uint32_t log2GobsPerBlockZ = 0;
 
-    LOG("Calculated GOB size: %dx%d (%dx%d)", gobWidthInBytes << log2GobsPerBlockX, gobHeightInBytes << log2GobsPerBlockY, log2GobsPerBlockX, log2GobsPerBlockY);
+    uint32_t offset = 0;
+    for (uint32_t i = 0; i < numPlanes; i++) {
+        //calculate each planes dimensions and bpp
+        const uint32_t planeWidth = width >> planes[i].ss.x;
+        const uint32_t planeHeight = height >> planes[i].ss.y;
+        const uint32_t bytesPerPixel = planes[i].channelCount * bppc;
 
-    //These two seem to be correct, but it was discovered by trial and error so I'm not 100% sure
-    uint32_t widthInBytes = ROUND_UP(width * bytesPerPixel, gobWidthInBytes << log2GobsPerBlockX);
-    uint32_t alignedHeight = ROUND_UP(height, gobHeightInBytes << log2GobsPerBlockY);
+        //Depending on the height of the allocated image, the modifiers
+        //needed for the exported image to work correctly change. However this can cause problems if the Y surface
+        //needs one modifier, and UV need another when attempting to use a single surface export (as only one modifier
+        //is possible). So for now we're just going to limit the minimum height to 88 pixels so we can use a single
+        //modifier.
+        const uint32_t log2GobsPerBlockY = planeHeight < 88 ? 3 : 4;
+        //LOG("Calculated GOB size: %dx%d (%dx%d)", GOB_WIDTH_IN_BYTES << log2GobsPerBlockX, GOB_HEIGHT_IN_BYTES << log2GobsPerBlockY, log2GobsPerBlockX, log2GobsPerBlockY);
 
-    uint32_t imageSizeInBytes = widthInBytes * alignedHeight;
-    uint32_t size = imageSizeInBytes;
+        //These two seem to be correct, but it was discovered by trial and error so I'm not 100% sure
+        const uint32_t widthInBytes = ROUND_UP(planeWidth * bytesPerPixel, GOB_WIDTH_IN_BYTES << log2GobsPerBlockX);
+        const uint32_t alignedHeight = ROUND_UP(planeHeight, GOB_HEIGHT_IN_BYTES << log2GobsPerBlockY);
+        images[i].width = planeWidth;
+        images[i].height = alignedHeight;
+        images[i].offset = offset;
+        images[i].memorySize = widthInBytes * alignedHeight;
+        images[i].pitch = widthInBytes;
+        images[i].mods = DRM_FORMAT_MOD_NVIDIA_BLOCK_LINEAR_2D(0, context->sector_layout, context->page_kind_generation, context->generic_page_kind, log2GobsPerBlockY);
+        images[i].fourcc = planes[i].fourcc;
+        images[i].log2GobsPerBlockX = log2GobsPerBlockX;
+        images[i].log2GobsPerBlockY = log2GobsPerBlockY;
+        images[i].log2GobsPerBlockZ = log2GobsPerBlockZ;
 
-    LOG("Aligned image size: %dx%d = %d", widthInBytes, alignedHeight, imageSizeInBytes);
+        offset += images[i].memorySize;
+        offset = ROUND_UP(offset, 64);
+    }
 
-    //this gets us some memory, and the fd to import into cuda
+    return offset;
+}
+
+bool alloc_buffer(NVDriverContext *context, const uint32_t size, const NVDriverImage images[], int *fd1, int *fd2, int *drmFd) {
     int memFd = -1;
-    bool ret = alloc_memory(context, size, &memFd);
+    const bool ret = alloc_memory(context, size, &memFd);
     if (!ret) {
         LOG("alloc_memory failed");
         return false;
     }
 
     //now export the dma-buf
-    uint32_t pitchInBlocks = widthInBytes / (gobWidthInBytes << log2GobsPerBlockX);
-
-    //printf("got gobsPerBlock: %ux%u %u %u %u %d\n", width, height, log2GobsPerBlockX, log2GobsPerBlockY, log2GobsPerBlockZ, pitchInBlocks);
     //duplicate the fd so we don't invalidate it by importing it
-    int memFd2 = dup(memFd);
+    const int memFd2 = dup(memFd);
     if (memFd2 == -1) {
         LOG("dup failed");
         goto err;
@@ -474,16 +516,16 @@ bool alloc_image(NVDriverContext *context, uint32_t width, uint32_t height, uint
             .layout = NvKmsSurfaceMemoryLayoutBlockLinear,
             .blockLinear = {
                 .genericMemory = 0,
-                .pitchInBlocks = pitchInBlocks,
-                .log2GobsPerBlock.x = log2GobsPerBlockX,
-                .log2GobsPerBlock.y = log2GobsPerBlockY,
-                .log2GobsPerBlock.z = log2GobsPerBlockZ,
+                .pitchInBlocks = images[0].pitch / GOB_WIDTH_IN_BYTES,
+                .log2GobsPerBlock.x = images[0].log2GobsPerBlockX,
+                .log2GobsPerBlock.y = images[0].log2GobsPerBlockY,
+                .log2GobsPerBlock.z = images[0].log2GobsPerBlockZ,
             }
         }
     };
 
     struct drm_nvidia_gem_import_nvkms_memory_params params = {
-        .mem_size = imageSizeInBytes,
+        .mem_size = size,
         .nvkms_params_ptr = (uint64_t) &nvkmsParams,
         .nvkms_params_size = context->driverMajorVersion == 470 ? 0x20 : sizeof(nvkmsParams) //needs to be 0x20 in the 470 series driver
     };
@@ -512,19 +554,9 @@ bool alloc_image(NVDriverContext *context, uint32_t width, uint32_t height, uint
         goto prime_err;
     }
 
-    image->width = width;
-    image->height = height;
-    image->nvFd = memFd;
-    image->nvFd2 = memFd2; //not sure why we can't close this one, we shouldn't need it after importing the image
-    image->drmFd = prime_handle.fd;
-    image->mods = DRM_FORMAT_MOD_NVIDIA_BLOCK_LINEAR_2D(0, context->devInfo.sector_layout, context->devInfo.page_kind_generation, context->devInfo.generic_page_kind, log2GobsPerBlockY);
-    image->offset = 0;
-    image->pitch = widthInBytes;
-    image->memorySize = imageSizeInBytes;
-    image->fourcc = fourcc;
-
-    LOG("created image: %dx%d %lx %d %x", width, height, image->mods, widthInBytes, imageSizeInBytes);
-
+    *fd1 = memFd;
+    *fd2 = memFd2;
+    *drmFd = prime_handle.fd;
     return true;
 
 prime_err:
