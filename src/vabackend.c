@@ -21,6 +21,7 @@
 
 #include <unistd.h>
 #include <sys/types.h>
+#include <sys/syscall.h>
 #include <stdarg.h>
 
 #include <time.h>
@@ -36,6 +37,13 @@
 #if __has_include(<pthread_np.h>)
 #include <pthread_np.h>
 #define gettid pthread_getthreadid_np
+#endif
+
+#ifndef gettid
+#   ifndef SYS_gettid
+#       error "SYS_gettid unavailable on this system"
+#   endif
+#define gettid() ((pid_t)syscall(SYS_gettid))
 #endif
 
 static pthread_mutex_t concurrency_mutex = PTHREAD_MUTEX_INITIALIZER;
