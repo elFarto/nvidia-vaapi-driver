@@ -41,7 +41,6 @@
 
 #ifndef HAVE_GETTID
 #include <sys/syscall.h>
-#include <unistd.h>
 /* Bionic and glibc >= 2.30 declare gettid() system call wrapper in unistd.h and
  * has a definition for it */
 #ifdef __BIONIC__
