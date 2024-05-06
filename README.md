@@ -104,7 +104,7 @@ Environment variables used to control the behavior of this library.
 |---|---|
 | `NVD_LOG` | Used to control logging. `1` to log to stdout, anything else to append to the given file. |
 | `NVD_MAX_INSTANCES` | Controls the maximum concurrent instances of the driver will be allowed per-process. This option is only really useful for older GPUs with not much VRAM, especially with Firefox on video heavy websites. |
-| `NVD_BACKEND` | Controls which backend this library uses. Either `egl` (default), or `direct`. See [direct backend](#direct-backend) for more details. |
+| `NVD_BACKEND` | Controls which backend this library uses. Either `egl`, or `direct` (default). See [direct backend](#direct-backend) for more details. |
 
 ## Firefox
 
