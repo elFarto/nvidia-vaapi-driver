@@ -3,14 +3,14 @@
 #include "vabackend.h"
 #include <stdlib.h>
 
+#if !defined(__GLIBC__)
+typedef int (*__compar_d_fn_t) (const void *, const void *, void *);
 #if defined(__FreeBSD__) && __FreeBSD__ < 14
 // https://github.com/freebsd/freebsd-src/commit/af3c78886fd8
 typedef int (*__old_compar_d_fn_t) (void *, const void *, const void *);
 #define qsort_r(base, nmemb, size, compar, thunk) \
         qsort_r(base, nmemb, size, thunk, (__old_compar_d_fn_t)compar)
-
-#elif !defined(__GLIBC__)
-typedef int (*__compar_d_fn_t) (const void *, const void *, void *);
+#endif
 #endif
 
 static const uint8_t ff_hevc_diag_scan4x4_x[16] = {
