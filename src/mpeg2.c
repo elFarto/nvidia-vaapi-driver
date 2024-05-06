@@ -52,7 +52,6 @@ static void copyMPEG2PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *
     picParams->PicWidthInMbs = (int) ( buf->horizontal_size + 15) / 16; //int
     picParams->FrameHeightInMbs = (int) ( buf->vertical_size + 15) / 16; //int
 
-    LOG("buf->picture_coding_extension.bits.progressive_frame: %d",  buf->picture_coding_extension.bits.progressive_frame);
     ctx->renderTarget->progressiveFrame = buf->picture_coding_extension.bits.progressive_frame;
     picParams->field_pic_flag    = buf->picture_coding_extension.bits.picture_structure != 3;
     picParams->bottom_field_flag = buf->picture_coding_extension.bits.picture_structure == 2; //PICT_BOTTOM_FIELD

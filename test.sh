@@ -2,7 +2,7 @@
 
 #make sure we use our driver
 export LIBVA_DRIVER_NAME=nvidia
-export LIBVA_DRIVERS_PATH=$(dirname $(realpath $0))/build
+#export LIBVA_DRIVERS_PATH=$(dirname $(realpath $0))/build
 
 #enable our logging
 export NVD_LOG=1
@@ -13,4 +13,4 @@ export NVD_LOG=1
 
 #mpv -v --hwdec=vaapi-copy --hwdec-codecs=all --vd-lavc-check-hw-profile=no $@
 #mpv -v -v --msg-level=all=debug --hwdec=vaapi --hwdec-codecs=all --vd-lavc-check-hw-profile=no $@
-mpv -v --msg-level=all=debug --hwdec=vaapi --gpu-debug --hwdec-codecs=all --vd-lavc-check-hw-profile=no "$@"
+mpv -v --msg-color=no --msg-level=all=debug --hwdec=vaapi --gpu-debug --hwdec-codecs=all --vd-lavc-check-hw-profile=no "$@"

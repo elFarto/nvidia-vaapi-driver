@@ -452,6 +452,7 @@ bool alloc_memory(const NVDriverContext *context, const uint32_t size, int *fd) 
 
     return false;
 }
+
 uint32_t calculate_image_size(const NVDriverContext *context, NVDriverImage images[], const uint32_t width, const uint32_t height,
                               const uint32_t bppc, const uint32_t numPlanes, const NVFormatPlane planes[]) {
     //first figure out the gob layout
@@ -470,12 +471,16 @@ uint32_t calculate_image_size(const NVDriverContext *context, NVDriverImage imag
         //needs one modifier, and UV need another when attempting to use a single surface export (as only one modifier
         //is possible). So for now we're just going to limit the minimum height to 88 pixels so we can use a single
         //modifier.
-        const uint32_t log2GobsPerBlockY = planeHeight < 88 ? 3 : 4;
-        //LOG("Calculated GOB size: %dx%d (%dx%d)", GOB_WIDTH_IN_BYTES << log2GobsPerBlockX, GOB_HEIGHT_IN_BYTES << log2GobsPerBlockY, log2GobsPerBlockX, log2GobsPerBlockY);
+        //Update: with the single buffer export this no longer works, as we're only allowed one mod per fd when exporting
+        //so different memory layouts for different planes can't work. Luckily this only seems to effect videos <= 128 pixels high.
+        uint32_t log2GobsPerBlockY = 4;
+        //uint32_t log2GobsPerBlockY = (planeHeight < 88) ? 3 : 4;
+        //LOG("Calculated log2GobsPerBlockY: %dx%d == %d", planeWidth, planeHeight, log2GobsPerBlockY);
 
         //These two seem to be correct, but it was discovered by trial and error so I'm not 100% sure
         const uint32_t widthInBytes = ROUND_UP(planeWidth * bytesPerPixel, GOB_WIDTH_IN_BYTES << log2GobsPerBlockX);
         const uint32_t alignedHeight = ROUND_UP(planeHeight, GOB_HEIGHT_IN_BYTES << log2GobsPerBlockY);
+
         images[i].width = planeWidth;
         images[i].height = alignedHeight;
         images[i].offset = offset;
