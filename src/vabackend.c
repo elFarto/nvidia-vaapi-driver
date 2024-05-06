@@ -36,7 +36,32 @@
 #if __has_include(<pthread_np.h>)
 #include <pthread_np.h>
 #define gettid pthread_getthreadid_np
+#define HAVE_GETTID 1
 #endif
+
+#ifndef HAVE_GETTID
+#include <sys/syscall.h>
+/* Bionic and glibc >= 2.30 declare gettid() system call wrapper in unistd.h and
+ * has a definition for it */
+#ifdef __BIONIC__
+#define HAVE_GETTID 1
+#elif !defined(__GLIBC_PREREQ)
+#define HAVE_GETTID 0
+#elif !__GLIBC_PREREQ(2,30)
+#define HAVE_GETTID 0
+#else
+#define HAVE_GETTID 1
+#endif
+#endif
+
+static pid_t nv_gettid(void)
+{
+#if HAVE_GETTID
+    return gettid();
+#else
+    return syscall(__NR_gettid);
+#endif
+}
 
 static pthread_mutex_t concurrency_mutex = PTHREAD_MUTEX_INITIALIZER;
 static uint32_t instances;
@@ -176,7 +201,7 @@ void logger(const char *filename, const char *function, int line, const char *ms
     struct timespec tp;
     clock_gettime(CLOCK_MONOTONIC, &tp);
 
-    fprintf(LOG_OUTPUT, "%10ld.%09ld [%d-%d] %s:%4d %24s %s\n", (long)tp.tv_sec, tp.tv_nsec, getpid(), gettid(), filename, line, function, formattedMessage);
+    fprintf(LOG_OUTPUT, "%10ld.%09ld [%d-%d] %s:%4d %24s %s\n", (long)tp.tv_sec, tp.tv_nsec, getpid(), nv_gettid(), filename, line, function, formattedMessage);
     fflush(LOG_OUTPUT);
 }
 
