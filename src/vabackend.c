@@ -1065,14 +1065,13 @@ static VAStatus nvCreateContext(
         .ChromaFormat        = cfg->chromaFormat,
         .OutputFormat        = cfg->surfaceFormat,
         .bitDepthMinus8      = cfg->bitDepth - 8,
-        .DeinterlaceMode     = cudaVideoDeinterlaceMode_Adaptive,
+        .DeinterlaceMode     = cudaVideoDeinterlaceMode_Weave,
 
         //we only ever map one frame at a time, so we can set this to 1
         //it isn't particually efficient to do this, but it is simple
         .ulNumOutputSurfaces = 1,
         //just allocate as many surfaces as have been created since we can never have as much information as the decode to guess correctly
         .ulNumDecodeSurfaces = surfaceCount,
-
     };
 
     //reset this to 0 as there are some cases where the context will be destroyed but not terminated, meaning if it's initialised again
@@ -2082,7 +2081,7 @@ static VAStatus nvExportSurfaceHandle(
 
     drv->backend->fillExportDescriptor(drv, surface, ptr);
 
-    //LOG("Exporting with w:%d h:%d o:%d p:%d m:%" PRIx64 " o:%d p:%d m:%" PRIx64, ptr->width, ptr->height, ptr->layers[0].offset[0],
+    // LOG("Exporting with w:%d h:%d o:%d p:%d m:%" PRIx64 " o:%d p:%d m:%" PRIx64, ptr->width, ptr->height, ptr->layers[0].offset[0],
     //                                                             ptr->layers[0].pitch[0], ptr->objects[0].drm_format_modifier,
     //                                                             ptr->layers[1].offset[0], ptr->layers[1].pitch[0],
     //                                                             ptr->objects[1].drm_format_modifier);
