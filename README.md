@@ -139,7 +139,7 @@ Chrome is currently unsupported, and will not function.
 
 ## MPV
 
-Currently this only works with a build of MPV from git master.
+Currently this only works with a recent MPV version (at least 0.36.0).
 
 There's no real reason to run it with mpv except for testing, as mpv already supports using nvdec directly. The `test.sh` script will run mpv with the file provided and various environment variables set to use the newly built driver
 
