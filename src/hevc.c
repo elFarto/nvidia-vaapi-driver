@@ -288,12 +288,12 @@ static void copyHEVCIQMatrix(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picP
             ppc->ScalingList16x16[i][j] = iq->ScalingList16x16[i][pos];
 
             if (i < 2)
-                ppc->ScalingList32x32[i][j] = iq->ScalingList32x32[i * 3][pos];
+                ppc->ScalingList32x32[i][j] = iq->ScalingList32x32[i][pos];
         }
 
         ppc->ScalingListDCCoeff16x16[i] = iq->ScalingListDC16x16[i];
         if (i < 2)
-            ppc->ScalingListDCCoeff32x32[i] = iq->ScalingListDC32x32[i * 3];
+            ppc->ScalingListDCCoeff32x32[i] = iq->ScalingListDC32x32[i];
     }
 }
 
