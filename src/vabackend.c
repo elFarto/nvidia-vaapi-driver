@@ -1043,12 +1043,12 @@ static VAStatus nvCreateContext(
         cfg->bitDepth = surface->bitDepth;
     }
 
-    if (drv->surfaceCount == 0 && num_render_targets == 0) {
-        LOG("0 surfaces have been passed to vaCreateContext, this might cause errors. Setting surface count to 32");
+    if (drv->surfaceCount <= 1 && num_render_targets == 0) {
+        LOG("0/1 surfaces have been passed to vaCreateContext, this might cause errors. Setting surface count to 32");
         num_render_targets = 32;
     }
 
-    int surfaceCount = drv->surfaceCount != 0 ? drv->surfaceCount : num_render_targets;
+    int surfaceCount = drv->surfaceCount > 1 ? drv->surfaceCount : num_render_targets;
     if (surfaceCount > 32) {
         LOG("Application requested %d surface(s), limiting to 32. This may cause issues.", surfaceCount);
         surfaceCount = 32;
