@@ -218,13 +218,13 @@ bail:
     destroyBackingImage(drv, backingImage);
 
 import_fail:
-    if (memFd != 0) {
+    if (memFd >= 0) {
         close(memFd);
     }
-    if (memFd != 0) {
-        close(memFd);
+    if (memFd2 >= 0) {
+        close(memFd2);
     }
-    if (drmFd != 0) {
+    if (drmFd >= 0) {
         close(drmFd);
     }
     free(backingImage);
