@@ -216,6 +216,9 @@ static BackingImage *direct_allocateBackingImage(NVDriver *drv, NVSurface *surfa
 
 bail:
     destroyBackingImage(drv, backingImage);
+    //another 'free' might occur on this pointer.
+    //hence, set it to NULL to ensure no operation is performed if this really happens.
+    backingImage = NULL;
 
 import_fail:
     if (memFd >= 0) {
