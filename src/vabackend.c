@@ -308,9 +308,7 @@ static void deleteObject(NVDriver *drv, VAGenericID id) {
     ARRAY_FOR_EACH(Object, o, &drv->objects)
         if (o->id == id) {
             remove_element_at(&drv->objects, o_idx);
-            if (o->obj != NULL) {
-                free(o->obj);
-            }
+            free(o->obj);
             free(o);
             //we've found the object, no need to continue
             break;
