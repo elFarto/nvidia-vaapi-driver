@@ -2112,6 +2112,8 @@ static VAStatus nvTerminate( VADriverContextP ctx )
     CHECK_CUDA_RESULT_RETURN(cu->cuCtxDestroy(drv->cudaContext), VA_STATUS_ERROR_OPERATION_FAILED);
     drv->cudaContext = NULL;
 
+    free(drv);
+
     return VA_STATUS_SUCCESS;
 }
 
