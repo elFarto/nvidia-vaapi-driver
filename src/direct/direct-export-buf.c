@@ -172,10 +172,11 @@ static BackingImage *direct_allocateBackingImage(NVDriver *drv, NVSurface *surfa
         goto import_fail;
     }
 
-    close(memFd);
     close(memFd2);
-    memFd = -1;
     memFd2 = -1;
+    // memFd file descriptor is closed by CUDA after importing
+    memFd = -1;
+
 
     //now map the arrays
     for (uint32_t i = 0; i < fmtInfo->numPlanes; i++) {
