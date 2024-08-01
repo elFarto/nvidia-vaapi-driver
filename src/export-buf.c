@@ -340,7 +340,7 @@ static void egl_detachBackingImageFromSurface(NVDriver *drv, NVSurface *surface)
 
     if (surface->backingImage->fourcc == DRM_FORMAT_NV21) {
         if (!egl_destroyBackingImage(drv, surface->backingImage)) {
-            LOG("Unable to destory backing image");
+            LOG("Unable to destroy backing image");
         }
     } else {
         pthread_mutex_lock(&drv->imagesMutex);
