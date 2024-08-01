@@ -108,6 +108,7 @@ Environment variables used to control the behavior of this library.
 
 ## Firefox
 
+Due to license, Firefox on Linux does not support HEVC till now.
 To use the driver with firefox you will need at least Firefox 96, `ffmpeg` compiled with vaapi support (`ffmpeg -hwaccels` output should include vaapi), and the following config options need to be set in the `about:config` page:
 
 | Option | Value | Reason |
@@ -165,4 +166,4 @@ To verify that the driver is being used to decode video, you can use nvidia-sett
 
 - nvidia-smi
 
-  Running `nvidia-smi` while decoding a video should show a Firefox process with `C` in the `Type` column. In addition `nvidia-smi pmon` will show the usage of the decode engine per-process, and `nvidia-smi dmon` will show the usage per-GPU.
+  Running `nvidia-smi` while decoding a video should show a Firefox process with `C` in the `Type` column. In addition `nvidia-smi pmon` will show the usage of the decode engine per-process, and `nvidia-smi dmon` will show the usage per-GPU. When using nvidia open gpu kernel modules, the usage of the decode engine may not be displayed correctly.
