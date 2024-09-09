@@ -352,7 +352,7 @@ static void egl_detachBackingImageFromSurface(NVDriver *drv, NVSurface *surface)
                 img->surface = NULL;
                 break;
             }
-        }
+        END_FOR_EACH
 
         pthread_mutex_unlock(&drv->imagesMutex);
     }
