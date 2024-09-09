@@ -29,7 +29,7 @@ Hardware decoding only, encoding is [not supported](/../../issues/116).
 |---|---|---|
 |AV1|:heavy_check_mark:|Firefox 98+ is required.|
 |H.264|:heavy_check_mark:||
-|HEVC|:heavy_check_mark:||
+|HEVC|:heavy_check_mark:|Some distros are shipping Firefox and/or FFMPEG with HEVC support disabled due to patent concerns.|
 |VP8|:heavy_check_mark:||
 |VP9|:heavy_check_mark:|Requires being compiled with `gstreamer-codecparsers-1.0`|
 |MPEG-2|:heavy_check_mark:||
