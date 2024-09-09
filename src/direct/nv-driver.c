@@ -191,8 +191,36 @@ static bool nv_get_versions(const int fd, char **versionString) {
     }
 
     if (strlen(obj.versionString) == 0) {
-        //the newer 470 series of drivers don't actually return the version number, so just substitute in a dummy one
-        *versionString = strdup("470.123.45");
+        //Fall back to reading a file from /proc.
+        int procFd = open("/proc/driver/nvidia/version", O_RDONLY);
+        bool successful = false;
+        if (procFd > 0) {
+            char buf[257];
+            int ret = read(procFd, buf, 256);
+            close(procFd);
+
+            //The first line should look something like this. We just need to extract the version, which seems to be surrounded by 2 spaces
+            //NVRM version: NVIDIA UNIX x86_64 Kernel Module  560.31.02  Tue Jul 30 21:02:43 UTC 2024
+            if (ret > 0) {
+                buf[ret] = '\0';
+                char *versionStart = strstr(buf, "  ");
+                if (versionStart != NULL) {
+                    versionStart += 2;
+                    char *versionEnd = strstr(versionStart, "  ");
+                    if (versionEnd != NULL) {
+                        *versionEnd = '\0';
+                        *versionString = strdup(versionStart);
+                        successful = true;
+                    }
+                }
+            }
+        }
+
+        if (!successful) {
+            //if the fallback wasn't successful, just return a fixed string.
+            //the newer 470 series of drivers don't actually return the version number, so just substitute in a dummy one
+            *versionString = strdup("470.123.45");
+        }
     } else {
         *versionString = strdup(obj.versionString);
     }
