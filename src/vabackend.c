@@ -2186,13 +2186,9 @@ __attribute__((visibility("default")))
 VAStatus __vaDriverInit_1_0(VADriverContextP ctx) {
     LOG("Initialising NVIDIA VA-API Driver: %lX", ctx->display_type);
 
-    //drm_state can be passed in with any display type, including X11. But if it's X11, we don't
-    //want to use the fd as it'll likely be an Intel GPU, as NVIDIA doesn't support DRI3 at the moment
-    // bool isDrm = ctx->drm_state != NULL && ((struct drm_state*) ctx->drm_state)->fd > 0 &&
-    //              (((ctx->display_type & VA_DISPLAY_MAJOR_MASK) == VA_DISPLAY_DRM) ||
-    //               ((ctx->display_type & VA_DISPLAY_MAJOR_MASK) == VA_DISPLAY_WAYLAND));
-
-    // fix: ignore fd on wayland as well
+    //drm_state can be passed in with any display type, including X11. But if it's X11 or wayland, we 
+    //don't want to use the fd as it'll likely be an Intel GPU, as NVIDIA doesn't support DRI3 at the
+    //moment
     bool isDrm = ctx->drm_state != NULL && ((struct drm_state*) ctx->drm_state)->fd > 0 &&
                  ((ctx->display_type & VA_DISPLAY_MAJOR_MASK) == VA_DISPLAY_DRM);   
 
