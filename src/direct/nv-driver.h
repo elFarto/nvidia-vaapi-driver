@@ -40,7 +40,7 @@ typedef struct {
 
 bool init_nvdriver(NVDriverContext *context, int drmFd);
 bool free_nvdriver(NVDriverContext *context);
-bool get_device_uuid(const NVDriverContext *context, char uuid[16]);
+bool get_device_uuid(const NVDriverContext *context, uint8_t uuid[16]);
 bool alloc_memory(const NVDriverContext *context, uint32_t size, int *fd);
 bool alloc_buffer(NVDriverContext *context, uint32_t size, const NVDriverImage images[], int *fd1, int *fd2, int *drmFd);
 uint32_t calculate_image_size(const NVDriverContext *context, NVDriverImage images[], uint32_t width, uint32_t height, uint32_t bppc, uint32_t numPlanes, const NVFormatPlane planes[]);

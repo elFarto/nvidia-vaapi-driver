@@ -10,3 +10,4 @@ va-api-nvidia.cxxflags
 va-api-nvidia.files
 va-api-nvidia.includes
 meson.build.user
+.idea
