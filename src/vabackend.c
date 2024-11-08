@@ -2194,7 +2194,6 @@ VAStatus __vaDriverInit_1_0(VADriverContextP ctx) {
     if (drmFd != -1) {
         if (!isNvidiaDrmFd(drmFd, true)) {
             LOG("Passed in DRM FD does not belong to the NVIDIA driver, ignoring");
-            close(drmFd);
             drmFd = -1;
         } else if (!checkModesetParameterFromFd(drmFd)) {
             //we have an NVIDIA fd but no modeset (which means no DMA-BUF support)
