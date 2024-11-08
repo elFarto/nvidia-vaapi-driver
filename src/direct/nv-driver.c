@@ -499,7 +499,7 @@ uint32_t calculate_image_size(const NVDriverContext *context, NVDriverImage imag
         //so different memory layouts for different planes can't work. Luckily this only seems to effect videos <= 128 pixels high.
         uint32_t log2GobsPerBlockY = 4;
         //uint32_t log2GobsPerBlockY = (planeHeight < 88) ? 3 : 4;
-        LOG("Calculated log2GobsPerBlockY: %dx%d == %d", planeWidth, planeHeight, log2GobsPerBlockY);
+        //LOG("Calculated log2GobsPerBlockY: %dx%d == %d", planeWidth, planeHeight, log2GobsPerBlockY);
 
         //These two seem to be correct, but it was discovered by trial and error so I'm not 100% sure
         const uint32_t widthInBytes = ROUND_UP(planeWidth * bytesPerPixel, GOB_WIDTH_IN_BYTES << log2GobsPerBlockX);
