@@ -139,11 +139,6 @@ static void findGPUIndexFromFd(NVDriver *drv) {
     if (drv->cudaGpuId == -1 && drv->drmFd != -1) {
         //figure out the 'drm device index', basically the minor number of the device node & 0x7f
         //since we don't know/want to care if we're dealing with a master or render node
-
-        if (!isNvidiaDrmFd(drv->drmFd, true) || !checkModesetParameterFromFd(drv->drmFd)) {
-            return;
-        }
-
         fstat(drv->drmFd, &buf);
         drmDeviceIndex = minor(buf.st_rdev);
         LOG("Looking for DRM device index: %d", drmDeviceIndex);

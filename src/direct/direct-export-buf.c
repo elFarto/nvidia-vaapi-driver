@@ -20,7 +20,7 @@ static void destroyBackingImage(NVDriver *drv, BackingImage *img);
 
 static void findGPUIndexFromFd(NVDriver *drv) {
     //find the CUDA device id
-    char drmUuid[16];
+    uint8_t drmUuid[16];
     get_device_uuid(&drv->driverContext, drmUuid);
 
     int gpuCount = 0;
@@ -366,9 +366,13 @@ static bool direct_fillExportDescriptor(NVDriver *drv, NVSurface *surface, VADRM
 
     desc->num_layers = fmtInfo->numPlanes;
     desc->num_objects = 1;
+    //desc->num_objects = 2;
     desc->objects[0].fd = dup(img->fds[0]);
     desc->objects[0].size = img->totalSize;
     desc->objects[0].drm_format_modifier = img->mods[0];
+    //desc->objects[1].fd = dup(img->fds[0]);
+    //desc->objects[1].size = img->totalSize;
+    //desc->objects[1].drm_format_modifier = img->mods[1];
 
     for (uint32_t i = 0; i < fmtInfo->numPlanes; i++) {
         desc->layers[i].drm_format = fmtInfo->plane[i].fourcc;

@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 
 #include "vabackend.h"
+#include "backend-common.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -8,11 +9,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <malloc.h>
-#include <sys/stat.h>
 #include <fcntl.h>
 #include <sys/param.h>
-#include <sys/ioctl.h>
-#include <inttypes.h>
 
 #include <va/va_backend.h>
 #include <va/va_drmcommon.h>
@@ -2184,13 +2182,25 @@ VAStatus __vaDriverInit_1_0(VADriverContextP ctx);
 
 __attribute__((visibility("default")))
 VAStatus __vaDriverInit_1_0(VADriverContextP ctx) {
-    LOG("Initialising NVIDIA VA-API Driver: %lX", ctx->display_type);
+    LOG("Initialising NVIDIA VA-API Driver");
 
     //drm_state can be passed in with any display type, including X11. But if it's X11, we don't
     //want to use the fd as it'll likely be an Intel GPU, as NVIDIA doesn't support DRI3 at the moment
-    bool isDrm = ctx->drm_state != NULL && ((struct drm_state*) ctx->drm_state)->fd > 0 &&
-                 (((ctx->display_type & VA_DISPLAY_MAJOR_MASK) == VA_DISPLAY_DRM) ||
-                  ((ctx->display_type & VA_DISPLAY_MAJOR_MASK) == VA_DISPLAY_WAYLAND));
+    bool isDrm = ctx->drm_state != NULL && ((struct drm_state*) ctx->drm_state)->fd > 0;
+    int drmFd = (gpu == -1 && isDrm) ? ((struct drm_state*) ctx->drm_state)->fd : -1;
+
+    //check if the drmFd is actually an nvidia one
+    LOG("Got DRM FD: %d %d", isDrm, drmFd)
+    if (drmFd != -1) {
+        if (!isNvidiaDrmFd(drmFd, true)) {
+            LOG("Passed in DRM FD does not belong to the NVIDIA driver, ignoring");
+            close(drmFd);
+            drmFd = -1;
+        } else if (!checkModesetParameterFromFd(drmFd)) {
+            //we have an NVIDIA fd but no modeset (which means no DMA-BUF support)
+            return VA_STATUS_ERROR_OPERATION_FAILED;
+        }
+    }
 
     pthread_mutex_lock(&concurrency_mutex);
     LOG("Now have %d (%d max) instances", instances, max_instances);
@@ -2214,7 +2224,8 @@ VAStatus __vaDriverInit_1_0(VADriverContextP ctx) {
     drv->useCorrectNV12Format = true;
     drv->cudaGpuId = gpu;
     //make sure that we want the default GPU, and that a DRM fd that we care about is passed in
-    drv->drmFd = (gpu == -1 && isDrm && ctx->drm_state != NULL) ? ((struct drm_state*) ctx->drm_state)->fd : -1;
+    drv->drmFd = drmFd;
+
     if (backend == EGL) {
         LOG("Selecting EGL backend");
         drv->backend = &EGL_BACKEND;
