@@ -42,6 +42,46 @@ static void findGPUIndexFromFd(NVDriver *drv) {
     drv->cudaGpuId = 0;
 }
 
+static bool import_to_cuda(NVDriver *drv, NVDriverImage *image, int bpc, int channels, NVCudaImage *cudaImage, CUarray *array) {
+    CUDA_EXTERNAL_MEMORY_HANDLE_DESC extMemDesc = {
+        .type      = CU_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD,
+        .handle.fd = image->nvFd,
+        .flags     = 0,
+        .size      = image->memorySize
+    };
+
+    //LOG("importing memory size: %dx%d = %x", image->width, image->height, image->memorySize);
+
+    CHECK_CUDA_RESULT_RETURN(drv->cu->cuImportExternalMemory(&cudaImage->extMem, &extMemDesc), false);
+
+    //For some reason, this close *must* be *here*, otherwise we will get random visual glitches.
+    close(image->nvFd);
+    close(image->nvFd2);
+    image->nvFd = 0;
+    image->nvFd2 = 0;
+
+    CUDA_EXTERNAL_MEMORY_MIPMAPPED_ARRAY_DESC mipmapArrayDesc = {
+        .arrayDesc = {
+            .Width = image->width,
+            .Height = image->height,
+            .Depth = 0,
+            .Format = bpc == 8 ? CU_AD_FORMAT_UNSIGNED_INT8 : CU_AD_FORMAT_UNSIGNED_INT16,
+            .NumChannels = channels,
+            .Flags = 0
+        },
+        .numLevels = 1,
+        .offset = 0
+    };
+    //create a mimap array from the imported memory
+    CHECK_CUDA_RESULT_RETURN(drv->cu->cuExternalMemoryGetMappedMipmappedArray(&cudaImage->mipmapArray, cudaImage->extMem, &mipmapArrayDesc), false);
+
+    //create an array from the mipmap array
+    CHECK_CUDA_RESULT_RETURN(drv->cu->cuMipmappedArrayGetLevel(array, cudaImage->mipmapArray, 0), false);
+
+    return true;
+}
+
+
 static void debug(EGLenum error,const char *command,EGLint messageType,EGLLabelKHR threadLabel,EGLLabelKHR objectLabel,const char* message) {
     LOG("[EGL] %s: %s", command, message);
 }
@@ -146,92 +186,49 @@ static BackingImage *direct_allocateBackingImage(NVDriver *drv, NVSurface *surfa
     }
 
     const NVFormatInfo *fmtInfo = &formatsInfo[backingImage->format];
+    const NVFormatPlane *p = fmtInfo->plane;
 
-    backingImage->totalSize = calculate_image_size(&drv->driverContext, driverImages, surface->width, surface->height, fmtInfo->bppc, fmtInfo->numPlanes, fmtInfo->plane);
-    LOG("Allocating BackingImage: %p %ux%u = %u bytes", backingImage, surface->width, surface->height, backingImage->totalSize);
-
-    //alloc memory - Note this requires that all the planes have the same widthInBytes
-    //otherwise the value passed to the kernel driver won't be correct, luckily all the formats
-    //we currently support are all the same width
-    int memFd = 0, memFd2 = 0, drmFd = 0;
-    if (!alloc_buffer(&drv->driverContext, backingImage->totalSize, driverImages, &memFd, &memFd2, &drmFd)) {
-        goto import_fail;
-    }
-    LOG("Allocate Buffer: %d %d %d", memFd, memFd2, drmFd);
-
-    //import the memory to CUDA
-    const CUDA_EXTERNAL_MEMORY_HANDLE_DESC extMemDesc = {
-        .type      = CU_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD,
-        .handle.fd = memFd,
-        .flags     = 0,
-        .size      = backingImage->totalSize
-    };
-
-    LOG("Importing memory to CUDA")
-    if (CHECK_CUDA_RESULT(drv->cu->cuImportExternalMemory(&backingImage->extMem, &extMemDesc))) {
-        goto import_fail;
-    }
-
-    close(memFd2);
-    memFd2 = -1;
-    // memFd file descriptor is closed by CUDA after importing
-    memFd = -1;
-
-
-    //now map the arrays
+    LOG("Allocating BackingImages: %p %dx%d", backingImage, surface->width, surface->height);
     for (uint32_t i = 0; i < fmtInfo->numPlanes; i++) {
-        CUDA_EXTERNAL_MEMORY_MIPMAPPED_ARRAY_DESC mipmapArrayDesc = {
-            .arrayDesc = {
-                .Width = driverImages[i].width,
-                .Height = driverImages[i].height,
-                .Depth = 0,
-                .Format = fmtInfo->bppc == 1 ? CU_AD_FORMAT_UNSIGNED_INT8 : CU_AD_FORMAT_UNSIGNED_INT16,
-                .NumChannels = fmtInfo->plane[i].channelCount,
-                .Flags = 0
-            },
-            .numLevels = 1,
-            .offset = driverImages[i].offset
-        };
+        alloc_image(&drv->driverContext, surface->width >> p[i].ss.x, surface->height >> p[i].ss.y,
+                    p[i].channelCount, 8 * fmtInfo->bppc, p[i].fourcc, &driverImages[i]);
+    }
 
-        //create a mimap array from the imported memory
-        if (CHECK_CUDA_RESULT(drv->cu->cuExternalMemoryGetMappedMipmappedArray(&backingImage->cudaImages[i].mipmapArray, backingImage->extMem, &mipmapArrayDesc))) {
+    for (uint32_t i = 0; i < fmtInfo->numPlanes; i++) {
+        if (!import_to_cuda(drv, &driverImages[i], 8 * fmtInfo->bppc, p[i].channelCount, &backingImage->cudaImages[i], &backingImage->arrays[i]))
             goto bail;
-        }
-
-        //create an array from the mipmap array
-        if (CHECK_CUDA_RESULT(drv->cu->cuMipmappedArrayGetLevel(&backingImage->arrays[i], backingImage->cudaImages[i].mipmapArray, 0))) {
-            goto bail;
-        }
     }
 
     backingImage->width = surface->width;
     backingImage->height = surface->height;
-    backingImage->fds[0] = drmFd;
     for (uint32_t i = 0; i < fmtInfo->numPlanes; i++) {
+        backingImage->fds[i] = driverImages[i].drmFd;
         backingImage->strides[i] = driverImages[i].pitch;
         backingImage->mods[i] = driverImages[i].mods;
-        backingImage->offsets[i] = driverImages[i].offset;
+        backingImage->size[i] = driverImages[i].memorySize;
     }
 
     return backingImage;
 
 bail:
-    destroyBackingImage(drv, backingImage);
     //another 'free' might occur on this pointer.
     //hence, set it to NULL to ensure no operation is performed if this really happens.
     backingImage = NULL;
+    for (uint32_t i = 0; i < fmtInfo->numPlanes; i++) {
+        if (driverImages[i].nvFd != 0) {
+            close(driverImages[i].nvFd);
+        }
+        if (driverImages[i].nvFd2 != 0) {
+            close(driverImages[i].nvFd2);
+        }
+        if (driverImages[i].drmFd != 0) {
+            close(driverImages[i].drmFd);
+        }
+    }
 
-import_fail:
-    if (memFd >= 0) {
-        close(memFd);
+    if (backingImage !=  NULL) {
+        destroyBackingImage(drv, backingImage);
     }
-    if (memFd2 >= 0) {
-        close(memFd2);
-    }
-    if (drmFd >= 0) {
-        close(drmFd);
-    }
-    free(backingImage);
     return NULL;
 }
 
@@ -365,19 +362,16 @@ static bool direct_fillExportDescriptor(NVDriver *drv, NVSurface *surface, VADRM
     desc->height = surface->height;
 
     desc->num_layers = fmtInfo->numPlanes;
-    desc->num_objects = 1;
-    //desc->num_objects = 2;
-    desc->objects[0].fd = dup(img->fds[0]);
-    desc->objects[0].size = img->totalSize;
-    desc->objects[0].drm_format_modifier = img->mods[0];
-    //desc->objects[1].fd = dup(img->fds[0]);
-    //desc->objects[1].size = img->totalSize;
-    //desc->objects[1].drm_format_modifier = img->mods[1];
+    desc->num_objects = fmtInfo->numPlanes;
 
     for (uint32_t i = 0; i < fmtInfo->numPlanes; i++) {
+        desc->objects[i].fd = dup(img->fds[i]);
+        desc->objects[i].size = img->size[i];
+        desc->objects[i].drm_format_modifier = img->mods[i];
+
         desc->layers[i].drm_format = fmtInfo->plane[i].fourcc;
         desc->layers[i].num_planes = 1;
-        desc->layers[i].object_index[0] = 0;
+        desc->layers[i].object_index[0] = i;
         desc->layers[i].offset[0] = img->offsets[i];
         desc->layers[i].pitch[0] = img->strides[i];
     }
