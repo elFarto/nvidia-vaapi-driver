@@ -55,7 +55,6 @@ static bool import_to_cuda(NVDriver *drv, NVDriverImage *image, int bpc, int cha
     CHECK_CUDA_RESULT_RETURN(drv->cu->cuImportExternalMemory(&cudaImage->extMem, &extMemDesc), false);
 
     //For some reason, this close *must* be *here*, otherwise we will get random visual glitches.
-    close(image->nvFd);
     close(image->nvFd2);
     image->nvFd = 0;
     image->nvFd2 = 0;
@@ -213,7 +212,6 @@ static BackingImage *direct_allocateBackingImage(NVDriver *drv, NVSurface *surfa
 bail:
     //another 'free' might occur on this pointer.
     //hence, set it to NULL to ensure no operation is performed if this really happens.
-    backingImage = NULL;
     for (uint32_t i = 0; i < fmtInfo->numPlanes; i++) {
         if (driverImages[i].nvFd != 0) {
             close(driverImages[i].nvFd);
@@ -226,9 +224,10 @@ bail:
         }
     }
 
-    if (backingImage !=  NULL) {
+    if (backingImage != NULL) {
         destroyBackingImage(drv, backingImage);
     }
+
     return NULL;
 }
 
@@ -252,9 +251,10 @@ static void destroyBackingImage(NVDriver *drv, BackingImage *img) {
         if (img->cudaImages[i].mipmapArray != NULL) {
             CHECK_CUDA_RESULT(drv->cu->cuMipmappedArrayDestroy(img->cudaImages[i].mipmapArray));
         }
-    }
-    if (img->extMem != NULL) {
-        CHECK_CUDA_RESULT(drv->cu->cuDestroyExternalMemory(img->extMem));
+
+        if (img->cudaImages[i].extMem != NULL) {
+            CHECK_CUDA_RESULT(drv->cu->cuDestroyExternalMemory(img->cudaImages[i].extMem));
+        }
     }
 
     memset(img, 0, sizeof(BackingImage));
@@ -307,7 +307,7 @@ static bool copyFrameToSurface(NVDriver *drv, CUdeviceptr ptr, NVSurface *surfac
         } else {
             CHECK_CUDA_RESULT(drv->cu->cuMemcpy2DAsync(&cpy, 0));
         }
-        y += cpy.Height;
+        y += surface->height >> p->ss.y;
     }
 
     //notify anyone waiting for us to be resolved

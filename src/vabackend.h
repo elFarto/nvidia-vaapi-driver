@@ -108,8 +108,6 @@ typedef struct _BackingImage {
     //direct backend only
     NVCudaImage cudaImages[3];
     NVFormat    format;
-    uint32_t    totalSize;
-    CUexternalMemory extMem;
 } BackingImage;
 
 struct _NVDriver;
