@@ -225,7 +225,7 @@ bail:
     }
 
     if (backingImage != NULL) {
-        destroyBackingImage(drv, backingImage);
+        free(backingImage);
     }
 
     return NULL;
