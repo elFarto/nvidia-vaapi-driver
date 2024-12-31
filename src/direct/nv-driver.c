@@ -486,7 +486,7 @@ bool alloc_memory(const NVDriverContext *context, const uint32_t size, int *fd) 
 
      //first figure out the gob layout
      uint32_t log2GobsPerBlockX = 0; //TODO not sure if these are the correct numbers to start with, but they're the largest ones i've seen used
-     uint32_t log2GobsPerBlockY = height < 88 ? 3 : 4; //TODO 88 is a guess, 80px high needs 3, 112px needs 4, 96px needs 4, 88px needs 4
+     uint32_t log2GobsPerBlockY = height < 86 ? 3 : 4; //TODO 86 is a guess, 80px high needs 3, 112px needs 4, 96px needs 4, 88px needs 4, 86px needs 4
      uint32_t log2GobsPerBlockZ = 0;
 
      //LOG("Calculated GOB size: %dx%d (%dx%d)", gobWidthInBytes << log2GobsPerBlockX, gobHeightInBytes << log2GobsPerBlockY, log2GobsPerBlockX, log2GobsPerBlockY);
