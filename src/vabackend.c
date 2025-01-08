@@ -428,6 +428,14 @@ static void* resolveSurfaces(void *param) {
             ctx->surfaceQueueReadIdx = 0;
         }
 
+        if (surface->decodeFailed) {
+            pthread_mutex_lock(&surface->mutex);
+            surface->resolving = 0;
+            pthread_cond_signal(&surface->cond);
+            pthread_mutex_unlock(&surface->mutex);
+            continue;
+        }
+
         CUdeviceptr deviceMemory = (CUdeviceptr) NULL;
         unsigned int pitch = 0;
 
@@ -440,6 +448,10 @@ static void* resolveSurfaces(void *param) {
 
         //LOG("Mapping surface %d", surface->pictureIdx);
         if (CHECK_CUDA_RESULT(cv->cuvidMapVideoFrame(ctx->decoder, surface->pictureIdx, &deviceMemory, &pitch, &procParams))) {
+            pthread_mutex_lock(&surface->mutex);
+            surface->resolving = 0;
+            pthread_cond_signal(&surface->cond);
+            pthread_mutex_unlock(&surface->mutex);
             continue;
         }
         //LOG("Mapped surface %d to %p (%d)", surface->pictureIdx, (void*)deviceMemory, pitch);
@@ -1334,11 +1346,16 @@ static VAStatus nvEndPicture(
     nvCtx->bitstreamBuffer.size = 0;
     nvCtx->sliceOffsets.size = 0;
 
+    CHECK_CUDA_RESULT_RETURN(cu->cuCtxPushCurrent(drv->cudaContext), VA_STATUS_ERROR_OPERATION_FAILED);
     CUresult result = cv->cuvidDecodePicture(nvCtx->decoder, picParams);
+    CHECK_CUDA_RESULT_RETURN(cu->cuCtxPopCurrent(NULL), VA_STATUS_ERROR_OPERATION_FAILED);
+
+    VAStatus status = VA_STATUS_SUCCESS;
+
     if (result != CUDA_SUCCESS)
     {
         LOG("cuvidDecodePicture failed: %d", result);
-        return VA_STATUS_ERROR_DECODING_ERROR;
+        status = VA_STATUS_ERROR_DECODING_ERROR;
     }
     //LOG("Decoded frame successfully to idx: %d (%p)", picParams->CurrPicIdx, nvCtx->renderTarget);
 
@@ -1347,6 +1364,7 @@ static VAStatus nvEndPicture(
     surface->context = nvCtx;
     surface->topFieldFirst = !picParams->bottom_field_flag;
     surface->secondField = picParams->second_field;
+    surface->decodeFailed = status != VA_STATUS_SUCCESS;
 
     //TODO check we're not overflowing the queue
     pthread_mutex_lock(&nvCtx->resolveMutex);
@@ -1359,7 +1377,7 @@ static VAStatus nvEndPicture(
     //Wake up the resolve thread
     pthread_cond_signal(&nvCtx->resolveCondition);
 
-    return VA_STATUS_SUCCESS;
+    return status;
 }
 
 static VAStatus nvSyncSurface(

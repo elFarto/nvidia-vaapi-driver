@@ -67,6 +67,7 @@ typedef struct
     int                     resolving;
     pthread_mutex_t         mutex;
     pthread_cond_t          cond;
+    bool                    decodeFailed;
 } NVSurface;
 
 typedef enum
