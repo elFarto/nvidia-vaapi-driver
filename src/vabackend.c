@@ -1046,17 +1046,17 @@ static VAStatus nvCreateContext(
     if (num_render_targets) {
         // Update the decoder configuration to match the passed in surfaces.
         NVSurface *surface = (NVSurface *) getObjectPtr(drv, render_targets[0]);
+        if (!surface) {
+            return VA_STATUS_ERROR_INVALID_PARAMETER;
+        }
         cfg->surfaceFormat = surface->format;
         cfg->chromaFormat = surface->chromaFormat;
         cfg->bitDepth = surface->bitDepth;
     }
 
-    if (drv->surfaceCount <= 1 && num_render_targets == 0) {
-        LOG("0/1 surfaces have been passed to vaCreateContext, this might cause errors. Setting surface count to 32");
-        num_render_targets = 32;
-    }
+     // Setting to maximun value if num_render_targets == 0 to prevent picture index overflow as additional surfaces can be created after calling nvCreateContext
+    int surfaceCount = num_render_targets > 0 ? num_render_targets : 32;
 
-    int surfaceCount = drv->surfaceCount > 1 ? drv->surfaceCount : num_render_targets;
     if (surfaceCount > 32) {
         LOG("Application requested %d surface(s), limiting to 32. This may cause issues.", surfaceCount);
         surfaceCount = 32;
@@ -1100,6 +1100,7 @@ static VAStatus nvCreateContext(
     nvCtx->width = picture_width;
     nvCtx->height = picture_height;
     nvCtx->codec = selectedCodec;
+    nvCtx->surfaceCount = surfaceCount;
 
     pthread_mutexattr_t attrib;
     pthread_mutexattr_init(&attrib);
@@ -1277,6 +1278,9 @@ static VAStatus nvBeginPicture(
 
     //if this surface hasn't been used before, give it a new picture index
     if (surface->pictureIdx == -1) {
+        if (nvCtx->currentPictureId == nvCtx->surfaceCount) {
+            return VA_STATUS_ERROR_MAX_NUM_EXCEEDED;
+        }
         surface->pictureIdx = nvCtx->currentPictureId++;
     }
 

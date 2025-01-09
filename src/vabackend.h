@@ -179,6 +179,7 @@ typedef struct _NVContext
     int                 surfaceQueueWriteIdx;
     bool                exiting;
     pthread_mutex_t     surfaceCreationMutex;
+    int                 surfaceCount;
 } NVContext;
 
 typedef struct
