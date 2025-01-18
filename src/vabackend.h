@@ -67,6 +67,7 @@ typedef struct
     int                     resolving;
     pthread_mutex_t         mutex;
     pthread_cond_t          cond;
+    bool                    decodeFailed;
 } NVSurface;
 
 typedef enum
@@ -178,6 +179,7 @@ typedef struct _NVContext
     int                 surfaceQueueWriteIdx;
     bool                exiting;
     pthread_mutex_t     surfaceCreationMutex;
+    int                 surfaceCount;
 } NVContext;
 
 typedef struct

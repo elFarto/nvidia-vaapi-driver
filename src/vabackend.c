@@ -428,6 +428,14 @@ static void* resolveSurfaces(void *param) {
             ctx->surfaceQueueReadIdx = 0;
         }
 
+        if (surface->decodeFailed) {
+            pthread_mutex_lock(&surface->mutex);
+            surface->resolving = 0;
+            pthread_cond_signal(&surface->cond);
+            pthread_mutex_unlock(&surface->mutex);
+            continue;
+        }
+
         CUdeviceptr deviceMemory = (CUdeviceptr) NULL;
         unsigned int pitch = 0;
 
@@ -440,6 +448,10 @@ static void* resolveSurfaces(void *param) {
 
         //LOG("Mapping surface %d", surface->pictureIdx);
         if (CHECK_CUDA_RESULT(cv->cuvidMapVideoFrame(ctx->decoder, surface->pictureIdx, &deviceMemory, &pitch, &procParams))) {
+            pthread_mutex_lock(&surface->mutex);
+            surface->resolving = 0;
+            pthread_cond_signal(&surface->cond);
+            pthread_mutex_unlock(&surface->mutex);
             continue;
         }
         //LOG("Mapped surface %d to %p (%d)", surface->pictureIdx, (void*)deviceMemory, pitch);
@@ -1048,17 +1060,17 @@ static VAStatus nvCreateContext(
     if (num_render_targets) {
         // Update the decoder configuration to match the passed in surfaces.
         NVSurface *surface = (NVSurface *) getObjectPtr(drv, render_targets[0]);
+        if (!surface) {
+            return VA_STATUS_ERROR_INVALID_PARAMETER;
+        }
         cfg->surfaceFormat = surface->format;
         cfg->chromaFormat = surface->chromaFormat;
         cfg->bitDepth = surface->bitDepth;
     }
 
-    if (drv->surfaceCount <= 1 && num_render_targets == 0) {
-        LOG("0/1 surfaces have been passed to vaCreateContext, this might cause errors. Setting surface count to 32");
-        num_render_targets = 32;
-    }
+     // Setting to maximun value if num_render_targets == 0 to prevent picture index overflow as additional surfaces can be created after calling nvCreateContext
+    int surfaceCount = num_render_targets > 0 ? num_render_targets : 32;
 
-    int surfaceCount = drv->surfaceCount > 1 ? drv->surfaceCount : num_render_targets;
     if (surfaceCount > 32) {
         LOG("Application requested %d surface(s), limiting to 32. This may cause issues.", surfaceCount);
         surfaceCount = 32;
@@ -1120,6 +1132,7 @@ static VAStatus nvCreateContext(
     nvCtx->width = picture_width;
     nvCtx->height = picture_height;
     nvCtx->codec = selectedCodec;
+    nvCtx->surfaceCount = surfaceCount;
 
     pthread_mutexattr_t attrib;
     pthread_mutexattr_init(&attrib);
@@ -1297,6 +1310,9 @@ static VAStatus nvBeginPicture(
 
     //if this surface hasn't been used before, give it a new picture index
     if (surface->pictureIdx == -1) {
+        if (nvCtx->currentPictureId == nvCtx->surfaceCount) {
+            return VA_STATUS_ERROR_MAX_NUM_EXCEEDED;
+        }
         surface->pictureIdx = nvCtx->currentPictureId++;
     }
 
@@ -1366,11 +1382,16 @@ static VAStatus nvEndPicture(
     nvCtx->bitstreamBuffer.size = 0;
     nvCtx->sliceOffsets.size = 0;
 
+    CHECK_CUDA_RESULT_RETURN(cu->cuCtxPushCurrent(drv->cudaContext), VA_STATUS_ERROR_OPERATION_FAILED);
     CUresult result = cv->cuvidDecodePicture(nvCtx->decoder, picParams);
+    CHECK_CUDA_RESULT_RETURN(cu->cuCtxPopCurrent(NULL), VA_STATUS_ERROR_OPERATION_FAILED);
+
+    VAStatus status = VA_STATUS_SUCCESS;
+
     if (result != CUDA_SUCCESS)
     {
         LOG("cuvidDecodePicture failed: %d", result);
-        return VA_STATUS_ERROR_DECODING_ERROR;
+        status = VA_STATUS_ERROR_DECODING_ERROR;
     }
     //LOG("Decoded frame successfully to idx: %d (%p)", picParams->CurrPicIdx, nvCtx->renderTarget);
 
@@ -1379,6 +1400,7 @@ static VAStatus nvEndPicture(
     surface->context = nvCtx;
     surface->topFieldFirst = !picParams->bottom_field_flag;
     surface->secondField = picParams->second_field;
+    surface->decodeFailed = status != VA_STATUS_SUCCESS;
 
     //TODO check we're not overflowing the queue
     pthread_mutex_lock(&nvCtx->resolveMutex);
@@ -1391,7 +1413,7 @@ static VAStatus nvEndPicture(
     //Wake up the resolve thread
     pthread_cond_signal(&nvCtx->resolveCondition);
 
-    return VA_STATUS_SUCCESS;
+    return status;
 }
 
 static VAStatus nvSyncSurface(
