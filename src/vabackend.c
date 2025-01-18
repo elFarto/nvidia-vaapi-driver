@@ -934,6 +934,20 @@ static VAStatus nvCreateSurfaces2(
         return VA_STATUS_ERROR_UNSUPPORTED_RT_FORMAT;
     }
 
+    // If there is subsampled chroma make the size a multple of it
+    switch(chromaFormat) {
+        case cudaVideoChromaFormat_422:
+            width = ROUND_UP(width, 2);
+            break;
+        case cudaVideoChromaFormat_420:
+            width = ROUND_UP(width, 2);
+            height = ROUND_UP(height, 2);
+            break;
+        default:
+            // no change needed
+            break;
+    }
+
     CHECK_CUDA_RESULT_RETURN(cu->cuCtxPushCurrent(drv->cudaContext), VA_STATUS_ERROR_OPERATION_FAILED);
 
     for (uint32_t i = 0; i < num_surfaces; i++) {
@@ -1050,14 +1064,32 @@ static VAStatus nvCreateContext(
         surfaceCount = 32;
     }
 
+    int display_area_width = picture_width;
+    int display_area_height = picture_height;
+
+    // If we're increasing the surface size for the chroma subsampling,
+    // increase the displayArea to match
+    switch(cfg->chromaFormat) {
+        case cudaVideoChromaFormat_422:
+            display_area_width = ROUND_UP(display_area_width, 2);
+            break;
+        case cudaVideoChromaFormat_420:
+            display_area_width = ROUND_UP(display_area_width, 2);
+            display_area_height = ROUND_UP(display_area_height, 2);
+            break;
+        default:
+            // no change needed
+            break;
+    }
+
     CUVIDDECODECREATEINFO vdci = {
         .ulWidth             = vdci.ulMaxWidth  = vdci.ulTargetWidth  = picture_width,
         .ulHeight            = vdci.ulMaxHeight = vdci.ulTargetHeight = picture_height,
         .CodecType           = cfg->cudaCodec,
         .ulCreationFlags     = cudaVideoCreate_PreferCUVID,
         .ulIntraDecodeOnly   = 0, //TODO (flag & VA_PROGRESSIVE) != 0
-        .display_area.right  = picture_width,
-        .display_area.bottom = picture_height,
+        .display_area.right  = display_area_width,
+        .display_area.bottom = display_area_height,
         .ChromaFormat        = cfg->chromaFormat,
         .OutputFormat        = cfg->surfaceFormat,
         .bitDepthMinus8      = cfg->bitDepth - 8,
