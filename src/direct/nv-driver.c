@@ -239,7 +239,20 @@ static bool nv0_register_fd(const int nv0_fd, int nvctl_fd) {
 static bool get_device_info(const int fd, NVDriverContext *context) {
     //NVIDIA driver v545.29.02 changed the devInfo struct, and partly broke it in the process
     //...who adds a field to the middle of an existing struct....
-    if (context->driverMajorVersion >= 545 && context->driverMinorVersion >= 29) {
+    if (context->driverMajorVersion >= 575) {
+        struct drm_nvidia_get_dev_info_params_575 devInfo575;
+        const int ret = ioctl(fd, DRM_IOCTL_NVIDIA_GET_DEV_INFO_575, &devInfo575);
+
+        if (ret != 0) {
+            LOG("get_device_info failed: %d %d", ret, errno)
+            return false;
+        }
+
+        context->gpu_id = devInfo575.gpu_id;
+        context->sector_layout = devInfo575.sector_layout;
+        context->page_kind_generation = devInfo575.page_kind_generation;
+        context->generic_page_kind = devInfo575.generic_page_kind;
+    } else if (context->driverMajorVersion >= 545 && context->driverMinorVersion >= 29) {
         struct drm_nvidia_get_dev_info_params_545 devInfo545;
         const int ret = ioctl(fd, DRM_IOCTL_NVIDIA_GET_DEV_INFO_545, &devInfo545);
 
@@ -533,6 +546,9 @@ bool alloc_memory(const NVDriverContext *context, const uint32_t size, int *fd) 
              }
          }
      };
+
+     //TODO find the proper page size
+     imageSizeInBytes = ROUND_UP(imageSizeInBytes, 65536);
 
      struct drm_nvidia_gem_import_nvkms_memory_params params = {
          .mem_size = imageSizeInBytes,
