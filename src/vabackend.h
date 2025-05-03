@@ -41,10 +41,10 @@ typedef struct Object_t
 typedef struct
 {
     unsigned int    elements;
-    int             size;
+    size_t          size;
     VABufferType    bufferType;
     void            *ptr;
-    int             offset;
+    size_t          offset;
 } NVBuffer;
 
 struct _NVContext;
@@ -83,8 +83,8 @@ typedef enum
 
 typedef struct
 {
-    int         width;
-    int         height;
+    uint32_t    width;
+    uint32_t    height;
     NVFormat    format;
     NVBuffer    *imageBuffer;
 } NVImage;
@@ -137,7 +137,6 @@ typedef struct _NVDriver
     bool                    supports444Surface;
     int                     cudaGpuId;
     int                     drmFd;
-    int                     surfaceCount;
     pthread_mutex_t         exportMutex;
     pthread_mutex_t         imagesMutex;
     Array/*<NVEGLImage>*/   images;
@@ -160,8 +159,8 @@ typedef struct _NVContext
     NVDriver            *drv;
     VAProfile           profile;
     VAEntrypoint        entrypoint;
-    int                 width;
-    int                 height;
+    uint32_t            width;
+    uint32_t            height;
     CUvideodecoder      decoder;
     NVSurface           *renderTarget;
     void                *lastSliceParams;
