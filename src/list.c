@@ -24,7 +24,7 @@ static void ensure_capacity(Array *arr, uint32_t new_capacity) {
     arr->buf = realloc(arr->buf, arr->capacity * sizeof(void*));
 
     //clear the new part of the array
-    memset(&arr->buf[old_capacity], 0, (arr->capacity - old_capacity) * sizeof(void*));
+    memset(&arr->buf[old_capacity], 0, (size_t)(arr->capacity - old_capacity) * sizeof(void*));
 }
 
 void add_element(Array *arr, void *element) {

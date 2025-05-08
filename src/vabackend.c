@@ -240,29 +240,29 @@ static void freeBuffer(AppendableBuffer *ab) {
   }
 }
 
-static Object allocateObject(NVDriver *drv, ObjectType type, int allocatePtrSize) {
+static Object allocateObject(NVDriver *drv, ObjectType type, size_t allocatePtrSize) {
     Object newObj = (Object) calloc(1, sizeof(struct Object_t));
 
     newObj->type = type;
-    newObj->id = (++drv->nextObjId);
 
     if (allocatePtrSize > 0) {
         newObj->obj = calloc(1, allocatePtrSize);
     }
 
     pthread_mutex_lock(&drv->objectCreationMutex);
+    newObj->id = (++drv->nextObjId);
     add_element(&drv->objects, newObj);
     pthread_mutex_unlock(&drv->objectCreationMutex);
 
     return newObj;
 }
 
-static Object getObject(NVDriver *drv, VAGenericID id) {
+static Object getObject(NVDriver *drv, ObjectType type, VAGenericID id) {
     Object ret = NULL;
     if (id != VA_INVALID_ID) {
         pthread_mutex_lock(&drv->objectCreationMutex);
         ARRAY_FOR_EACH(Object, o, &drv->objects)
-            if (o->id == id) {
+            if (o->id == id && o->type == type) {
                 ret = o;
                 break;
             }
@@ -272,9 +272,9 @@ static Object getObject(NVDriver *drv, VAGenericID id) {
     return ret;
 }
 
-static void* getObjectPtr(NVDriver *drv, VAGenericID id) {
+static void* getObjectPtr(NVDriver *drv, ObjectType type, VAGenericID id) {
     if (id != VA_INVALID_ID) {
-        Object o = getObject(drv, id);
+        Object o = getObject(drv, type, id);
         if (o != NULL) {
             return o->obj;
         }
@@ -282,12 +282,12 @@ static void* getObjectPtr(NVDriver *drv, VAGenericID id) {
     return NULL;
 }
 
-static Object getObjectByPtr(NVDriver *drv, void *ptr) {
+static Object getObjectByPtr(NVDriver *drv, ObjectType type, void *ptr) {
     Object ret = NULL;
     if (ptr != NULL) {
         pthread_mutex_lock(&drv->objectCreationMutex);
         ARRAY_FOR_EACH(Object, o, &drv->objects)
-            if (o->obj == ptr) {
+            if (o->obj == ptr && o->type == type) {
                 ret = o;
                 break;
             }
@@ -351,15 +351,15 @@ static void deleteAllObjects(NVDriver *drv) {
         LOG("Found object %d or type %d", o->id, o->type);
         if (o->type == OBJECT_TYPE_CONTEXT) {
             destroyContext(drv, (NVContext*) o->obj);
-            deleteObject(drv, o->id);
         }
+        deleteObject(drv, o->id);
     END_FOR_EACH
     pthread_mutex_unlock(&drv->objectCreationMutex);
 }
 
 NVSurface* nvSurfaceFromSurfaceId(NVDriver *drv, VASurfaceID surf) {
-    Object obj = getObject(drv, surf);
-    if (obj != NULL && obj->type == OBJECT_TYPE_SURFACE) {
+    Object obj = getObject(drv, OBJECT_TYPE_SURFACE, surf);
+    if (obj != NULL) {
         NVSurface *suf = (NVSurface*) obj->obj;
         return suf;
     }
@@ -428,14 +428,6 @@ static void* resolveSurfaces(void *param) {
             ctx->surfaceQueueReadIdx = 0;
         }
 
-        if (surface->decodeFailed) {
-            pthread_mutex_lock(&surface->mutex);
-            surface->resolving = 0;
-            pthread_cond_signal(&surface->cond);
-            pthread_mutex_unlock(&surface->mutex);
-            continue;
-        }
-
         CUdeviceptr deviceMemory = (CUdeviceptr) NULL;
         unsigned int pitch = 0;
 
@@ -447,7 +439,7 @@ static void* resolveSurfaces(void *param) {
         };
 
         //LOG("Mapping surface %d", surface->pictureIdx);
-        if (CHECK_CUDA_RESULT(cv->cuvidMapVideoFrame(ctx->decoder, surface->pictureIdx, &deviceMemory, &pitch, &procParams))) {
+        if (surface->decodeFailed || CHECK_CUDA_RESULT(cv->cuvidMapVideoFrame(ctx->decoder, surface->pictureIdx, &deviceMemory, &pitch, &procParams))) {
             pthread_mutex_lock(&surface->mutex);
             surface->resolving = 0;
             pthread_cond_signal(&surface->cond);
@@ -841,7 +833,7 @@ static VAStatus nvQueryConfigAttributes(
     )
 {
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
-    NVConfig *cfg = (NVConfig*) getObjectPtr(drv, config_id);
+    NVConfig *cfg = (NVConfig*) getObjectPtr(drv, OBJECT_TYPE_CONFIG, config_id);
 
     if (cfg == NULL) {
         return VA_STATUS_ERROR_INVALID_CONFIG;
@@ -976,10 +968,8 @@ static VAStatus nvCreateSurfaces2(
         pthread_mutex_init(&suf->mutex, NULL);
         pthread_cond_init(&suf->cond, NULL);
 
-        LOG("Creating surface %dx%d, format %X (%p)", width, height, format, suf);
+        LOG("Creating surface %ux%u, format %X (%p)", width, height, format, suf);
     }
-
-    drv->surfaceCount += num_surfaces;
 
     CHECK_CUDA_RESULT_RETURN(cu->cuCtxPopCurrent(NULL), VA_STATUS_ERROR_OPERATION_FAILED);
 
@@ -1008,7 +998,10 @@ static VAStatus nvDestroySurfaces(
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
 
     for (int i = 0; i < num_surfaces; i++) {
-        NVSurface *surface = (NVSurface*) getObjectPtr(drv, surface_list[i]);
+        NVSurface *surface = (NVSurface*) getObjectPtr(drv, OBJECT_TYPE_SURFACE, surface_list[i]);
+        if (!surface) {
+            return VA_STATUS_ERROR_INVALID_SURFACE;
+        }
 
         LOG("Destroying surface %d (%p)", surface->pictureIdx, surface);
 
@@ -1016,8 +1009,6 @@ static VAStatus nvDestroySurfaces(
 
         deleteObject(drv, surface_list[i]);
     }
-
-    drv->surfaceCount = MAX(drv->surfaceCount - num_surfaces, 0);
 
     return VA_STATUS_SUCCESS;
 }
@@ -1034,13 +1025,13 @@ static VAStatus nvCreateContext(
     )
 {
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
-    NVConfig *cfg = (NVConfig*) getObjectPtr(drv, config_id);
+    NVConfig *cfg = (NVConfig*) getObjectPtr(drv, OBJECT_TYPE_CONFIG, config_id);
 
     if (cfg == NULL) {
         return VA_STATUS_ERROR_INVALID_CONFIG;
     }
 
-    LOG("creating context with %d render targets, %d surfaces, at %dx%d", num_render_targets, drv->surfaceCount, picture_width, picture_height);
+    LOG("creating context with %d render targets, at %dx%d", num_render_targets, picture_width, picture_height);
 
     //find the codec they've selected
     const NVCodec *selectedCodec = NULL;
@@ -1059,7 +1050,7 @@ static VAStatus nvCreateContext(
 
     if (num_render_targets) {
         // Update the decoder configuration to match the passed in surfaces.
-        NVSurface *surface = (NVSurface *) getObjectPtr(drv, render_targets[0]);
+        NVSurface *surface = (NVSurface *) getObjectPtr(drv, OBJECT_TYPE_SURFACE, render_targets[0]);
         if (!surface) {
             return VA_STATUS_ERROR_INVALID_PARAMETER;
         }
@@ -1114,10 +1105,6 @@ static VAStatus nvCreateContext(
         .ulNumDecodeSurfaces = surfaceCount,
     };
 
-    //reset this to 0 as there are some cases where the context will be destroyed but not terminated, meaning if it's initialised again
-    //we'll have even more surfaces
-    drv->surfaceCount = 0;
-
     CHECK_CUDA_RESULT_RETURN(cv->cuvidCtxLockCreate(&vdci.vidLock, drv->cudaContext), VA_STATUS_ERROR_OPERATION_FAILED);
 
     CUvideodecoder decoder;
@@ -1160,7 +1147,7 @@ static VAStatus nvDestroyContext(
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
     LOG("Destroying context: %d", context);
 
-    NVContext *nvCtx = (NVContext*) getObjectPtr(drv, context);
+    NVContext *nvCtx = (NVContext*) getObjectPtr(drv, OBJECT_TYPE_CONTEXT, context);
 
     if (nvCtx == NULL) {
         return VA_STATUS_ERROR_INVALID_CONTEXT;
@@ -1190,7 +1177,7 @@ static VAStatus nvCreateBuffer(
     //LOG("got buffer %p, type %x, size %u, elements %u", data, type, size, num_elements);
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
 
-    NVContext *nvCtx = (NVContext*) getObjectPtr(drv, context);
+    NVContext *nvCtx = (NVContext*) getObjectPtr(drv, OBJECT_TYPE_CONTEXT, context);
     if (nvCtx == NULL) {
         return VA_STATUS_ERROR_INVALID_CONTEXT;
     }
@@ -1198,11 +1185,11 @@ static VAStatus nvCreateBuffer(
     //HACK: This is an awful hack to support VP8 videos when running within FFMPEG.
     //VA-API doesn't pass enough information for NVDEC to work with, but the information is there
     //just before the start of the buffer that was passed to us.
-    int offset = 0;
+    size_t offset = 0;
     if (nvCtx->profile == VAProfileVP8Version0_3 && type == VASliceDataBufferType) {
-        offset = (int) (((uintptr_t) data) & 0xf);
+        offset = ((uintptr_t) data) & 0xf;
         data = ((char *) data) - offset;
-        size += offset;
+        size += (unsigned int)offset;
     }
 
     //TODO should pool these as most of the time these should be the same size
@@ -1217,7 +1204,7 @@ static VAStatus nvCreateBuffer(
     buf->offset = offset;
 
     if (buf->ptr == NULL) {
-        LOG("Unable to allocate buffer of %d bytes", buf->size);
+        LOG("Unable to allocate buffer of %lu bytes", buf->size);
         return VA_STATUS_ERROR_ALLOCATION_FAILED;
     }
 
@@ -1245,7 +1232,7 @@ static VAStatus nvMapBuffer(
     )
 {
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
-    NVBuffer *buf = getObjectPtr(drv, buf_id);
+    NVBuffer *buf = getObjectPtr(drv, OBJECT_TYPE_BUFFER, buf_id);
 
     if (buf == NULL) {
         return VA_STATUS_ERROR_INVALID_BUFFER;
@@ -1270,7 +1257,7 @@ static VAStatus nvDestroyBuffer(
     )
 {
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
-    NVBuffer *buf = getObjectPtr(drv, buffer_id);
+    NVBuffer *buf = getObjectPtr(drv, OBJECT_TYPE_BUFFER, buffer_id);
 
     if (buf == NULL) {
         return VA_STATUS_ERROR_INVALID_BUFFER;
@@ -1292,8 +1279,12 @@ static VAStatus nvBeginPicture(
     )
 {
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
-    NVContext *nvCtx = (NVContext*) getObjectPtr(drv, context);
-    NVSurface *surface = (NVSurface*) getObjectPtr(drv, render_target);
+    NVContext *nvCtx = (NVContext*) getObjectPtr(drv, OBJECT_TYPE_CONTEXT, context);
+    NVSurface *surface = (NVSurface*) getObjectPtr(drv, OBJECT_TYPE_SURFACE, render_target);
+
+    if (nvCtx == NULL) {
+        return VA_STATUS_ERROR_INVALID_CONTEXT;
+    }
 
     if (surface == NULL) {
         return VA_STATUS_ERROR_INVALID_SURFACE;
@@ -1338,7 +1329,7 @@ static VAStatus nvRenderPicture(
     )
 {
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
-    NVContext *nvCtx = (NVContext*) getObjectPtr(drv, context);
+    NVContext *nvCtx = (NVContext*) getObjectPtr(drv, OBJECT_TYPE_CONTEXT, context);
 
     if (nvCtx == NULL) {
         return VA_STATUS_ERROR_INVALID_CONTEXT;
@@ -1347,7 +1338,7 @@ static VAStatus nvRenderPicture(
     CUVIDPICPARAMS *picParams = &nvCtx->pPicParams;
 
     for (int i = 0; i < num_buffers; i++) {
-        NVBuffer *buf = (NVBuffer*) getObject(drv, buffers[i])->obj;
+        NVBuffer *buf = (NVBuffer*) getObjectPtr(drv, OBJECT_TYPE_BUFFER, buffers[i]);
         if (buf == NULL || buf->ptr == NULL) {
             LOG("Invalid buffer detected, skipping: %d", buffers[i]);
             continue;
@@ -1369,7 +1360,7 @@ static VAStatus nvEndPicture(
     )
 {
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
-    NVContext *nvCtx = (NVContext*) getObject(drv, context)->obj;
+    NVContext *nvCtx = (NVContext*) getObjectPtr(drv, OBJECT_TYPE_CONTEXT, context);
 
     if (nvCtx == NULL) {
         return VA_STATUS_ERROR_INVALID_CONTEXT;
@@ -1422,7 +1413,7 @@ static VAStatus nvSyncSurface(
     )
 {
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
-    NVSurface *surface = getObjectPtr(drv, render_target);
+    NVSurface *surface = getObjectPtr(drv, OBJECT_TYPE_SURFACE, render_target);
 
     if (surface == NULL) {
         return VA_STATUS_ERROR_INVALID_SURFACE;
@@ -1597,13 +1588,14 @@ static VAStatus nvDestroyImage(
     )
 {
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
-    NVImage *img = (NVImage*) getObjectPtr(drv, image);
+    NVImage *img = (NVImage*) getObjectPtr(drv, OBJECT_TYPE_IMAGE, image);
 
     if (img == NULL) {
         return VA_STATUS_ERROR_INVALID_IMAGE;
     }
 
-    Object imageBufferObj = getObjectByPtr(drv, img->imageBuffer);
+    Object imageBufferObj = getObjectByPtr(drv, OBJECT_TYPE_BUFFER, img->imageBuffer);
+
     if (imageBufferObj != NULL) {
         if (img->imageBuffer->ptr != NULL) {
             free(img->imageBuffer->ptr);
@@ -1644,8 +1636,17 @@ static VAStatus nvGetImage(
 {
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
 
-    NVSurface *surfaceObj = (NVSurface*) getObject(drv, surface)->obj;
-    NVImage *imageObj = (NVImage*) getObject(drv, image)->obj;
+    NVSurface *surfaceObj = (NVSurface*) getObjectPtr(drv, OBJECT_TYPE_SURFACE, surface);
+    NVImage *imageObj = (NVImage*) getObjectPtr(drv, OBJECT_TYPE_IMAGE, image);
+
+    if (surfaceObj == NULL) {
+        return VA_STATUS_ERROR_INVALID_SURFACE;
+    }
+
+    if (imageObj == NULL) {
+        return VA_STATUS_ERROR_INVALID_IMAGE;
+    }
+
     NVContext *context = (NVContext*) surfaceObj->context;
     const NVFormatInfo *fmtInfo = &formatsInfo[imageObj->format];
     uint32_t offset = 0;
@@ -1842,7 +1843,7 @@ static VAStatus nvQuerySurfaceAttributes(
 	)
 {
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
-    NVConfig *cfg = (NVConfig*) getObjectPtr(drv, config);
+    NVConfig *cfg = (NVConfig*) getObjectPtr(drv, OBJECT_TYPE_CONFIG, config);
 
     if (cfg == NULL) {
         return VA_STATUS_ERROR_INVALID_CONFIG;
@@ -2113,7 +2114,7 @@ static VAStatus nvExportSurfaceHandle(
         return VA_STATUS_ERROR_INVALID_SURFACE;
     }
 
-    NVSurface *surface = (NVSurface*) getObjectPtr(drv, surface_id);
+    NVSurface *surface = (NVSurface*) getObjectPtr(drv, OBJECT_TYPE_SURFACE, surface_id);
     if (surface == NULL) {
         return VA_STATUS_ERROR_INVALID_SURFACE;
     }
