@@ -1204,7 +1204,7 @@ static VAStatus nvCreateBuffer(
     buf->offset = offset;
 
     if (buf->ptr == NULL) {
-        LOG("Unable to allocate buffer of %lu bytes", buf->size);
+        LOG("Unable to allocate buffer of %zu bytes", buf->size);
         return VA_STATUS_ERROR_ALLOCATION_FAILED;
     }
 
