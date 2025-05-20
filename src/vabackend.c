@@ -331,18 +331,9 @@ static bool destroyContext(NVDriver *drv, NVContext *nvCtx) {
     freeBuffer(&nvCtx->sliceOffsets);
     freeBuffer(&nvCtx->bitstreamBuffer);
 
-    bool successful = true;
-    if (nvCtx->decoder != NULL) {
-      CUresult result = cv->cuvidDestroyDecoder(nvCtx->decoder);
-      if (result != CUDA_SUCCESS) {
-          LOG("cuvidDestroyDecoder failed: %d", result);
-          successful = false;
-      }
-    }
-    nvCtx->decoder = NULL;
     CHECK_CUDA_RESULT_RETURN(cu->cuCtxPopCurrent(NULL), false);
 
-    return successful;
+    return true;
 }
 
 static void deleteAllObjects(NVDriver *drv) {
@@ -455,6 +446,15 @@ static void* resolveSurfaces(void *param) {
         CHECK_CUDA_RESULT(cv->cuvidUnmapVideoFrame(ctx->decoder, deviceMemory));
     }
 out:
+    //release the decoder here to prevent multiple threads attempting it
+    if (ctx->decoder != NULL) {
+        CUresult result = cv->cuvidDestroyDecoder(ctx->decoder);
+        ctx->decoder = NULL;
+        if (result != CUDA_SUCCESS) {
+            LOG("cuvidDestroyDecoder failed: %d", result);
+        }
+    }
+
     LOG("[RT] Resolve thread for %p exiting", ctx);
     return NULL;
 }
