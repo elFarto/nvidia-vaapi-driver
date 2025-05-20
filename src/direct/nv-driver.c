@@ -35,8 +35,8 @@ static bool nv_alloc_object(const int fd, const uint32_t driverMajorVersion, con
         .hObjectParent = hObjectParent,
         .hObjectNew = *hObjectNew,
         .hClass = hClass,
-        .pRightsRequested = (NvP64)NULL,
-        .pAllocParms = (NvP64)params,
+        .pRightsRequested = (NvP64)(uintptr_t)NULL,
+        .pAllocParms = (NvP64)(uintptr_t)params,
         .paramsSize = paramSize
     };
 
@@ -105,7 +105,7 @@ static bool nv_rm_control(const int fd, const NvHandle hClient, const NvHandle h
         .hObject = hObject,
         .cmd = cmd,
         .flags = flags,
-        .params = (NvP64)params,
+        .params = (NvP64)(uintptr_t)params,
         .paramsSize = paramSize
     };
 
@@ -552,7 +552,7 @@ bool alloc_memory(const NVDriverContext *context, const uint32_t size, int *fd) 
 
      struct drm_nvidia_gem_import_nvkms_memory_params params = {
          .mem_size = imageSizeInBytes,
-         .nvkms_params_ptr = (uint64_t) &nvkmsParams,
+         .nvkms_params_ptr = (uint64_t)(uintptr_t)&nvkmsParams,
          .nvkms_params_size = context->driverMajorVersion == 470 ? 0x20 : sizeof(nvkmsParams) //needs to be 0x20 in the 470 series driver
      };
      int drmret = ioctl(context->drmFd, DRM_IOCTL_NVIDIA_GEM_IMPORT_NVKMS_MEMORY, &params);
