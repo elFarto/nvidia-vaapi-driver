@@ -326,7 +326,7 @@ static bool destroyContext(NVDriver *drv, NVContext *nvCtx) {
     pthread_cond_signal(&nvCtx->resolveCondition);
     LOG("Waiting for resolve thread to exit");
     int ret = pthread_timedjoin_np(nvCtx->resolveThread, NULL, &timeout);
-    LOG("pthread_timedjoin_np finished with %d", ret);
+    LOG("Finished waiting for resolve thread with %d", ret);
 
     freeBuffer(&nvCtx->sliceOffsets);
     freeBuffer(&nvCtx->bitstreamBuffer);
@@ -443,6 +443,7 @@ static void* resolveSurfaces(void *param) {
         drv->backend->exportCudaPtr(drv, deviceMemory, surface, pitch);
         //LOG("Surface %d exported", surface->pictureIdx);
         //unmap frame
+
         CHECK_CUDA_RESULT(cv->cuvidUnmapVideoFrame(ctx->decoder, deviceMemory));
     }
 out:
@@ -454,14 +455,30 @@ out:
             LOG("cuvidDestroyDecoder failed: %d", result);
         }
     }
-
     LOG("[RT] Resolve thread for %p exiting", ctx);
     return NULL;
 }
 
 
-#define MAX_PROFILES 32
 static VAStatus nvQueryConfigProfiles(
+        VADriverContextP ctx,
+        VAProfile *profile_list,	/* out */
+        int *num_profiles			/* out */
+    )
+{
+    NVDriver *drv = (NVDriver*) ctx->pDriverData;
+
+    //now filter out the codecs we don't support
+    for (int i = 0; i < drv->profileCount; i++) {
+        profile_list[i] = drv->profiles[i];
+    }
+
+    *num_profiles = drv->profileCount;
+
+    return VA_STATUS_SUCCESS;
+}
+
+static VAStatus nvQueryConfigProfiles2(
         VADriverContextP ctx,
         VAProfile *profile_list,	/* out */
         int *num_profiles			/* out */
@@ -603,7 +620,7 @@ static VAStatus nvGetConfigAttributes(
     if (vaToCuCodec(profile) == cudaVideoCodec_NONE) {
         return VA_STATUS_ERROR_UNSUPPORTED_PROFILE;
     }
-    LOG("Got here with profile: %d == %d", profile, vaToCuCodec(profile));
+    //LOG("Got here with profile: %d == %d", profile, vaToCuCodec(profile));
 
     for (int i = 0; i < num_attribs; i++)
     {
@@ -671,7 +688,7 @@ static VAStatus nvCreateConfig(
     )
 {
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
-    LOG("got profile: %d with %d attributes", profile, num_attribs);
+    //LOG("got profile: %d with %d attributes", profile, num_attribs);
     cudaVideoCodec cudaCodec = vaToCuCodec(profile);
 
     if (cudaCodec == cudaVideoCodec_NONE) {
@@ -691,9 +708,9 @@ static VAStatus nvCreateConfig(
     cfg->entrypoint = entrypoint;
 
     //this will contain all the attributes the client cares about
-    for (int i = 0; i < num_attribs; i++) {
-      LOG("got config attrib: %d %d %d", i, attrib_list[i].type, attrib_list[i].value);
-    }
+    //for (int i = 0; i < num_attribs; i++) {
+    //  LOG("got config attrib: %d %d %d", i, attrib_list[i].type, attrib_list[i].value);
+    //}
 
     cfg->cudaCodec = cudaCodec;
     cfg->chromaFormat = cudaVideoChromaFormat_420;
@@ -1031,7 +1048,7 @@ static VAStatus nvCreateContext(
         return VA_STATUS_ERROR_INVALID_CONFIG;
     }
 
-    LOG("creating context with %d render targets, at %dx%d", num_render_targets, picture_width, picture_height);
+    LOG("Creating context with %d render targets, at %dx%d", num_render_targets, picture_width, picture_height);
 
     //find the codec they've selected
     const NVCodec *selectedCodec = NULL;
@@ -1103,14 +1120,15 @@ static VAStatus nvCreateContext(
         .ulNumOutputSurfaces = 1,
         //just allocate as many surfaces as have been created since we can never have as much information as the decode to guess correctly
         .ulNumDecodeSurfaces = surfaceCount,
+        //.vidLock             = drv->vidLock
     };
-
-    CHECK_CUDA_RESULT_RETURN(cv->cuvidCtxLockCreate(&vdci.vidLock, drv->cudaContext), VA_STATUS_ERROR_OPERATION_FAILED);
 
     CUvideodecoder decoder;
     CHECK_CUDA_RESULT_RETURN(cv->cuvidCreateDecoder(&decoder, &vdci), VA_STATUS_ERROR_ALLOCATION_FAILED);
 
     Object contextObj = allocateObject(drv, OBJECT_TYPE_CONTEXT, sizeof(NVContext));
+    LOG("Creating decoder: %p for context id: %d", decoder, contextObj->id);
+
     NVContext *nvCtx = (NVContext*) contextObj->obj;
     nvCtx->drv = drv;
     nvCtx->decoder = decoder;
@@ -1362,7 +1380,7 @@ static VAStatus nvEndPicture(
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
     NVContext *nvCtx = (NVContext*) getObjectPtr(drv, OBJECT_TYPE_CONTEXT, context);
 
-    if (nvCtx == NULL) {
+    if (nvCtx == NULL || nvCtx->decoder == NULL) {
         return VA_STATUS_ERROR_INVALID_CONTEXT;
     }
 
@@ -1379,8 +1397,7 @@ static VAStatus nvEndPicture(
 
     VAStatus status = VA_STATUS_SUCCESS;
 
-    if (result != CUDA_SUCCESS)
-    {
+    if (result != CUDA_SUCCESS) {
         LOG("cuvidDecodePicture failed: %d", result);
         status = VA_STATUS_ERROR_DECODING_ERROR;
     }
@@ -1483,7 +1500,7 @@ static VAStatus nvQueryImageFormats(
 {
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
 
-    LOG("In %s", __func__);
+    //LOG("In %s", __func__);
 
     *num_formats = 0;
     for (unsigned int i = NV_FORMAT_NONE + 1; i < ARRAY_SIZE(formatsInfo); i++) {
@@ -1519,7 +1536,7 @@ static VAStatus nvCreateImage(
     Object imageObj = allocateObject(drv, OBJECT_TYPE_IMAGE, sizeof(NVImage));
     image->image_id = imageObj->id;
 
-    LOG("created image id: %d", imageObj->id);
+    //LOG("created image id: %d", imageObj->id);
 
     NVImage *img = (NVImage*) imageObj->obj;
     img->width = width;
@@ -1577,7 +1594,7 @@ static VAStatus nvDeriveImage(
         VAImage *image     /* out */
     )
 {
-    LOG("In %s", __func__);
+    //LOG("In %s", __func__);
     //FAILED because we don't support it
     return VA_STATUS_ERROR_OPERATION_FAILED;
 }
@@ -1676,10 +1693,9 @@ static VAStatus nvGetImage(
         };
 
         CUresult result = cu->cuMemcpy2D(&memcpy2d);
-        if (result != CUDA_SUCCESS)
-        {
-                LOG("cuMemcpy2D failed: %d", result);
-                return VA_STATUS_ERROR_DECODING_ERROR;
+        if (result != CUDA_SUCCESS) {
+            LOG("cuMemcpy2D failed: %d", result);
+            return VA_STATUS_ERROR_DECODING_ERROR;
         }
         offset += ((width * height) >> (p->ss.x + p->ss.y)) * fmtInfo->bppc * p->channelCount;
     }
@@ -1849,7 +1865,7 @@ static VAStatus nvQuerySurfaceAttributes(
         return VA_STATUS_ERROR_INVALID_CONFIG;
     }
 
-    LOG("with %d (%d) %p %d", cfg->cudaCodec, cfg->bitDepth, attrib_list, *num_attribs);
+    //LOG("with %d (%d) %p %d", cfg->cudaCodec, cfg->bitDepth, attrib_list, *num_attribs);
 
     if (cfg->chromaFormat != cudaVideoChromaFormat_420 && cfg->chromaFormat != cudaVideoChromaFormat_444) {
         //TODO not sure what pixel formats are needed for 422 formats
@@ -1916,7 +1932,7 @@ static VAStatus nvQuerySurfaceAttributes(
         attrib_list[3].value.type = VAGenericValueTypeInteger;
         attrib_list[3].value.value.i = videoDecodeCaps.nMaxHeight;
 
-        LOG("Returning constraints: width: %d - %d, height: %d - %d", attrib_list[0].value.value.i, attrib_list[2].value.value.i, attrib_list[1].value.value.i, attrib_list[3].value.value.i);
+        //LOG("Returning constraints: width: %d - %d, height: %d - %d", attrib_list[0].value.value.i, attrib_list[2].value.value.i, attrib_list[1].value.value.i, attrib_list[3].value.value.i);
 
         int attrib_idx = 4;
 
@@ -2319,6 +2335,10 @@ VAStatus __vaDriverInit_1_0(VADriverContextP ctx) {
         free(drv);
         return VA_STATUS_ERROR_OPERATION_FAILED;
     }
+
+    //CHECK_CUDA_RESULT_RETURN(cv->cuvidCtxLockCreate(&drv->vidLock, drv->cudaContext), VA_STATUS_ERROR_OPERATION_FAILED);
+
+    nvQueryConfigProfiles2(ctx, drv->profiles, &drv->profileCount);
 
     *ctx->vtable = vtable;
     return VA_STATUS_SUCCESS;

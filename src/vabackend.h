@@ -15,6 +15,7 @@
 
 #define SURFACE_QUEUE_SIZE 16
 #define MAX_IMAGE_COUNT 64
+#define MAX_PROFILES 32
 
 typedef struct {
     void        *buf;
@@ -129,6 +130,7 @@ typedef struct _NVDriver
     CudaFunctions           *cu;
     CuvidFunctions          *cv;
     CUcontext               cudaContext;
+    CUvideoctxlock          vidLock;
     Array/*<Object>*/       objects;
     pthread_mutex_t         objectCreationMutex;
     VAGenericID             nextObjId;
@@ -150,6 +152,8 @@ typedef struct _NVDriver
     EGLStreamKHR            eglStream;
     CUeglStreamConnection   cuStreamConnection;
     int                     numFramesPresented;
+    int                     profileCount;
+    VAProfile               profiles[MAX_PROFILES];
 } NVDriver;
 
 struct _NVCodec;
