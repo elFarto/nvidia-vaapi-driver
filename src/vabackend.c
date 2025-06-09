@@ -133,6 +133,7 @@ static void init() {
         }
     }
 
+#ifdef __linux__
     //try to detect the Firefox sandbox and skip loading CUDA if detected
     int fd = open("/proc/version", O_RDONLY);
     if (fd < 0) {
@@ -147,6 +148,7 @@ static void init() {
         //continue as normal
         close(fd);
     }
+#endif
 
     //initialise the CUDA and NVDEC functions
     int ret = cuda_load_functions(&cu, NULL);
