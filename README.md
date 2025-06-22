@@ -70,8 +70,8 @@ You'll need `meson`, the `gstreamer-plugins-bad` library, and [`nv-codec-headers
 | Package manager | Packages                                        | Optional packages for additional codec support |
 |-----------------|-------------------------------------------------|------------------------------------------------|
 | pacman          | meson gst-plugins-bad ffnvcodec-headers         |                                                |
-| apt             | meson gstreamer1.0-plugins-bad libffmpeg-nvenc-dev libva-dev libegl-dev | libgstreamer-plugins-bad1.0-dev   |
-| yum/dnf         | meson libva-devel gstreamer1-plugins-bad-freeworld nv-codec-headers | gstreamer1-plugins-bad-free-devel |
+| apt             | meson gstreamer1.0-plugins-bad libffmpeg-nvenc-dev libva-dev libegl-dev libdrm-dev | libgstreamer-plugins-bad1.0-dev   |
+| yum/dnf         | meson libva-devel gstreamer1-plugins-bad-freeworld nv-codec-headers libdrm-devel | gstreamer1-plugins-bad-free-devel |
 
 Then run the following commands:
 
