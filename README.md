@@ -118,7 +118,7 @@ To use the driver with firefox you will need at least Firefox 96, `ffmpeg` compi
 | media.rdd-ffmpeg.enabled | true | Required, default on FF97. Forces ffmpeg usage into the RDD process, rather than the content process. |
 | media.av1.enabled | false | Optional, disables AV1. If your GPU doesn't support AV1, this will prevent sites using it and falling back to software decoding. |
 | gfx.x11-egl.force-enabled | true | Required, this driver requires that Firefox use the EGL backend. It may be enabled by default. It is recommended to test it with the `MOZ_X11_EGL=1` environment variable before enabling it in the Firefox configuration. |
-| widget.dmabuf.force-enabled | true | Required on NVIDIA 470 series drivers, and currently **REQUIRED** on 500+ drivers due to a [Firefox change](https://bugzilla.mozilla.org/show_bug.cgi?id=1788573). Note that Firefox isn't coded to allow DMA-BUF support without GBM support, so it may not function completely correctly when it's forced on. |
+| widget.dmabuf.force-enabled | true | Required on NVIDIA 470 series drivers. Note that Firefox isn't coded to allow DMA-BUF support without GBM support, so it may not function completely correctly when it's forced on. |
 
 In addition the following environment variables need to be set. For permanent configuration `/etc/environment` may suffice.
 
