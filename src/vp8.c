@@ -48,6 +48,14 @@ static void copyVP8SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picP
     }
 }
 
+static void ignoreVP8Buffer(NVContext *ctx, NVBuffer *buffer, CUVIDPICPARAMS *picParams)
+{
+    // Intentionally do nothing
+    (void)ctx;
+    (void)buffer;
+    (void)picParams;
+}
+
 static cudaVideoCodec computeVP8CudaCodec(VAProfile profile) {
     if (profile == VAProfileVP8Version0_3) {
         return cudaVideoCodec_VP8;
@@ -66,6 +74,8 @@ const DECLARE_CODEC(vp8Codec) = {
         [VAPictureParameterBufferType] = copyVP8PicParam,
         [VASliceParameterBufferType] = copyVP8SliceParam,
         [VASliceDataBufferType] = copyVP8SliceData,
+        [VAIQMatrixBufferType]         = ignoreVP8Buffer,
+        [VAProbabilityBufferType]      = ignoreVP8Buffer,
     },
     .supportedProfileCount = ARRAY_SIZE(vp8SupportedProfiles),
     .supportedProfiles = vp8SupportedProfiles,
