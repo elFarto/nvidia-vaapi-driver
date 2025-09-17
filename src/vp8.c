@@ -35,16 +35,36 @@ static void copyVP8SliceParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *
 
 static void copyVP8SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
 {
-    //manually pull out the show_frame field, no need to get the full bitstream parser involved
+    // Manually extract show_frame bit
     picParams->CodecSpecific.vp8.vp8_frame_tag.show_frame = (((uint8_t*) buf->ptr)[0] & 0x10) != 0;
-
+    
     for (unsigned int i = 0; i < ctx->lastSliceParamsCount; i++)
     {
         VASliceParameterBufferVP8 *sliceParams = &((VASliceParameterBufferVP8*) ctx->lastSliceParams)[i];
         uint32_t offset = (uint32_t) ctx->bitstreamBuffer.size;
         appendBuffer(&ctx->sliceOffsets, &offset, sizeof(offset));
-        appendBuffer(&ctx->bitstreamBuffer, PTROFF(buf->ptr, sliceParams->slice_data_offset), sliceParams->slice_data_size + buf->offset);
-        picParams->nBitstreamDataLen += sliceParams->slice_data_size + buf->offset;
+        
+        uint8_t *sliceData = PTROFF(buf->ptr, sliceParams->slice_data_offset);
+        size_t sliceDataSize = sliceParams->slice_data_size + buf->offset;
+        
+        bool isKeyFrame = (picParams->CodecSpecific.vp8.vp8_frame_tag.frame_type == 0);
+        
+        if (isKeyFrame)
+        {
+            uint8_t nullBytes10[10] = {0};
+            appendBuffer(&ctx->bitstreamBuffer, nullBytes10, sizeof(nullBytes10));
+            
+            appendBuffer(&ctx->bitstreamBuffer, sliceData, sliceDataSize);
+            
+            picParams->nBitstreamDataLen += sizeof(nullBytes10) + sliceDataSize;
+        }
+        else
+        {
+            uint8_t nullBytes3[3] = {0};
+            appendBuffer(&ctx->bitstreamBuffer, nullBytes3, sizeof(nullBytes3));
+            appendBuffer(&ctx->bitstreamBuffer, sliceData, sliceDataSize);
+            picParams->nBitstreamDataLen += sizeof(nullBytes3) + sliceDataSize;
+        }
     }
 }
 
