@@ -48,22 +48,30 @@ static void copyVP8SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picP
         size_t sliceDataSize = sliceParams->slice_data_size + buf->offset;
         
         bool isKeyFrame = (picParams->CodecSpecific.vp8.vp8_frame_tag.frame_type == 0);
+        // Keyframe: need sync code 0x9d012a
+        if (isKeyFrame && (sliceData[3] == 0x9d || sliceData[4] == 0x01 || sliceData[5] == 0x2a) && ctx->firstKeyframeValid == false)
+            ctx->firstKeyframeValid = true;
         
-        if (isKeyFrame)
+        if (ctx->firstKeyframeValid == false)
         {
-            uint8_t nullBytes10[10] = {0};
-            appendBuffer(&ctx->bitstreamBuffer, nullBytes10, sizeof(nullBytes10));
-            
-            appendBuffer(&ctx->bitstreamBuffer, sliceData, sliceDataSize);
-            
-            picParams->nBitstreamDataLen += sizeof(nullBytes10) + sliceDataSize;
-        }
-        else
-        {
-            uint8_t nullBytes3[3] = {0};
-            appendBuffer(&ctx->bitstreamBuffer, nullBytes3, sizeof(nullBytes3));
-            appendBuffer(&ctx->bitstreamBuffer, sliceData, sliceDataSize);
-            picParams->nBitstreamDataLen += sizeof(nullBytes3) + sliceDataSize;
+            if(isKeyFrame)
+            {
+                uint8_t nullBytes10[10] = {0};
+                appendBuffer(&ctx->bitstreamBuffer, nullBytes10, sizeof(nullBytes10));
+                
+                appendBuffer(&ctx->bitstreamBuffer, sliceData, sliceDataSize);
+                
+                picParams->nBitstreamDataLen += sizeof(nullBytes10) + sliceDataSize;
+            } else
+            {
+                uint8_t nullBytes3[3] = {0};
+                appendBuffer(&ctx->bitstreamBuffer, nullBytes3, sizeof(nullBytes3));
+                appendBuffer(&ctx->bitstreamBuffer, sliceData, sliceDataSize);
+                picParams->nBitstreamDataLen += sizeof(nullBytes3) + sliceDataSize;
+            }
+        } else {
+            appendBuffer(&ctx->bitstreamBuffer, PTROFF(buf->ptr, sliceParams->slice_data_offset), sliceParams->slice_data_size + buf->offset);
+            picParams->nBitstreamDataLen += sliceParams->slice_data_size + buf->offset;
         }
     }
 }

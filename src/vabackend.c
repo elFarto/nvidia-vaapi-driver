@@ -1144,7 +1144,8 @@ static VAStatus nvCreateContext(
     nvCtx->height = picture_height;
     nvCtx->codec = selectedCodec;
     nvCtx->surfaceCount = surfaceCount;
-
+    nvCtx->firstKeyframeValid = false;
+    
     pthread_mutexattr_t attrib;
     pthread_mutexattr_init(&attrib);
     pthread_mutexattr_settype(&attrib, PTHREAD_MUTEX_RECURSIVE);

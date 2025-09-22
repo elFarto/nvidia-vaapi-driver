@@ -183,6 +183,7 @@ typedef struct _NVContext
     volatile bool       exiting;
     pthread_mutex_t     surfaceCreationMutex;
     int                 surfaceCount;
+    bool                firstKeyframeValid;
 } NVContext;
 
 typedef struct
