@@ -35,17 +35,53 @@ static void copyVP8SliceParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *
 
 static void copyVP8SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
 {
-    //manually pull out the show_frame field, no need to get the full bitstream parser involved
+    // Manually extract show_frame bit
     picParams->CodecSpecific.vp8.vp8_frame_tag.show_frame = (((uint8_t*) buf->ptr)[0] & 0x10) != 0;
-
+    
     for (unsigned int i = 0; i < ctx->lastSliceParamsCount; i++)
     {
         VASliceParameterBufferVP8 *sliceParams = &((VASliceParameterBufferVP8*) ctx->lastSliceParams)[i];
         uint32_t offset = (uint32_t) ctx->bitstreamBuffer.size;
         appendBuffer(&ctx->sliceOffsets, &offset, sizeof(offset));
-        appendBuffer(&ctx->bitstreamBuffer, PTROFF(buf->ptr, sliceParams->slice_data_offset), sliceParams->slice_data_size + buf->offset);
-        picParams->nBitstreamDataLen += sliceParams->slice_data_size + buf->offset;
+        
+        uint8_t *sliceData = PTROFF(buf->ptr, sliceParams->slice_data_offset);
+        size_t sliceDataSize = sliceParams->slice_data_size + buf->offset;
+        
+        bool isKeyFrame = (picParams->CodecSpecific.vp8.vp8_frame_tag.frame_type == 0);
+        // Keyframe: need sync code 0x9d012a
+        if (isKeyFrame && (sliceData[3] == 0x9d || sliceData[4] == 0x01 || sliceData[5] == 0x2a) && ctx->firstKeyframeValid == false)
+            ctx->firstKeyframeValid = true;
+        
+        if (ctx->firstKeyframeValid == false)
+        {
+            if(isKeyFrame)
+            {
+                uint8_t nullBytes10[10] = {0};
+                appendBuffer(&ctx->bitstreamBuffer, nullBytes10, sizeof(nullBytes10));
+                
+                appendBuffer(&ctx->bitstreamBuffer, sliceData, sliceDataSize);
+                
+                picParams->nBitstreamDataLen += sizeof(nullBytes10) + sliceDataSize;
+            } else
+            {
+                uint8_t nullBytes3[3] = {0};
+                appendBuffer(&ctx->bitstreamBuffer, nullBytes3, sizeof(nullBytes3));
+                appendBuffer(&ctx->bitstreamBuffer, sliceData, sliceDataSize);
+                picParams->nBitstreamDataLen += sizeof(nullBytes3) + sliceDataSize;
+            }
+        } else {
+            appendBuffer(&ctx->bitstreamBuffer, PTROFF(buf->ptr, sliceParams->slice_data_offset), sliceParams->slice_data_size + buf->offset);
+            picParams->nBitstreamDataLen += sliceParams->slice_data_size + buf->offset;
+        }
     }
+}
+
+static void ignoreVP8Buffer(NVContext *ctx, NVBuffer *buffer, CUVIDPICPARAMS *picParams)
+{
+    // Intentionally do nothing
+    (void)ctx;
+    (void)buffer;
+    (void)picParams;
 }
 
 static cudaVideoCodec computeVP8CudaCodec(VAProfile profile) {
@@ -66,6 +102,8 @@ const DECLARE_CODEC(vp8Codec) = {
         [VAPictureParameterBufferType] = copyVP8PicParam,
         [VASliceParameterBufferType] = copyVP8SliceParam,
         [VASliceDataBufferType] = copyVP8SliceData,
+        [VAIQMatrixBufferType]         = ignoreVP8Buffer,
+        [VAProbabilityBufferType]      = ignoreVP8Buffer,
     },
     .supportedProfileCount = ARRAY_SIZE(vp8SupportedProfiles),
     .supportedProfiles = vp8SupportedProfiles,
