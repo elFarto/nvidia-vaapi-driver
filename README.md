@@ -138,7 +138,12 @@ If you're using the Snap version of Firefox, it will be unable to access the hos
 
 ## Chrome
 
-Chrome is currently unsupported, and will not function.
+Accelerated video decoding has been reported to work on Chrome version >= 129 with NVIDIA driver version >= 565.57.01. It might work on slightly older versions of
+Chrome and/or NVIDIA driver, but glitches and bugs have been reported.
+
+These flags should suffice: `--enable-features=AcceleratedVideoDecodeLinuxGL,AcceleratedVideoDecodeLinuxZeroCopyGL,VaapiOnNvidiaGPUs,VaapiIgnoreDriverChecks`. Note that the [direct backend](#direct-backend) must be used.
+
+While there is no official support, there is a community of users. If you encounter problems, you could leave a comment [here](../../issues/5).
 
 ## MPV
 
