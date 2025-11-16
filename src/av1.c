@@ -82,7 +82,6 @@ static void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *pi
     pps->num_tile_cols = buf->tile_cols;
     pps->num_tile_rows = buf->tile_rows;
     pps->context_update_tile_id = buf->context_update_tile_id;
-    picParams->nNumSlices = pps->num_tile_cols * pps->num_tile_rows;
 
     pps->cdef_damping_minus_3 = buf->cdef_damping_minus_3;
     pps->cdef_bits = buf->cdef_bits;
@@ -299,16 +298,16 @@ static void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *pi
 }
 
 static void copyAV1SliceParam(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams) {
-    ctx->lastSliceParams = buf->ptr;
-    ctx->lastSliceParamsCount = buf->elements;
+    appendBuffer(&ctx->sliceParams, buf->ptr, sizeof(VASliceParameterBufferAV1) * buf->elements);
+    ctx->sliceParamsCount += buf->elements;
 
     picParams->nNumSlices += buf->elements;
 }
 
 static void copyAV1SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams) {
     uint32_t offset = (uint32_t) ctx->bitstreamBuffer.size;
-    for (unsigned int i = 0; i < ctx->lastSliceParamsCount; i++) {
-        VASliceParameterBufferAV1 *sliceParams = &((VASliceParameterBufferAV1*) ctx->lastSliceParams)[i];
+    for (unsigned int i = 0; i < ctx->sliceParamsCount; i++) {
+        VASliceParameterBufferAV1 *sliceParams = &((VASliceParameterBufferAV1*) ctx->sliceParams.buf)[i];
 
         //copy just the slice we're looking at
         appendBuffer(&ctx->bitstreamBuffer, PTROFF(buf->ptr, sliceParams->slice_data_offset), sliceParams->slice_data_size);
@@ -320,6 +319,9 @@ static void copyAV1SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picP
     }
 
     picParams->nBitstreamDataLen = ctx->bitstreamBuffer.size;
+
+    ctx->sliceParams.size = 0;
+    ctx->sliceParamsCount = 0;
 }
 
 static cudaVideoCodec computeAV1CudaCodec(VAProfile profile) {

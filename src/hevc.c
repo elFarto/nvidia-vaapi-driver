@@ -250,25 +250,28 @@ static void copyHEVCPicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *p
 
 static void copyHEVCSliceParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams)
 {
-    ctx->lastSliceParams = buffer->ptr;
-    ctx->lastSliceParamsCount = buffer->elements;
+    appendBuffer(&ctx->sliceParams, buffer->ptr, sizeof(VASliceParameterBufferHEVC) * buffer->elements);
+    ctx->sliceParamsCount += buffer->elements;
 
     picParams->nNumSlices += buffer->elements;
 }
 
 static void copyHEVCSliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
 {
-    for (unsigned int i = 0; i < ctx->lastSliceParamsCount; i++)
+    for (unsigned int i = 0; i < ctx->sliceParamsCount; i++)
     {
         static const uint8_t header[] = { 0, 0, 1 }; //1 as a 24-bit Big Endian
 
-        VASliceParameterBufferHEVC *sliceParams = &((VASliceParameterBufferHEVC*) ctx->lastSliceParams)[i];
+        VASliceParameterBufferHEVC *sliceParams = &((VASliceParameterBufferHEVC*) ctx->sliceParams.buf)[i];
         uint32_t offset = (uint32_t) ctx->bitstreamBuffer.size;
         appendBuffer(&ctx->sliceOffsets, &offset, sizeof(offset));
         appendBuffer(&ctx->bitstreamBuffer, header, sizeof(header));
         appendBuffer(&ctx->bitstreamBuffer, PTROFF(buf->ptr, sliceParams->slice_data_offset), sliceParams->slice_data_size);
         picParams->nBitstreamDataLen += sliceParams->slice_data_size + 3;
     }
+
+    ctx->sliceParams.size = 0;
+    ctx->sliceParamsCount = 0;
 }
 
 static void copyHEVCIQMatrix(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)

@@ -82,25 +82,28 @@ static void copyH264SliceParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS 
         picParams->intra_pic_flag = 0;
     }
 
-    ctx->lastSliceParams = buffer->ptr;
-    ctx->lastSliceParamsCount = buffer->elements;
+    appendBuffer(&ctx->sliceParams, buffer->ptr, sizeof(VASliceParameterBufferH264) * buffer->elements);
+    ctx->sliceParamsCount += buffer->elements;
 
     picParams->nNumSlices += buffer->elements;
 }
 
 static void copyH264SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
 {
-    for (unsigned int i = 0; i < ctx->lastSliceParamsCount; i++)
+    for (unsigned int i = 0; i < ctx->sliceParamsCount; i++)
     {
         static const uint8_t header[] = { 0, 0, 1 }; //1 as a 24-bit Big Endian
 
-        VASliceParameterBufferH264 *sliceParams = &((VASliceParameterBufferH264*) ctx->lastSliceParams)[i];
+        VASliceParameterBufferH264 *sliceParams = &((VASliceParameterBufferH264*) ctx->sliceParams.buf)[i];
         uint32_t offset = (uint32_t) ctx->bitstreamBuffer.size;
         appendBuffer(&ctx->sliceOffsets, &offset, sizeof(offset));
         appendBuffer(&ctx->bitstreamBuffer, header, sizeof(header));
         appendBuffer(&ctx->bitstreamBuffer, PTROFF(buf->ptr, sliceParams->slice_data_offset), sliceParams->slice_data_size);
         picParams->nBitstreamDataLen += sliceParams->slice_data_size + 3;
     }
+
+    ctx->sliceParams.size = 0;
+    ctx->sliceParamsCount = 0;
 }
 
 static void copyH264IQMatrix(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)

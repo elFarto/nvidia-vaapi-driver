@@ -167,8 +167,8 @@ typedef struct _NVContext
     uint32_t            height;
     CUvideodecoder      decoder;
     NVSurface           *renderTarget;
-    void                *lastSliceParams;
-    unsigned int        lastSliceParamsCount;
+    AppendableBuffer    sliceParams;
+    unsigned int        sliceParamsCount;
     AppendableBuffer    bitstreamBuffer;
     AppendableBuffer    sliceOffsets;
     CUVIDPICPARAMS      pPicParams;

@@ -57,23 +57,26 @@ static void copyMPEG4PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *
 
 static void copyMPEG4SliceParam(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
 {
-    ctx->lastSliceParams = buf->ptr;
-    ctx->lastSliceParamsCount = buf->elements;
+    appendBuffer(&ctx->sliceParams, buf->ptr, sizeof(VASliceParameterBufferMPEG4) * buf->elements);
+    ctx->sliceParamsCount += buf->elements;
 
     picParams->nNumSlices += buf->elements;
 }
 
 static void copyMPEG4SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
 {
-    for (unsigned int i = 0; i < ctx->lastSliceParamsCount; i++)
+    for (unsigned int i = 0; i < ctx->sliceParamsCount; i++)
     {
-        VASliceParameterBufferMPEG4 *sliceParams = &((VASliceParameterBufferMPEG4*) ctx->lastSliceParams)[i];
+        VASliceParameterBufferMPEG4 *sliceParams = &((VASliceParameterBufferMPEG4*) ctx->sliceParams.buf)[i];
         LOG("here: %d", sliceParams->macroblock_offset);
         uint32_t offset = (uint32_t) ctx->bitstreamBuffer.size;
         appendBuffer(&ctx->sliceOffsets, &offset, sizeof(offset));
         appendBuffer(&ctx->bitstreamBuffer, PTROFF(buf->ptr, sliceParams->slice_data_offset), sliceParams->slice_data_size);
         picParams->nBitstreamDataLen += sliceParams->slice_data_size;
     }
+
+    ctx->sliceParams.size = 0;
+    ctx->sliceParamsCount = 0;
 }
 
 static void copyMPEG4IQMatrix(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)

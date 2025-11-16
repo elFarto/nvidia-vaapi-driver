@@ -20,22 +20,25 @@ static void copyJPEGPicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *p
 
 static void copyJPEGSliceParam(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
 {
-    ctx->lastSliceParams = buf->ptr;
-    ctx->lastSliceParamsCount = buf->elements;
+    appendBuffer(&ctx->sliceParams, buf->ptr, sizeof(VASliceParameterBufferJPEGBaseline) * buf->elements);
+    ctx->sliceParamsCount += buf->elements;
 
     picParams->nNumSlices += buf->elements;
 }
 
 static void copyJPEGSliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
 {
-    for (unsigned int i = 0; i < ctx->lastSliceParamsCount; i++)
+    for (unsigned int i = 0; i < ctx->sliceParamsCount; i++)
     {
-        VASliceParameterBufferJPEGBaseline *sliceParams = &((VASliceParameterBufferJPEGBaseline*) ctx->lastSliceParams)[i];
+        VASliceParameterBufferJPEGBaseline *sliceParams = &((VASliceParameterBufferJPEGBaseline*) ctx->sliceParams.buf)[i];
         uint32_t offset = (uint32_t) ctx->bitstreamBuffer.size;
         appendBuffer(&ctx->sliceOffsets, &offset, sizeof(offset));
         appendBuffer(&ctx->bitstreamBuffer, PTROFF(buf->ptr, sliceParams->slice_data_offset), sliceParams->slice_data_size);
         picParams->nBitstreamDataLen += sliceParams->slice_data_size;
     }
+
+    ctx->sliceParams.size = 0;
+    ctx->sliceParamsCount = 0;
 }
 
 static cudaVideoCodec computeJPEGCudaCodec(VAProfile profile) {

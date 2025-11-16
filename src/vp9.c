@@ -116,17 +116,17 @@ static void copyVP9SliceParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *
 {
     //don't bother doing anything here, we can just read it from the reparsed header
 
-    ctx->lastSliceParams = buffer->ptr;
-    ctx->lastSliceParamsCount = buffer->elements;
+    appendBuffer(&ctx->sliceParams, buffer->ptr, sizeof(VASliceParameterBufferVP9) * buffer->elements);
+    ctx->sliceParamsCount += buffer->elements;
 
     picParams->nNumSlices += buffer->elements;
 }
 
 static void copyVP9SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
 {
-    for (unsigned int i = 0; i < ctx->lastSliceParamsCount; i++)
+    for (unsigned int i = 0; i < ctx->sliceParamsCount; i++)
     {
-        VASliceParameterBufferVP9 *sliceParams = &((VASliceParameterBufferVP9*) ctx->lastSliceParams)[i];
+        VASliceParameterBufferVP9 *sliceParams = &((VASliceParameterBufferVP9*) ctx->sliceParams.buf)[i];
         uint32_t offset = (uint32_t) ctx->bitstreamBuffer.size;
         appendBuffer(&ctx->sliceOffsets, &offset, sizeof(offset));
         appendBuffer(&ctx->bitstreamBuffer, PTROFF(buf->ptr, sliceParams->slice_data_offset), sliceParams->slice_data_size);
@@ -135,6 +135,9 @@ static void copyVP9SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picP
         parseExtraInfo(PTROFF(buf->ptr, sliceParams->slice_data_offset), sliceParams->slice_data_size, picParams);
         picParams->nBitstreamDataLen += sliceParams->slice_data_size;
     }
+
+    ctx->sliceParams.size = 0;
+    ctx->sliceParamsCount = 0;
 }
 
 static cudaVideoCodec computeVP9CudaCodec(VAProfile profile) {

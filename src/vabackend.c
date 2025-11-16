@@ -330,6 +330,7 @@ static bool destroyContext(NVDriver *drv, NVContext *nvCtx) {
     int ret = pthread_timedjoin_np(nvCtx->resolveThread, NULL, &timeout);
     LOG("Finished waiting for resolve thread with %d", ret);
 
+    freeBuffer(&nvCtx->sliceParams);
     freeBuffer(&nvCtx->sliceOffsets);
     freeBuffer(&nvCtx->bitstreamBuffer);
 

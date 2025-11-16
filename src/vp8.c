@@ -27,8 +27,8 @@ static void copyVP8SliceParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *
 
     picParams->CodecSpecific.vp8.first_partition_size = buf->partition_size[0] + ((buf->macroblock_offset + 7) / 8);
 
-    ctx->lastSliceParams = buffer->ptr;
-    ctx->lastSliceParamsCount = buffer->elements;
+    appendBuffer(&ctx->sliceParams, buffer->ptr, sizeof(VASliceParameterBufferVP8) * buffer->elements);
+    ctx->sliceParamsCount += buffer->elements;
 
     picParams->nNumSlices += buffer->elements;
 }
@@ -38,9 +38,9 @@ static void copyVP8SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picP
     // Manually extract show_frame bit
     picParams->CodecSpecific.vp8.vp8_frame_tag.show_frame = (((uint8_t*) buf->ptr)[0] & 0x10) != 0;
     
-    for (unsigned int i = 0; i < ctx->lastSliceParamsCount; i++)
+    for (unsigned int i = 0; i < ctx->sliceParamsCount; i++)
     {
-        VASliceParameterBufferVP8 *sliceParams = &((VASliceParameterBufferVP8*) ctx->lastSliceParams)[i];
+        VASliceParameterBufferVP8 *sliceParams = &((VASliceParameterBufferVP8*) ctx->sliceParams.buf)[i];
         uint32_t offset = (uint32_t) ctx->bitstreamBuffer.size;
         appendBuffer(&ctx->sliceOffsets, &offset, sizeof(offset));
         
@@ -74,6 +74,9 @@ static void copyVP8SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picP
             picParams->nBitstreamDataLen += sliceParams->slice_data_size + buf->offset;
         }
     }
+
+    ctx->sliceParams.size = 0;
+    ctx->sliceParamsCount = 0;
 }
 
 static void ignoreVP8Buffer(NVContext *ctx, NVBuffer *buffer, CUVIDPICPARAMS *picParams)
