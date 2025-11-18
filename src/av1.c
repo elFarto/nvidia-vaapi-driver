@@ -82,7 +82,6 @@ static void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *pi
     pps->num_tile_cols = buf->tile_cols;
     pps->num_tile_rows = buf->tile_rows;
     pps->context_update_tile_id = buf->context_update_tile_id;
-    picParams->nNumSlices = pps->num_tile_cols * pps->num_tile_rows;
 
     pps->cdef_damping_minus_3 = buf->cdef_damping_minus_3;
     pps->cdef_bits = buf->cdef_bits;
