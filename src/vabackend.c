@@ -1343,6 +1343,10 @@ static VAStatus nvBeginPicture(
     nvCtx->renderTarget->progressiveFrame = true; //assume we're producing progressive frame unless the codec says otherwise
     nvCtx->pPicParams.CurrPicIdx = nvCtx->renderTarget->pictureIdx;
 
+    nvCtx->bitstreamBuffer.size = 0;
+    nvCtx->sliceOffsets.size = 0;
+    nvCtx->lastSliceDataOffset = 0;
+
     return VA_STATUS_SUCCESS;
 }
 
@@ -1397,6 +1401,7 @@ static VAStatus nvEndPicture(
     picParams->pSliceDataOffsets = nvCtx->sliceOffsets.buf;
     nvCtx->bitstreamBuffer.size = 0;
     nvCtx->sliceOffsets.size = 0;
+    nvCtx->lastSliceDataOffset = 0;
 
     CHECK_CUDA_RESULT_RETURN(cu->cuCtxPushCurrent(drv->cudaContext), VA_STATUS_ERROR_OPERATION_FAILED);
     CUresult result = cv->cuvidDecodePicture(nvCtx->decoder, picParams);

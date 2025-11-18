@@ -169,6 +169,7 @@ typedef struct _NVContext
     NVSurface           *renderTarget;
     void                *lastSliceParams;
     unsigned int        lastSliceParamsCount;
+    uint32_t            lastSliceDataOffset;
     AppendableBuffer    bitstreamBuffer;
     AppendableBuffer    sliceOffsets;
     CUVIDPICPARAMS      pPicParams;
