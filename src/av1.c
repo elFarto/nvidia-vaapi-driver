@@ -11,6 +11,13 @@ static int get_relative_dist(CUVIDAV1PICPARAMS *pps, int ref_hint, int order_hin
     return (diff & (m - 1)) - (diff & m);
 }
 
+static uint32_t CalcAv1TileLog2(uint32_t blockSize, uint32_t target)
+{
+    uint32_t k;
+    for (k = 0; (blockSize << k) < target; k++) {}
+    return k;
+}
+
 static void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams) {
     static const int bit_depth_map[] = {0, 2, 4}; //8-bpc, 10-bpc, 12-bpc
 
@@ -209,11 +216,56 @@ static void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *pi
     pps->cr_luma_mult = buf->film_grain_info.cr_luma_mult;
     pps->cr_offset = buf->film_grain_info.cr_offset;
 
-    for (int i = 0; i < pps->num_tile_cols; i++) {
-        pps->tile_widths[i] = 1 + buf->width_in_sbs_minus_1[i];
-    }
-    for (int i = 0; i < pps->num_tile_rows; i++) {
-        pps->tile_heights[i] = 1 + buf->height_in_sbs_minus_1[i];
+    if (!buf->pic_info_fields.bits.uniform_tile_spacing_flag) {
+        for (int i = 0; i < pps->num_tile_cols; i++) {
+            pps->tile_widths[i] = 1 + buf->width_in_sbs_minus_1[i];
+        }
+        for (int i = 0; i < pps->num_tile_rows; i++) {
+            pps->tile_heights[i] = 1 + buf->height_in_sbs_minus_1[i];
+        }
+    } else {
+        // FUN!
+#define MOS_ALIGN_CEIL(_a, _alignment) (((_a) + ((_alignment)-1)) & (~((_alignment)-1)))
+        uint32_t widthMinus1 = buf->frame_width_minus1;
+        if (buf->pic_info_fields.bits.use_superres &&
+            buf->superres_scale_denominator != 8) { // av1ScaleNumerator
+            uint32_t dsWidth = ((widthMinus1 + 1) * 8 + buf->superres_scale_denominator / 2)
+                / buf->superres_scale_denominator;
+            widthMinus1 = dsWidth - 1;
+        }
+
+        const uint32_t maxMibSizeLog2 = 5;
+        const uint32_t minMibSizeLog2 = 4;
+        const uint32_t miSizeLog2     = 2;
+        int32_t mibSizeLog2 = buf->seq_info_fields.fields.use_128x128_superblock ? maxMibSizeLog2 : minMibSizeLog2;
+        int32_t miCols = MOS_ALIGN_CEIL(MOS_ALIGN_CEIL(widthMinus1 + 1, 8) >> miSizeLog2, 1 << mibSizeLog2);
+        int32_t miRows = MOS_ALIGN_CEIL(MOS_ALIGN_CEIL(buf->frame_height_minus1 + 1, 8) >> miSizeLog2, 1 << mibSizeLog2);
+        int32_t sbCols = miCols >> mibSizeLog2;
+        int32_t sbRows = miRows >> mibSizeLog2;
+
+        uint32_t tileColsLog2 = CalcAv1TileLog2(1, pps->num_tile_cols);
+        uint32_t tileRowsLog2 = CalcAv1TileLog2(1, pps->num_tile_rows);
+
+        uint32_t sizeSb = MOS_ALIGN_CEIL(sbCols, 1 << tileColsLog2);
+        sizeSb >>= tileColsLog2;
+        uint32_t sizeSbRemain = sbCols % sizeSb;
+        if (!sizeSbRemain) sizeSbRemain = sizeSb;
+
+        int i;
+        for (i = 0; i < pps->num_tile_cols - 1; i++) {
+            pps->tile_widths[i] = sizeSb;
+        }
+        pps->tile_widths[i] = sizeSbRemain;
+
+        sizeSb = MOS_ALIGN_CEIL(sbRows, 1 << tileRowsLog2);
+        sizeSb >>= tileRowsLog2;
+        sizeSbRemain = sbRows % sizeSb;
+        if (!sizeSbRemain) sizeSbRemain = sizeSb;
+
+        for (i = 0; i < pps->num_tile_rows - 1; i++) {
+            pps->tile_heights[i] = sizeSb;
+        }
+        pps->tile_heights[i] = sizeSbRemain;
     }
 
     for (int i = 0; i < (1<<pps->cdef_bits); i++) {
