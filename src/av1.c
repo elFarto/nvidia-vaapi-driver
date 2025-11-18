@@ -297,24 +297,23 @@ static void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *pi
 }
 
 static void copyAV1SliceParam(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams) {
-    ctx->lastSliceParams = buf->ptr;
-    ctx->lastSliceParamsCount = buf->elements;
+    for (unsigned int i = 0; i < buf->elements; i++) {
+        VASliceParameterBufferAV1 *sliceParams = &((VASliceParameterBufferAV1*) buf->ptr)[i];
+        // append the slice offsets
+        uint32_t offset = sliceParams->slice_data_offset + ctx->lastSliceDataOffset;
+        appendBuffer(&ctx->sliceOffsets, &offset, sizeof(offset));
+        offset += sliceParams->slice_data_size;
+        appendBuffer(&ctx->sliceOffsets, &offset, sizeof(offset));
+    }
 
     picParams->nNumSlices += buf->elements;
 }
 
 static void copyAV1SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams) {
-    uint32_t offset = (uint32_t) ctx->bitstreamBuffer.size;
-    for (unsigned int i = 0; i < ctx->lastSliceParamsCount; i++) {
-        VASliceParameterBufferAV1 *sliceParams = &((VASliceParameterBufferAV1*) ctx->lastSliceParams)[i];
-
-        //copy just the slice we're looking at
-        appendBuffer(&ctx->bitstreamBuffer, PTROFF(buf->ptr, sliceParams->slice_data_offset), sliceParams->slice_data_size);
-
-        //now append the offset and size of the slice we just copied
-        appendBuffer(&ctx->sliceOffsets, &offset, sizeof(offset));
-        offset += sliceParams->slice_data_size;
-        appendBuffer(&ctx->sliceOffsets, &offset, sizeof(offset));
+    appendBuffer(&ctx->bitstreamBuffer, buf->ptr, buf->size);
+    // Compatibility with some clients that send one slice data followed by multiple slice params
+    if (ctx->sliceOffsets.size) {
+        ctx->lastSliceDataOffset += buf->size;
     }
 
     picParams->nBitstreamDataLen = ctx->bitstreamBuffer.size;
