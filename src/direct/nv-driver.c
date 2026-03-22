@@ -490,6 +490,99 @@ bool alloc_memory(const NVDriverContext *context, const uint32_t size, int *fd) 
     return false;
 }
 
+static bool import_memory_to_drm(NVDriverContext *context,
+                                 const struct NvKmsKapiPrivImportMemoryParams *nvkmsParams,
+                                 uint32_t mem_size,
+                                 int *drm_fd)
+{
+    struct drm_nvidia_gem_import_nvkms_memory_params params = {
+        .mem_size = mem_size,
+        .nvkms_params_ptr = (uint64_t)(uintptr_t)nvkmsParams,
+        .nvkms_params_size = context->driverMajorVersion == 470 ? 0x20 : sizeof(*nvkmsParams)
+    };
+    int drmret = ioctl(context->drmFd, DRM_IOCTL_NVIDIA_GEM_IMPORT_NVKMS_MEMORY, &params);
+    if (drmret != 0) {
+        LOG("DRM_IOCTL_NVIDIA_GEM_IMPORT_NVKMS_MEMORY failed: %d %d", drmret, errno);
+        return false;
+    }
+
+    struct drm_prime_handle prime_handle = {
+        .handle = params.handle,
+        .flags = DRM_CLOEXEC | DRM_RDWR
+    };
+    drmret = ioctl(context->drmFd, DRM_IOCTL_PRIME_HANDLE_TO_FD, &prime_handle);
+    if (drmret != 0) {
+        LOG("DRM_IOCTL_PRIME_HANDLE_TO_FD failed: %d %d", drmret, errno);
+        return false;
+    }
+
+    struct drm_gem_close gem_close = {
+        .handle = params.handle
+    };
+    drmret = ioctl(context->drmFd, DRM_IOCTL_GEM_CLOSE, &gem_close);
+    if (drmret != 0) {
+        LOG("DRM_IOCTL_GEM_CLOSE failed: %d %d", drmret, errno);
+        close(prime_handle.fd);
+        return false;
+    }
+
+    *drm_fd = prime_handle.fd;
+    return true;
+}
+
+bool alloc_linear_buffer(NVDriverContext *context, uint32_t size, NVDriverImage *image)
+{
+    uint32_t alloc_size = ROUND_UP(size, 65536);
+    int memFd = -1;
+    int memFd2 = -1;
+    int drmFd = -1;
+
+    if (!alloc_memory(context, alloc_size, &memFd)) {
+        LOG("alloc_memory failed");
+        return false;
+    }
+
+    memFd2 = dup(memFd);
+    if (memFd2 == -1) {
+        LOG("dup failed");
+        goto err;
+    }
+
+    struct NvKmsKapiPrivImportMemoryParams nvkmsParams = {
+        .memFd = memFd2,
+        .surfaceParams = {
+            .layout = NvKmsSurfaceMemoryLayoutPitch,
+        }
+    };
+
+    if (!import_memory_to_drm(context, &nvkmsParams, alloc_size, &drmFd)) {
+        goto err;
+    }
+
+    image->nvFd = memFd;
+    image->nvFd2 = memFd2;
+    image->drmFd = drmFd;
+    image->mods = DRM_FORMAT_MOD_LINEAR;
+    image->memorySize = alloc_size;
+    image->offset = 0;
+    image->pitch = 0;
+    image->fourcc = 0;
+
+    return true;
+
+err:
+    if (drmFd > 0) {
+        close(drmFd);
+    }
+    if (memFd2 > 0) {
+        close(memFd2);
+    }
+    if (memFd > 0) {
+        close(memFd);
+    }
+    return false;
+}
+
  bool alloc_image(NVDriverContext *context, uint32_t width, uint32_t height, uint8_t channels, uint8_t bitsPerChannel, uint32_t fourcc, NVDriverImage *image) {
      uint32_t gobWidthInBytes = 64;
      uint32_t gobHeightInBytes = 8;
@@ -550,41 +643,16 @@ bool alloc_memory(const NVDriverContext *context, const uint32_t size, int *fd) 
      //TODO find the proper page size
      imageSizeInBytes = ROUND_UP(imageSizeInBytes, 65536);
 
-     struct drm_nvidia_gem_import_nvkms_memory_params params = {
-         .mem_size = imageSizeInBytes,
-         .nvkms_params_ptr = (uint64_t)(uintptr_t)&nvkmsParams,
-         .nvkms_params_size = context->driverMajorVersion == 470 ? 0x20 : sizeof(nvkmsParams) //needs to be 0x20 in the 470 series driver
-     };
-     int drmret = ioctl(context->drmFd, DRM_IOCTL_NVIDIA_GEM_IMPORT_NVKMS_MEMORY, &params);
-     if (drmret != 0) {
-         LOG("DRM_IOCTL_NVIDIA_GEM_IMPORT_NVKMS_MEMORY failed: %d %d", drmret, errno);
+     int drmFd = -1;
+     if (!import_memory_to_drm(context, &nvkmsParams, imageSizeInBytes, &drmFd)) {
          goto err;
-     }
-
-     //export dma-buf
-     struct drm_prime_handle prime_handle = {
-         .handle = params.handle
-     };
-     drmret = ioctl(context->drmFd, DRM_IOCTL_PRIME_HANDLE_TO_FD, &prime_handle);
-     if (drmret != 0) {
-         LOG("DRM_IOCTL_PRIME_HANDLE_TO_FD failed: %d %d", drmret, errno);
-         goto err;
-     }
-
-     struct drm_gem_close gem_close = {
-         .handle = params.handle
-     };
-     drmret = ioctl(context->drmFd, DRM_IOCTL_GEM_CLOSE, &gem_close);
-     if (drmret != 0) {
-         LOG("DRM_IOCTL_GEM_CLOSE failed: %d %d", drmret, errno);
-         goto prime_err;
      }
 
      image->width = width;
      image->height = height;
      image->nvFd = memFd;
      image->nvFd2 = memFd2; //not sure why we can't close this one, we shouldn't need it after importing the image
-     image->drmFd = prime_handle.fd;
+     image->drmFd = drmFd;
      image->mods = DRM_FORMAT_MOD_NVIDIA_BLOCK_LINEAR_2D(0, context->sector_layout, context->page_kind_generation, context->generic_page_kind, log2GobsPerBlockY);
      image->offset = 0;
      image->pitch = widthInBytes;
@@ -595,16 +663,13 @@ bool alloc_memory(const NVDriverContext *context, const uint32_t size, int *fd) 
 
      return true;
 
- prime_err:
-     if (prime_handle.fd > 0) {
-         close(prime_handle.fd);
-     }
-
  err:
      if (memFd > 0) {
          close(memFd);
      }
+     if (memFd2 > 0) {
+         close(memFd2);
+     }
 
      return false;
  }
-

@@ -1,5 +1,6 @@
 #include "vabackend.h"
 #include "backend-common.h"
+#include "external-surface.h"
 #include <stdio.h>
 #include <ffnvcodec/dynlink_loader.h>
 #include <EGL/egl.h>
@@ -8,6 +9,7 @@
 #include <sys/ioctl.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <string.h>
 #ifdef __linux__
 #include <sys/sysmacros.h>
 #endif
@@ -59,9 +61,13 @@ static void debug(EGLenum error,const char *command,EGLint messageType,EGLLabelK
 }
 
 static void egl_releaseExporter(NVDriver *drv) {
+    if (drv == NULL || drv->eglDisplay == EGL_NO_DISPLAY) {
+        return;
+    }
+
     //TODO not sure if this is still needed as we don't return anything now
     LOG("Releasing exporter, %d outstanding frames", drv->numFramesPresented);
-    while (true) {
+    while (drv->cuStreamConnection != NULL) {
       CUeglFrame eglframe;
       CUresult cuStatus = drv->cu->cuEGLStreamProducerReturnFrame(&drv->cuStreamConnection, &eglframe, NULL);
       if (cuStatus == CUDA_SUCCESS) {
@@ -81,6 +87,7 @@ static void egl_releaseExporter(NVDriver *drv) {
 
     if (drv->cuStreamConnection != NULL) {
         drv->cu->cuEGLStreamProducerDisconnect(&drv->cuStreamConnection);
+        drv->cuStreamConnection = NULL;
     }
 
     if (drv->eglDisplay != EGL_NO_DISPLAY) {
@@ -88,19 +95,23 @@ static void egl_releaseExporter(NVDriver *drv) {
             eglDestroyStreamKHR(drv->eglDisplay, drv->eglStream);
             drv->eglStream = EGL_NO_STREAM_KHR;
         }
-        //TODO terminate the EGLDisplay here?, sounds like that could break stuff
-        drv->eglDisplay = EGL_NO_DISPLAY;
     }
+
+    drv->eglExporterReady = false;
+    drv->numFramesPresented = 0;
 }
 
-static bool reconnect(NVDriver *drv) {
+static bool reconnect_internal(NVDriver *drv) {
     LOG("Reconnecting to stream");
     eglInitialize(drv->eglDisplay, NULL, NULL);
+    drv->eglExporterReady = false;
     if (drv->cuStreamConnection != NULL) {
         CHECK_CUDA_RESULT_RETURN(drv->cu->cuEGLStreamProducerDisconnect(&drv->cuStreamConnection), false);
+        drv->cuStreamConnection = NULL;
     }
     if (drv->eglStream != EGL_NO_STREAM_KHR) {
         eglDestroyStreamKHR(drv->eglDisplay, drv->eglStream);
+        drv->eglStream = EGL_NO_STREAM_KHR;
     }
     drv->numFramesPresented = 0;
     //tell the driver we don't want it to reuse any EGLImages
@@ -115,38 +126,85 @@ static bool reconnect(NVDriver *drv) {
         return false;
     }
     CHECK_CUDA_RESULT_RETURN(drv->cu->cuEGLStreamProducerConnect(&drv->cuStreamConnection, drv->eglStream, 0, 0), false);
+    drv->eglExporterReady = true;
     return true;
 }
 
+static bool reconnect(NVDriver *drv)
+{
+    bool ok;
+    CHECK_CUDA_RESULT_RETURN(drv->cu->cuCtxPushCurrent(drv->cudaContext), false);
+    ok = reconnect_internal(drv);
+    CHECK_CUDA_RESULT_RETURN(drv->cu->cuCtxPopCurrent(NULL), false);
+    return ok;
+}
+
 static void findGPUIndexFromFd(NVDriver *drv) {
-    struct stat buf;
-    int drmDeviceIndex = 0;
+    uint8_t drmUuid[16];
+    int drmCudaGpuId = -1;
+    bool have_nvidia_drm_fd = drv->drmFd != -1 && isNvidiaDrmFd(drv->drmFd, true);
+    bool prefer_cuda_index = drv->cudaGpuId != -1;
     PFNEGLQUERYDEVICESEXTPROC eglQueryDevicesEXT = (PFNEGLQUERYDEVICESEXTPROC) eglGetProcAddress("eglQueryDevicesEXT");
     PFNEGLQUERYDEVICEATTRIBEXTPROC eglQueryDeviceAttribEXT = (PFNEGLQUERYDEVICEATTRIBEXTPROC) eglGetProcAddress("eglQueryDeviceAttribEXT");
     PFNEGLQUERYDEVICESTRINGEXTPROC eglQueryDeviceStringEXT = (PFNEGLQUERYDEVICESTRINGEXTPROC) eglGetProcAddress("eglQueryDeviceStringEXT");
+    bool logged_missing_cuda_device_attr = false;
 
-    if (eglQueryDevicesEXT == NULL || eglQueryDeviceAttribEXT == NULL) {
+    if (drv->drmFd != -1 && !have_nvidia_drm_fd) {
+        LOG("Provided DRM fd is not an NVIDIA render node, falling back to EGL device enumeration");
+    }
+
+    if (!eglQueryDevicesEXT || !eglQueryDeviceStringEXT) {
         LOG("No support for EGL_EXT_device_enumeration");
         drv->cudaGpuId = 0;
         return;
-    } else if (drv->cudaGpuId == -1 && drv->drmFd == -1) {
-        //there's no point scanning here as we don't have anything to match, just return GPU ID 0
+    }
+
+    if (prefer_cuda_index) {
+        LOG("Looking for GPU index: %d", drv->cudaGpuId);
+    } else if (drv->drmFd == -1) {
         LOG("Defaulting to CUDA GPU ID 0. Use NVD_GPU to select a specific CUDA GPU");
         drv->cudaGpuId = 0;
     }
 
-    //work out how we're searching for the GPU
-    if (drv->cudaGpuId == -1 && drv->drmFd != -1) {
-        //figure out the 'drm device index', basically the minor number of the device node & 0x7f
-        //since we don't know/want to care if we're dealing with a master or render node
-        fstat(drv->drmFd, &buf);
-        drmDeviceIndex = minor(buf.st_rdev);
-        LOG("Looking for DRM device index: %d", drmDeviceIndex);
-    } else {
-        LOG("Looking for GPU index: %d", drv->cudaGpuId);
+    if (have_nvidia_drm_fd) {
+        NVDriverContext probeContext = {0};
+        int probeFd = dup(drv->drmFd);
+        if (probeFd == -1) {
+            LOG("Unable to duplicate DRM fd for GPU UUID lookup");
+        } else if (!init_nvdriver(&probeContext, probeFd)) {
+            LOG("Unable to initialize NV driver context for GPU UUID lookup");
+            close(probeFd);
+        } else {
+            if (get_device_uuid(&probeContext, drmUuid)) {
+                int gpuCount = 0;
+                if (!CHECK_CUDA_RESULT(drv->cu->cuDeviceGetCount(&gpuCount))) {
+                    for (int gpu_idx = 0; gpu_idx < gpuCount; gpu_idx++) {
+                        CUuuid uuid;
+                        if (!CHECK_CUDA_RESULT(drv->cu->cuDeviceGetUuid(&uuid, gpu_idx)) &&
+                            memcmp(drmUuid, uuid.bytes, sizeof(drmUuid)) == 0) {
+                            drmCudaGpuId = gpu_idx;
+                            LOG("Matched DRM UUID to CUDA GPU index %d", drmCudaGpuId);
+                            break;
+                        }
+                    }
+                }
+                if (drmCudaGpuId == -1) {
+                    LOG("Failed to match DRM UUID to a CUDA GPU index");
+                }
+            }
+            free_nvdriver(&probeContext);
+        }
     }
 
-    //go grab some EGL devices
+    if (prefer_cuda_index && drmCudaGpuId != -1 && drv->cudaGpuId != drmCudaGpuId) {
+        LOG("Provided DRM fd maps to CUDA GPU index %d, but CUDA GPU %d was requested", drmCudaGpuId, drv->cudaGpuId);
+        return;
+    }
+
+    if (!prefer_cuda_index && drmCudaGpuId != -1) {
+        drv->cudaGpuId = drmCudaGpuId;
+    }
+
     EGLDeviceEXT devices[8];
     EGLint num_devices;
     if(!eglQueryDevicesEXT(8, devices, &num_devices)) {
@@ -156,48 +214,84 @@ static void findGPUIndexFromFd(NVDriver *drv) {
     }
 
     LOG("Found %d EGL devices", num_devices);
-    for (int i = 0; i < num_devices; i++) {
-        EGLAttrib attr = -1;
 
-        //retrieve the DRM device path for this EGLDevice
+    for (int i = 0; i < num_devices; i++) {
         const char* drmRenderNodeFile = eglQueryDeviceStringEXT(devices[i], EGL_DRM_RENDER_NODE_FILE_EXT);
         if (drmRenderNodeFile != NULL) {
-            //if we have one, try and get the CUDA device id
-            if (eglQueryDeviceAttribEXT(devices[i], EGL_CUDA_DEVICE_NV, &attr)) {
-                LOG("Got EGL_CUDA_DEVICE_NV value '%d' for EGLDevice %d", attr, i);
-
-                //if we're looking for a matching drm device index check it here
-                if (drv->cudaGpuId == -1 && drv->drmFd != -1) {
-                    stat(drmRenderNodeFile, &buf);
-                    int foundDrmDeviceIndex = minor(buf.st_rdev);
-                    LOG("Found drmDeviceIndex: %d", foundDrmDeviceIndex);
-                    if (foundDrmDeviceIndex != drmDeviceIndex) {
-                        continue;
-                    }
-                } else if (drv->cudaGpuId != attr) {
-                    //LOG("Not selected device, skipping");
-                    continue;
-                }
-
-                //if it's the device we're looking for, check the modeset parameter on it.
-                bool checkModeset = checkModesetParameterFromFd(drv->drmFd);
-                if (!checkModeset) {
-                    continue;
-                }
-
-                LOG("Selecting EGLDevice %d", i);
-                drv->eglDevice = devices[i];
-                drv->cudaGpuId = attr;
-                return;
-            } else {
-                LOG("No EGL_CUDA_DEVICE_NV support for EGLDevice %d", i);
+            struct stat buf;
+            if (stat(drmRenderNodeFile, &buf) != 0) {
+                LOG("Unable to stat DRM render node for EGLDevice %d", i);
+                continue;
             }
+            int foundDrmDeviceIndex = minor(buf.st_rdev);
+            LOG("Found drmDeviceIndex: %d", foundDrmDeviceIndex);
+            if (have_nvidia_drm_fd) {
+                struct stat current;
+                if (fstat(drv->drmFd, &current) != 0) {
+                    LOG("Unable to stat provided DRM fd for EGL device matching");
+                    return;
+                }
+                if ((int)minor(current.st_rdev) != foundDrmDeviceIndex) {
+                    continue;
+                }
+            }
+
+            if (have_nvidia_drm_fd && !checkModesetParameterFromFd(drv->drmFd)) {
+                continue;
+            }
+
+            EGLAttrib attr = -1;
+            bool have_cuda_device_attr = false;
+            if (eglQueryDeviceAttribEXT && eglQueryDeviceAttribEXT(devices[i], EGL_CUDA_DEVICE_NV, &attr)) {
+                have_cuda_device_attr = true;
+                LOG("Got EGL_CUDA_DEVICE_NV value '%d' for EGLDevice %d", (int)attr, i);
+            } else if (eglQueryDeviceAttribEXT) {
+                LOG("No EGL_CUDA_DEVICE_NV support for EGLDevice %d", i);
+            } else if (!logged_missing_cuda_device_attr) {
+                if (drv->cudaGpuId != -1) {
+                    LOG("No support for EGL_CUDA_DEVICE_NV matching; unable to verify CUDA GPU %d", drv->cudaGpuId);
+                } else {
+                    LOG("No support for EGL_CUDA_DEVICE_NV matching; unable to derive a coupled CUDA GPU");
+                }
+                logged_missing_cuda_device_attr = true;
+            }
+
+            if (drmCudaGpuId == -1) {
+                if (!have_cuda_device_attr) {
+                    continue;
+                }
+                if (drv->cudaGpuId == -1) {
+                    drv->cudaGpuId = (int)attr;
+                }
+                if ((int)attr != drv->cudaGpuId) {
+                    continue;
+                }
+            } else if (have_cuda_device_attr && (int)attr != drv->cudaGpuId) {
+                continue;
+            }
+
+            if (drv->cudaGpuId == -1) {
+                if (have_cuda_device_attr) {
+                    drv->cudaGpuId = (int)attr;
+                } else {
+                    LOG("Unable to determine CUDA GPU for EGLDevice %d", i);
+                    continue;
+                }
+            }
+
+            LOG("Selecting EGLDevice %d", i);
+            drv->eglDevice = devices[i];
+            return;
         } else {
             LOG("No DRM device file for EGLDevice %d", i);
         }
     }
-    LOG("No match found, falling back to default device");
-    drv->cudaGpuId = 0;
+
+    if (drv->cudaGpuId != -1) {
+        LOG("No EGL device found for CUDA GPU index %d", drv->cudaGpuId);
+    } else {
+        LOG("No coupled EGL/CUDA device match found");
+    }
 }
 
 static bool egl_initExporter(NVDriver *drv) {
@@ -243,15 +337,17 @@ static bool egl_initExporter(NVDriver *drv) {
     EGLint formats[64];
     EGLint formatCount;
     if (eglQueryDmaBufFormatsEXT(drv->eglDisplay, 64, formats, &formatCount)) {
-        bool r16 = false, rg1616 = false;
+        bool r16 = false, gr1616 = false, rg1616 = false;
         for (int i = 0; i < formatCount; i++) {
             if (formats[i] == DRM_FORMAT_R16) {
                 r16 = true;
+            } else if (formats[i] == DRM_FORMAT_GR1616) {
+                gr1616 = true;
             } else if (formats[i] == DRM_FORMAT_RG1616) {
                 rg1616 = true;
             }
         }
-        drv->supports16BitSurface = r16 & rg1616;
+        drv->supports16BitSurface = r16 && (gr1616 || rg1616);
         drv->supports444Surface = false;
         if (drv->supports16BitSurface) {
             LOG("Driver supports 16-bit surfaces");
@@ -260,6 +356,9 @@ static bool egl_initExporter(NVDriver *drv) {
         }
     }
 
+    drv->eglExporterReady = false;
+    drv->cuStreamConnection = NULL;
+    drv->eglStream = EGL_NO_STREAM_KHR;
     return true;
 }
 
@@ -311,11 +410,15 @@ static bool egl_destroyBackingImage(NVDriver *drv, BackingImage *img) {
             close(img->fds[i]);
         }
     }
-    //eglStreamReleaseImageNV(drv->eglDisplay, drv->eglStream, surface->eglImage, EGL_NO_SYNC);
-    //destroy them rather than releasing them
+    if (drv->eglDisplay != EGL_NO_DISPLAY && drv->eglStream != EGL_NO_STREAM_KHR && img->image != EGL_NO_IMAGE) {
+        eglStreamReleaseImageNV(drv->eglDisplay, drv->eglStream, img->image, EGL_NO_SYNC_NV);
+    }
     eglDestroyImage(drv->eglDisplay, img->image);
     CHECK_CUDA_RESULT_RETURN(drv->cu->cuArrayDestroy(img->arrays[0]), false);
     CHECK_CUDA_RESULT_RETURN(drv->cu->cuArrayDestroy(img->arrays[1]), false);
+    if (img->linearPtr != 0) {
+        CHECK_CUDA_RESULT_RETURN(drv->cu->cuMemFree(img->linearPtr), false);
+    }
     img->arrays[0] = NULL;
     img->arrays[1] = NULL;
     free(img);
@@ -330,6 +433,12 @@ static void egl_attachBackingImageToSurface(NVSurface *surface, BackingImage *im
 static void egl_detachBackingImageFromSurface(NVDriver *drv, NVSurface *surface) {
     if (surface->backingImage == NULL) {
         LOG("Cannot detach NULL BackingImage from Surface");
+        return;
+    }
+
+    if (nvBackingImageIsImportedExternal(surface->backingImage)) {
+        nvDestroyImportedBackingImage(drv, surface->backingImage);
+        surface->backingImage = NULL;
         return;
     }
 
@@ -434,6 +543,13 @@ static BackingImage *egl_allocateBackingImage(NVDriver *drv, const NVSurface *su
 
     pthread_mutex_lock(&drv->exportMutex);
 
+    if (!drv->eglExporterReady) {
+        if (!reconnect(drv)) {
+            pthread_mutex_unlock(&drv->exportMutex);
+            return NULL;
+        }
+    }
+
     LOG("Presenting frame %d %dx%d (%p, %p, %p)", surface->pictureIdx, eglframe.width, eglframe.height, surface, eglframe.frame.pArray[0], eglframe.frame.pArray[1]);
     if (CHECK_CUDA_RESULT(drv->cu->cuEGLStreamProducerPresentFrame( &drv->cuStreamConnection, eglframe, NULL))) {
         //if we got an error here, try to reconnect to the EGLStream
@@ -480,6 +596,18 @@ static BackingImage *egl_allocateBackingImage(NVDriver *drv, const NVSurface *su
 }
 
 static bool copyFrameToSurface(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t pitch) {
+    bool ok = false;
+
+    if (surface->backingImage && nvBackingImageIsImportedExternal(surface->backingImage)) {
+        ok = nv_copy_device_to_imported_backing_image(drv,
+                                                      surface->backingImage,
+                                                      surface->width,
+                                                      surface->height,
+                                                      ptr,
+                                                      pitch);
+        goto out;
+    }
+
     int bpp = surface->format == cudaVideoSurfaceFormat_NV12 ? 1 : 2;
     CUDA_MEMCPY2D cpy = {
         .srcMemoryType = CU_MEMORYTYPE_DEVICE,
@@ -490,7 +618,9 @@ static bool copyFrameToSurface(NVDriver *drv, CUdeviceptr ptr, NVSurface *surfac
         .Height = surface->height,
         .WidthInBytes = surface->width * bpp
     };
-    CHECK_CUDA_RESULT_RETURN(drv->cu->cuMemcpy2DAsync(&cpy, 0), false);
+    if (CHECK_CUDA_RESULT(drv->cu->cuMemcpy2DAsync(&cpy, 0))) {
+        goto out;
+    }
     CUDA_MEMCPY2D cpy2 = {
         .srcMemoryType = CU_MEMORYTYPE_DEVICE,
         .srcDevice = ptr,
@@ -501,15 +631,23 @@ static bool copyFrameToSurface(NVDriver *drv, CUdeviceptr ptr, NVSurface *surfac
         .Height = surface->height >> 1,
         .WidthInBytes = surface->width * bpp
     };
-    CHECK_CUDA_RESULT_RETURN(drv->cu->cuMemcpy2D(&cpy2), false);
+    if (CHECK_CUDA_RESULT(drv->cu->cuMemcpy2D(&cpy2))) {
+        goto out;
+    }
 
+    ok = true;
+
+out:
     //notify anyone waiting for us to be resolved
     pthread_mutex_lock(&surface->mutex);
+    if (!ok) {
+        surface->decodeFailed = true;
+    }
     surface->resolving = 0;
     pthread_cond_signal(&surface->cond);
     pthread_mutex_unlock(&surface->mutex);
 
-    return true;
+    return ok;
 }
 
 static bool egl_realiseSurface(NVDriver *drv, NVSurface *surface) {
@@ -577,6 +715,10 @@ static bool egl_exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface
 static bool egl_fillExportDescriptor(NVDriver *drv, NVSurface *surface, VADRMPRIMESurfaceDescriptor *desc) {
     BackingImage *img = surface->backingImage;
 
+    if (nvBackingImageIsImportedExternal(img)) {
+        return nvFillImportedExportDescriptor(img, desc);
+    }
+
     int bpp = img->fourcc == DRM_FORMAT_NV12 ? 1 : 2;
 
     //TODO only support 420 images (either NV12, P010 or P012)
@@ -594,13 +736,15 @@ static bool egl_fillExportDescriptor(NVDriver *drv, NVSurface *surface, VADRMPRI
     desc->objects[1].size = img->width * (img->height >> 1) * bpp;
     desc->objects[1].drm_format_modifier = img->mods[1];
 
-    desc->layers[0].drm_format = img->fourcc == DRM_FORMAT_NV12 ? DRM_FORMAT_R8 : DRM_FORMAT_R16;
+    desc->layers[0].drm_format = nvGetExportLayerDrmFormat(img->format, 0,
+                                                           img->fourcc == DRM_FORMAT_NV12 ? DRM_FORMAT_R8 : DRM_FORMAT_R16);
     desc->layers[0].num_planes = 1;
     desc->layers[0].object_index[0] = 0;
     desc->layers[0].offset[0] = img->offsets[0];
     desc->layers[0].pitch[0] = img->strides[0];
 
-    desc->layers[1].drm_format = img->fourcc == DRM_FORMAT_NV12 ? DRM_FORMAT_RG88 : DRM_FORMAT_RG1616;
+    desc->layers[1].drm_format = nvGetExportLayerDrmFormat(img->format, 1,
+                                                           img->fourcc == DRM_FORMAT_NV12 ? DRM_FORMAT_RG88 : DRM_FORMAT_RG1616);
     desc->layers[1].num_planes = 1;
     desc->layers[1].object_index[0] = 1;
     desc->layers[1].offset[0] = img->offsets[1];
