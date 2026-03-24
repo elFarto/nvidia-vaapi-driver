@@ -2446,7 +2446,9 @@ static bool copySurfaceToEncodeInputBuffer(NVContext *nvCtx, NVSurface *surface)
                                   (!fullFrameCopy || hasStridePadding);
     const bool clearPaddingP010 = inputFmt == NV_ENC_BUFFER_FORMAT_YUV420_10BIT &&
                                   (!fullFrameCopy || hasStridePadding);
-    const bool clearPadding = clearPaddingNv12 || clearPaddingP010;
+    const bool clearPadding444 = inputFmt == NV_ENC_BUFFER_FORMAT_YUV444 &&
+                                 (!fullFrameCopy || hasStridePadding);
+    const bool clearPadding = clearPaddingNv12 || clearPaddingP010 || clearPadding444;
 
     const uint32_t chromaCopyHeight = is444 ? copyHeightPixels
                                             : (is422 ? copyHeightPixels : (copyHeightPixels >> 1));
@@ -2471,6 +2473,10 @@ static bool copySurfaceToEncodeInputBuffer(NVContext *nvCtx, NVSurface *surface)
                 is422)) {
             return false;
         }
+    } else if (clearPadding444 && cu->cuMemsetD8Async != NULL) {
+        CHECK_CUDA_RESULT_RETURN(cu->cuMemsetD8Async(nvCtx->encodeInputBuffer, 0, lumaPlaneBytes, 0), false);
+        CHECK_CUDA_RESULT_RETURN(cu->cuMemsetD8Async(nvCtx->encodeInputBuffer + planeBytes, 0x80, planeBytes, 0), false);
+        CHECK_CUDA_RESULT_RETURN(cu->cuMemsetD8Async(nvCtx->encodeInputBuffer + (planeBytes * 2), 0x80, planeBytes, 0), false);
     }
 
     CUDA_MEMCPY2D plane0Copy = {

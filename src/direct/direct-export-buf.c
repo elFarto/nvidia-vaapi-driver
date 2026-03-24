@@ -1795,25 +1795,30 @@ static bool direct_importExternalSurfaceImpl(NVDriver *drv, NVSurface *surface, 
             );
         }
     }
-    bool object01SameBacking = false;
-    bool object01SameSize = false;
-    if (desc->num_objects >= 2) {
+    bool object0SameBacking[ARRAY_SIZE(desc->objects)] = {false};
+    bool object0SameSize[ARRAY_SIZE(desc->objects)] = {false};
+    if (desc->num_objects > 0 && desc->objects[0].fd >= 0) {
         struct stat object0Stat = {0};
-        struct stat object1Stat = {0};
-        if (desc->objects[0].fd >= 0 &&
-            desc->objects[1].fd >= 0 &&
-            fstat(desc->objects[0].fd, &object0Stat) == 0 &&
-            fstat(desc->objects[1].fd, &object1Stat) == 0) {
-            object01SameBacking =
-                object0Stat.st_dev == object1Stat.st_dev &&
-                object0Stat.st_ino == object1Stat.st_ino;
-            object01SameSize =
-                desc->objects[0].size == desc->objects[1].size;
-            LOG(
-                "  object[0]/object[1] same-backing=%s same-size=%s",
-                object01SameBacking ? "yes" : "no",
-                object01SameSize ? "yes" : "no"
-            );
+        if (fstat(desc->objects[0].fd, &object0Stat) == 0) {
+            object0SameBacking[0] = true;
+            object0SameSize[0] = true;
+            for (uint32_t i = 1; i < desc->num_objects && i < ARRAY_SIZE(desc->objects); i++) {
+                struct stat objectIStat = {0};
+                if (desc->objects[i].fd < 0 ||
+                    fstat(desc->objects[i].fd, &objectIStat) != 0) {
+                    continue;
+                }
+                object0SameBacking[i] =
+                    object0Stat.st_dev == objectIStat.st_dev &&
+                    object0Stat.st_ino == objectIStat.st_ino;
+                object0SameSize[i] = desc->objects[0].size == desc->objects[i].size;
+                LOG(
+                    "  object[0]/object[%u] same-backing=%s same-size=%s",
+                    i,
+                    object0SameBacking[i] ? "yes" : "no",
+                    object0SameSize[i] ? "yes" : "no"
+                );
+            }
         }
     }
     for (uint32_t i = 0; i < desc->num_layers; i++) {
@@ -1885,6 +1890,26 @@ static bool direct_importExternalSurfaceImpl(NVDriver *drv, NVSurface *surface, 
             planeOffsets,
             planePitches
         );
+    }
+
+    const bool enable444PDirectImport =
+        isTruthyEnv(getenv("NVD_DIRECT_IMPORT_444P_ENABLE"));
+    if (importFormat == NV_FORMAT_444P && !enable444PDirectImport) {
+        LOG(
+            "Bypassing direct-import path for 444P external surface; using GPU-copy import path"
+        );
+        return direct_importExternalSurfaceViaGpuCopy(
+            drv,
+            surface,
+            desc,
+            fmtInfo,
+            planeObjectIndex,
+            planeOffsets,
+            planePitches
+        );
+    }
+    if (importFormat == NV_FORMAT_444P) {
+        LOG("444P direct-import experiment enabled");
     }
 
     if (drv->preferExternalImportGpuCopy) {
@@ -1964,19 +1989,25 @@ static bool direct_importExternalSurfaceImpl(NVDriver *drv, NVSurface *surface, 
         const uint32_t declaredObjectIndex = planeObjectIndex[i];
         uint32_t importObjectIndex = declaredObjectIndex;
         uint64_t declaredModifier = desc->objects[declaredObjectIndex].drm_format_modifier;
+        const bool objectMatchesPlane0Backing =
+            declaredObjectIndex < ARRAY_SIZE(object0SameBacking) &&
+            object0SameBacking[declaredObjectIndex] &&
+            object0SameSize[declaredObjectIndex];
         const bool forceObject0ForNonLinearSharedBacking =
             i > 0 &&
             isTruthyEnv(getenv("NVD_DIRECT_IMPORT_NONLINEAR_SHARED_BACKING_USE_OBJECT0")) &&
             !direct_isLinearModifier(declaredModifier) &&
-            object01SameBacking &&
-            object01SameSize &&
+            objectMatchesPlane0Backing &&
             planeObjectIndex[0] < desc->num_objects;
-        if (forceObject0ForNonLinearSharedBacking && importObjectIndex != planeObjectIndex[0]) {
+        if (forceObject0ForNonLinearSharedBacking &&
+            importObjectIndex != planeObjectIndex[0]) {
             LOG(
-                "External plane %u non-linear shared-backing remap: object %u -> %u",
+                "External plane %u shared-backing remap: object %u -> %u linear=%s format=%d",
                 i,
                 importObjectIndex,
-                planeObjectIndex[0]
+                planeObjectIndex[0],
+                direct_isLinearModifier(declaredModifier) ? "yes" : "no",
+                importFormat
             );
             importObjectIndex = planeObjectIndex[0];
         }
@@ -1984,18 +2015,26 @@ static bool direct_importExternalSurfaceImpl(NVDriver *drv, NVSurface *surface, 
         bool isLinearModifier = direct_isLinearModifier(modifier);
         const bool usePitchWidthForNonLinear =
             isTruthyEnv(getenv("NVD_DIRECT_IMPORT_NONLINEAR_USE_PITCH_WIDTH"));
+        const bool usePitchWidthForLinear444 =
+            importFormat == NV_FORMAT_444P &&
+            enable444PDirectImport &&
+            isLinearModifier;
         uint32_t importWidth = planeWidth;
         if (!isLinearModifier && usePitchWidthForNonLinear) {
             importWidth = pitchWidth;
         }
+        if (usePitchWidthForLinear444) {
+            importWidth = pitchWidth;
+        }
         LOG(
-            "External plane %u width decision: visible=%u pitch_width=%u selected=%u linear=%s use_pitch_width_non_linear=%s",
+            "External plane %u width decision: visible=%u pitch_width=%u selected=%u linear=%s use_pitch_width_non_linear=%s use_pitch_width_linear_444=%s",
             i,
             planeWidth,
             pitchWidth,
             importWidth,
             isLinearModifier ? "yes" : "no",
-            usePitchWidthForNonLinear ? "yes" : "no"
+            usePitchWidthForNonLinear ? "yes" : "no",
+            usePitchWidthForLinear444 ? "yes" : "no"
         );
 
         uint64_t minPlaneSize = (uint64_t)planeOffsets[i] + ((uint64_t)planePitches[i] * planeHeight);
@@ -2095,19 +2134,18 @@ static bool direct_importExternalSurfaceImpl(NVDriver *drv, NVSurface *surface, 
         );
 
         bool importedPlane = false;
-        const bool tryShareExtMemFromPlane0 =
+        const bool enableNonLinearSharedExtMem =
             i > 0 &&
             !isLinearModifier &&
-            isTruthyEnv(getenv("NVD_DIRECT_IMPORT_NONLINEAR_SHARE_EXTMEM_OBJECT0")) &&
+            isTruthyEnv(getenv("NVD_DIRECT_IMPORT_NONLINEAR_SHARE_EXTMEM_OBJECT0"));
+        const bool tryShareExtMemFromPlane0 =
             backingImage->cudaImages[0].extMem != NULL &&
-            importObjectIndex == planeObjectIndex[0];
-        if (i > 0 &&
-            !isLinearModifier &&
-            isTruthyEnv(getenv("NVD_DIRECT_IMPORT_NONLINEAR_SHARE_EXTMEM_OBJECT0")) &&
-            backingImage->cudaImages[0].extMem != NULL &&
+            importObjectIndex == planeObjectIndex[0] &&
+            enableNonLinearSharedExtMem;
+        if (backingImage->cudaImages[0].extMem != NULL &&
+            enableNonLinearSharedExtMem &&
             importObjectIndex != planeObjectIndex[0] &&
-            object01SameBacking &&
-            object01SameSize) {
+            objectMatchesPlane0Backing) {
             LOG(
                 "Import external plane %u shared extMem mapping skipped: descriptor object=%u differs from plane0 object=%u (same-backing is not sufficient)",
                 i,
@@ -2122,7 +2160,7 @@ static bool direct_importExternalSurfaceImpl(NVDriver *drv, NVSurface *surface, 
                 (void *)backingImage->cudaImages[0].extMem,
                 importObjectIndex,
                 planeObjectIndex[0],
-                object01SameBacking ? "yes" : "no"
+                objectMatchesPlane0Backing ? "yes" : "no"
             );
             if (map_external_memory_to_cuda_array(
                     drv,
