@@ -73,7 +73,7 @@ endif
 nvidia_incdir = include_directories('nvidia-include')
 nvidia_install_dir = libva_deps.get_variable(pkgconfig: 'driverdir')
 
-shared_library(
+nvidia_drv_video = shared_library(
     'nvidia_drv_video',
     name_prefix: '',
     sources: sources,
@@ -89,3 +89,38 @@ meson.add_devenv(environment({
     'LIBVA_DRIVER_NAME': 'nvidia',
     'LIBVA_DRIVERS_PATH': meson.project_build_root(),
 }))
+
+sh_prog = find_program('sh')
+nvidia_drv_video_path = join_paths(meson.project_build_root(), 'nvidia_drv_video.so')
+
+test(
+    'driver-artifact-smoke',
+    sh_prog,
+    args: [
+        files('tests/driver-artifact-smoke.sh'),
+        nvidia_drv_video_path,
+    ],
+)
+
+test(
+    'driver-exported-symbol-smoke',
+    sh_prog,
+    args: [
+        files('tests/driver-exported-symbol-smoke.sh'),
+        nvidia_drv_video_path,
+    ],
+)
+
+if get_option('runtime_tests')
+    test(
+        'driver-runtime-vaapi-smoke',
+        sh_prog,
+        args: [files('tests/driver-runtime-vaapi-smoke.sh')],
+        env: environment({
+            'LIBVA_DRIVER_NAME': 'nvidia',
+            'LIBVA_DRIVERS_PATH': meson.project_build_root(),
+        }),
+        suite: ['runtime'],
+        timeout: 300,
+    )
+endif
