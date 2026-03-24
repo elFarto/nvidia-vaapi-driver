@@ -142,6 +142,56 @@ static void directInitCudaImage(NVCudaImage *cudaImage, int importedFd) {
     cudaImage->importedFd = importedFd;
 }
 
+typedef enum Direct444PImportMode {
+    DIRECT_444P_IMPORT_MODE_GPU_COPY = 0,
+    DIRECT_444P_IMPORT_MODE_AUTO,
+    DIRECT_444P_IMPORT_MODE_BUFFER,
+    DIRECT_444P_IMPORT_MODE_ARRAY,
+} Direct444PImportMode;
+
+static const char *direct444PImportModeName(Direct444PImportMode mode) {
+    switch (mode) {
+    case DIRECT_444P_IMPORT_MODE_AUTO:
+        return "auto";
+    case DIRECT_444P_IMPORT_MODE_BUFFER:
+        return "buffer";
+    case DIRECT_444P_IMPORT_MODE_ARRAY:
+        return "array";
+    case DIRECT_444P_IMPORT_MODE_GPU_COPY:
+    default:
+        return "gpu-copy";
+    }
+}
+
+static Direct444PImportMode directGet444PImportMode(void) {
+    const char *modeEnv = getenv("NVD_DIRECT_IMPORT_444P_MODE");
+    if (modeEnv != NULL && modeEnv[0] != '\0') {
+        if (strcmp(modeEnv, "auto") == 0) {
+            return DIRECT_444P_IMPORT_MODE_AUTO;
+        }
+        if (strcmp(modeEnv, "buffer") == 0 ||
+            strcmp(modeEnv, "buffer-direct") == 0) {
+            return DIRECT_444P_IMPORT_MODE_BUFFER;
+        }
+        if (strcmp(modeEnv, "array") == 0 ||
+            strcmp(modeEnv, "mipmap") == 0) {
+            return DIRECT_444P_IMPORT_MODE_ARRAY;
+        }
+        if (strcmp(modeEnv, "gpu-copy") == 0 ||
+            strcmp(modeEnv, "gpu_copy") == 0 ||
+            strcmp(modeEnv, "gpu") == 0) {
+            return DIRECT_444P_IMPORT_MODE_GPU_COPY;
+        }
+
+        LOG(
+            "Unknown NVD_DIRECT_IMPORT_444P_MODE=%s; expected auto|buffer|array|gpu-copy. Falling back to default gpu-copy behavior.",
+            modeEnv
+        );
+    }
+
+    return DIRECT_444P_IMPORT_MODE_GPU_COPY;
+}
+
 static NVFormat directSurfaceBackingFormat(const NVSurface *surface) {
     if (surface == NULL) {
         return NV_FORMAT_NONE;
@@ -2061,9 +2111,9 @@ static bool direct_importExternalSurfaceImpl(NVDriver *drv, NVSurface *surface, 
         );
     }
 
-    const bool enable444PDirectImport =
-        isTruthyEnv(getenv("NVD_DIRECT_IMPORT_444P_ENABLE"));
-    if (importFormat == NV_FORMAT_444P && !enable444PDirectImport) {
+    const Direct444PImportMode import444PMode = directGet444PImportMode();
+    if (importFormat == NV_FORMAT_444P &&
+        import444PMode == DIRECT_444P_IMPORT_MODE_GPU_COPY) {
         LOG(
             "Bypassing direct-import path for 444P external surface; using GPU-copy import path"
         );
@@ -2078,7 +2128,10 @@ static bool direct_importExternalSurfaceImpl(NVDriver *drv, NVSurface *surface, 
         );
     }
     if (importFormat == NV_FORMAT_444P) {
-        LOG("444P direct-import experiment enabled");
+        LOG(
+            "444P external import mode=%s",
+            direct444PImportModeName(import444PMode)
+        );
     }
 
     if (drv->preferExternalImportGpuCopy) {
@@ -2187,9 +2240,29 @@ static bool direct_importExternalSurfaceImpl(NVDriver *drv, NVSurface *surface, 
             isTruthyEnv(getenv("NVD_DIRECT_IMPORT_NONLINEAR_USE_PITCH_WIDTH"));
         const bool usePitchWidthForLinear444 =
             importFormat == NV_FORMAT_444P &&
-            enable444PDirectImport &&
-            isLinearModifier;
+            isLinearModifier &&
+            (import444PMode == DIRECT_444P_IMPORT_MODE_AUTO ||
+             import444PMode == DIRECT_444P_IMPORT_MODE_BUFFER);
         const bool useBufferDirectForLinear444 = usePitchWidthForLinear444;
+        if (importFormat == NV_FORMAT_444P &&
+            import444PMode == DIRECT_444P_IMPORT_MODE_BUFFER &&
+            !isLinearModifier) {
+            LOG(
+                "444P buffer import mode requested, but plane %u uses non-linear modifier=0x%llx; using GPU-copy import path",
+                i,
+                (unsigned long long)modifier
+            );
+            destroyBackingImage(drv, backingImage);
+            return direct_importExternalSurfaceViaGpuCopy(
+                drv,
+                surface,
+                desc,
+                fmtInfo,
+                planeObjectIndex,
+                planeOffsets,
+                planePitches
+            );
+        }
         uint32_t importWidth = planeWidth;
         if (!isLinearModifier && usePitchWidthForNonLinear) {
             importWidth = pitchWidth;

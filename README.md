@@ -133,6 +133,7 @@ Environment variables used to control the behavior of this library.
 | `NVD_ENCODE_PROBE_CACHE` | Controls encode capability probe cache usage. Default enabled. Set `0` to disable both in-process and persistent probe caches. |
 | `NVD_PREFER_GPU_COPY_IMPORT` | Direct backend import policy override. Prefer GPU-copy path over direct-import for external DRM PRIME surfaces. |
 | `NVD_FORCE_CPU_COPY_IMPORT` | Direct backend import policy override. Force CPU-copy fallback path for external DRM PRIME surface import. |
+| `NVD_DIRECT_IMPORT_444P_MODE` | Direct backend 444P external import policy override. One of `auto`, `buffer`, `array`, or `gpu-copy`. |
 | `NVD_PREFER_DIRECT_DMABUF_CUDA_IMPORT` | Allow trying direct raw dma-buf CUDA import even when startup capability probe does not report support. |
 | `NVD_DISABLE_DIRECT_DMABUF_CUDA_IMPORT` | Disable direct raw dma-buf CUDA import path and use fallback import paths. |
 | `NVD_USE_PRIMARY_CUDA_CONTEXT` | Prefer CUDA primary context (`cuDevicePrimaryCtxRetain`) instead of creating a private context. If unset, the driver still auto-retries with primary context when `cuCtxCreate` fails. |
@@ -176,6 +177,16 @@ LIBVA_DRIVER_NAME=nvidia \
 LIBVA_DRIVERS_PATH=/path/to/nvidia-vaapi-driver/build \
 vainfo --display drm --device /dev/dri/renderD128
 ```
+
+### `NVD_DIRECT_IMPORT_444P_MODE`
+
+Controls the direct backend external-import path for `444P` surfaces.
+
+- unset (default): use `gpu-copy`, matching the previous default behavior
+- `auto`: allow direct import and let the driver choose the current best path
+- `buffer`: force buffer-direct import for linear `444P`; if the layout is non-linear or the import fails, the driver falls back to GPU-copy
+- `array`: force CUDA array direct-import (`CUmipmappedArray` path); if that import fails, the driver falls back to GPU-copy
+- `gpu-copy`: bypass direct-import and use GPU-copy import immediately
 
 ## Firefox
 
