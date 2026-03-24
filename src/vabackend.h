@@ -120,6 +120,10 @@ typedef struct _BackingImage {
     uint32_t    size[4];
     //direct backend only
     NVCudaImage cudaImages[3];
+    NVCudaImage directEncodeWholeFrameCudaImage;
+    CUarray     directEncodeWholeFrameArray;
+    uint32_t    directEncodeWholeFramePitch;
+    uint32_t    directEncodeWholeFrameRows;
     NVFormat    format;
     uint64_t    resourceEpoch;
     bool        importedGpuCopy;
@@ -138,6 +142,8 @@ typedef struct {
     bool (*fillExportDescriptor)(struct _NVDriver *drv, NVSurface *surface, VADRMPRIMESurfaceDescriptor *desc);
     void (*destroyAllBackingImage)(struct _NVDriver *drv);
 } NVBackend;
+
+bool directEnsureWholeFrameNv12CudaArray(struct _NVDriver *drv, BackingImage *img);
 
 typedef struct _NVDriver
 {

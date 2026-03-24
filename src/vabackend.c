@@ -101,6 +101,11 @@ static bool nvAssumeLinearForDrmPrimeImport(void)
     return isTruthyEnv(getenv("NVD_DRM_PRIME_ASSUME_LINEAR"));
 }
 
+static bool nvEnableExperimentalDirectEncodeCudaArrayNv12(void)
+{
+    return isTruthyEnv(getenv("NVD_EXPERIMENTAL_DIRECT_ENCODE_CUDAARRAY_NV12"));
+}
+
 static pthread_mutex_t concurrency_mutex = PTHREAD_MUTEX_INITIALIZER;
 static uint32_t instances;
 static uint32_t max_instances;
@@ -2609,6 +2614,277 @@ static bool copySurfaceToEncodeInputBuffer(NVContext *nvCtx, NVSurface *surface)
     return true;
 }
 
+static void cleanupDirectEncodeRegisteredInput(
+        NVContext *nvCtx,
+        NV_ENC_REGISTERED_PTR *registeredInput)
+{
+    if (registeredInput == NULL || *registeredInput == NULL) {
+        return;
+    }
+    if (nvCtx->encodeApi.nvEncUnregisterResource != NULL) {
+        noteNvencRegisteredDestroy(*registeredInput);
+        checkNvencStatus(
+            nvCtx->encodeApi.nvEncUnregisterResource(nvCtx->encoder, *registeredInput),
+            "nvEncUnregisterResource(direct CUDAARRAY NV12)"
+        );
+    }
+    *registeredInput = NULL;
+}
+
+static bool ensureEncodeInputRegisteredCurrentContext(NVContext *nvCtx) {
+    NVDriver *drv = nvCtx->drv;
+    CudaFunctions *cu = drv->cu;
+    const uint32_t negotiatedApiVersion =
+        nvCtx->encodeNvencApiVersion != 0
+            ? nvCtx->encodeNvencApiVersion
+            : NVENCAPI_VERSION;
+    bool allocatedInputNow = false;
+
+    if (nvCtx->encoder == NULL) {
+        LOG("ensureEncodeInputRegisteredCurrentContext reject reason=encoder_not_initialized");
+        return false;
+    }
+
+    if (nvCtx->encodeInputBuffer == 0) {
+        const bool inputIs444 =
+            nvCtx->encodeInputFormat == NV_ENC_BUFFER_FORMAT_YUV444 ||
+            nvCtx->encodeInputFormat == NV_ENC_BUFFER_FORMAT_YUV444_10BIT;
+        const bool inputIs422 =
+#if NVENCAPI_MAJOR_VERSION >= 13
+            nvCtx->encodeInputFormat == NV_ENC_BUFFER_FORMAT_NV16 ||
+            nvCtx->encodeInputFormat == NV_ENC_BUFFER_FORMAT_P210;
+#else
+            false;
+#endif
+        const uint32_t inputBytesPerSample =
+            (nvCtx->encodeInputFormat == NV_ENC_BUFFER_FORMAT_YUV420_10BIT ||
+             nvCtx->encodeInputFormat == NV_ENC_BUFFER_FORMAT_YUV444_10BIT
+#if NVENCAPI_MAJOR_VERSION >= 13
+             || nvCtx->encodeInputFormat == NV_ENC_BUFFER_FORMAT_P210
+#endif
+            ) ? 2u : 1u;
+        const size_t inputWidthBytes = (size_t) nvCtx->width * inputBytesPerSample;
+        const size_t inputTotalHeight = inputIs444
+            ? (size_t) nvCtx->height * 3u
+            : (inputIs422
+                ? (size_t) nvCtx->height * 2u
+                : (size_t) nvCtx->height + ((size_t) nvCtx->height >> 1));
+
+        CUresult inputAllocResult = cu->cuMemAllocPitch(
+            &nvCtx->encodeInputBuffer,
+            &nvCtx->encodeInputPitch,
+            inputWidthBytes,
+            inputTotalHeight,
+            16
+        );
+        if (CHECK_CUDA_RESULT(inputAllocResult)) {
+            return false;
+        }
+
+        nvCtx->encodeInputBytes = nvCtx->encodeInputPitch * inputTotalHeight;
+        noteEncodeInputAlloc(nvCtx->encodeInputBytes);
+        allocatedInputNow = true;
+        LOG(
+            "lazy CUDA encode input allocated context_id=%d ptr=%p pitch=%zu widthBytes=%zu totalHeight=%zu fmt=0x%x",
+            (int) nvCtx->contextId,
+            (void *) nvCtx->encodeInputBuffer,
+            nvCtx->encodeInputPitch,
+            inputWidthBytes,
+            inputTotalHeight,
+            nvCtx->encodeInputFormat
+        );
+    }
+
+    if (nvCtx->encodeRegisteredInput != NULL) {
+        return true;
+    }
+
+    NV_ENC_REGISTER_RESOURCE registerParams = {0};
+    registerParams.version = nvencStructVersionForApi(
+        NV_ENC_REGISTER_RESOURCE_VER,
+        negotiatedApiVersion
+    );
+    registerParams.resourceType = NV_ENC_INPUT_RESOURCE_TYPE_CUDADEVICEPTR;
+    registerParams.width = nvCtx->width;
+    registerParams.height = nvCtx->height;
+    registerParams.pitch = (uint32_t) nvCtx->encodeInputPitch;
+    registerParams.resourceToRegister = (void *) nvCtx->encodeInputBuffer;
+    registerParams.bufferFormat = nvCtx->encodeInputFormat;
+    registerParams.bufferUsage = NV_ENC_INPUT_IMAGE;
+
+    NVENCSTATUS status = nvCtx->encodeApi.nvEncRegisterResource(
+        nvCtx->encoder,
+        &registerParams
+    );
+    if (!checkNvencStatus(status, "nvEncRegisterResource(lazy staging input)")) {
+        if (allocatedInputNow && nvCtx->encodeInputBuffer != 0) {
+            noteEncodeInputFree(nvCtx->encodeInputBytes);
+            CHECK_CUDA_RESULT(cu->cuMemFree(nvCtx->encodeInputBuffer));
+            nvCtx->encodeInputBuffer = 0;
+            nvCtx->encodeInputPitch = 0;
+            nvCtx->encodeInputBytes = 0;
+        }
+        return false;
+    }
+
+    nvCtx->encodeRegisteredInput = registerParams.registeredResource;
+    noteNvencRegisteredCreate(nvCtx->encodeRegisteredInput);
+    LOG(
+        "lazy registered encode input context_id=%d resource=%p",
+        (int) nvCtx->contextId,
+        nvCtx->encodeRegisteredInput
+    );
+    return true;
+}
+
+static bool tryRegisterDirectEncodeInputCudaArrayNv12(
+        NVContext *nvCtx,
+        NVSurface *surface,
+        NV_ENC_REGISTERED_PTR *registeredInput,
+        uint32_t *inputPitch)
+{
+    BackingImage *backingImage = surface != NULL ? surface->backingImage : NULL;
+    CUarray directArray = NULL;
+    uint32_t directPitch = 0;
+    const char *directSource = "none";
+
+    if (registeredInput == NULL || inputPitch == NULL) {
+        return false;
+    }
+    *registeredInput = NULL;
+    *inputPitch = 0;
+
+    if (nvCtx->encoder == NULL) {
+        LOG("direct encode cudaarray reject reason=encoder_not_initialized");
+        return false;
+    }
+    if (nvCtx->encodeInputFormat != NV_ENC_BUFFER_FORMAT_NV12) {
+        LOG(
+            "direct encode cudaarray reject reason=input_format_not_nv12 fmt=0x%x",
+            nvCtx->encodeInputFormat
+        );
+        return false;
+    }
+    if (surface == NULL || backingImage == NULL) {
+        LOG("direct encode cudaarray reject reason=missing_surface_backing");
+        return false;
+    }
+    if (surface->format != cudaVideoSurfaceFormat_NV12) {
+        LOG(
+            "direct encode cudaarray reject reason=surface_format_not_nv12 surface_format=%d",
+            surface->format
+        );
+        return false;
+    }
+    if (backingImage->importedGpuCopy) {
+        LOG("direct encode cudaarray reject reason=imported_gpu_copy_backing");
+        return false;
+    }
+    if (backingImage->cudaImages[0].mappedBuffer != 0 ||
+        backingImage->cudaImages[1].mappedBuffer != 0) {
+        LOG(
+            "direct encode cudaarray reject reason=buffer_view_present buffer0=%p buffer1=%p",
+            (void *) backingImage->cudaImages[0].mappedBuffer,
+            (void *) backingImage->cudaImages[1].mappedBuffer
+        );
+        return false;
+    }
+
+    if (backingImage->directEncodeWholeFrameArray != NULL) {
+        directArray = backingImage->directEncodeWholeFrameArray;
+        directPitch = backingImage->directEncodeWholeFramePitch;
+        directSource = "whole-frame-cached";
+    } else if (backingImage->arrays[1] != NULL) {
+        if (!directEnsureWholeFrameNv12CudaArray(nvCtx->drv, backingImage)) {
+            LOG(
+                "direct encode cudaarray reject reason=whole_frame_array_unavailable array0=%p array1=%p",
+                (void *) backingImage->arrays[0],
+                (void *) backingImage->arrays[1]
+            );
+            return false;
+        }
+        directArray = backingImage->directEncodeWholeFrameArray;
+        directPitch = backingImage->directEncodeWholeFramePitch;
+        directSource = "whole-frame-imported";
+    } else if (backingImage->arrays[0] != NULL) {
+        directArray = backingImage->arrays[0];
+        directPitch =
+            backingImage->strides[0] != 0
+                ? (uint32_t) backingImage->strides[0]
+                : surface->width;
+        directSource = "single-array";
+    }
+
+    if (directArray == NULL) {
+        LOG(
+            "direct encode cudaarray reject reason=missing_single_nv12_array array0=%p array1=%p whole=%p",
+            (void *) backingImage->arrays[0],
+            (void *) backingImage->arrays[1],
+            (void *) backingImage->directEncodeWholeFrameArray
+        );
+        return false;
+    }
+    if ((directPitch & 3u) != 0) {
+        LOG(
+            "direct encode cudaarray reject reason=pitch_multiple_of_4_required width=%u",
+            directPitch
+        );
+        return false;
+    }
+
+    const uint32_t negotiatedApiVersion =
+        nvCtx->encodeNvencApiVersion != 0 ? nvCtx->encodeNvencApiVersion : NVENCAPI_VERSION;
+    NV_ENC_REGISTER_RESOURCE registerParams = {0};
+    registerParams.version = nvencStructVersionForApi(
+        NV_ENC_REGISTER_RESOURCE_VER,
+        negotiatedApiVersion
+    );
+    registerParams.resourceType = NV_ENC_INPUT_RESOURCE_TYPE_CUDAARRAY;
+    registerParams.width = surface->width;
+    registerParams.height = surface->height;
+    registerParams.pitch = directPitch;
+    registerParams.resourceToRegister = (void *) directArray;
+    registerParams.bufferFormat = NV_ENC_BUFFER_FORMAT_NV12;
+    registerParams.bufferUsage = NV_ENC_INPUT_IMAGE;
+    registerParams.subResourceIndex = 0;
+
+    NVENCSTATUS status = nvCtx->encodeApi.nvEncRegisterResource(
+        nvCtx->encoder,
+        &registerParams
+    );
+    if (!checkNvencStatus(status, "nvEncRegisterResource(direct CUDAARRAY NV12)")) {
+        LOG(
+            "direct encode cudaarray reject reason=register_failed source=%s array0=%p array1=%p whole=%p modifier0=0x%llx modifier1=0x%llx width=%u height=%u pitch=%u",
+            directSource,
+            (void *) backingImage->arrays[0],
+            (void *) backingImage->arrays[1],
+            (void *) backingImage->directEncodeWholeFrameArray,
+            (unsigned long long) backingImage->mods[0],
+            (unsigned long long) backingImage->mods[1],
+            surface->width,
+            surface->height,
+            registerParams.pitch
+        );
+        return false;
+    }
+
+    *registeredInput = registerParams.registeredResource;
+    *inputPitch = registerParams.pitch;
+    noteNvencRegisteredCreate(*registeredInput);
+    LOG(
+        "direct encode cudaarray registered resource=%p source=%s array0=%p array1=%p whole=%p pitch=%u modifier0=0x%llx modifier1=0x%llx",
+        *registeredInput,
+        directSource,
+        (void *) backingImage->arrays[0],
+        (void *) backingImage->arrays[1],
+        (void *) backingImage->directEncodeWholeFrameArray,
+        *inputPitch,
+        (unsigned long long) backingImage->mods[0],
+        (unsigned long long) backingImage->mods[1]
+    );
+    return true;
+}
+
 static bool destroyEncodeSession(NVContext *nvCtx) {
     NVDriver *drv = nvCtx->drv;
     bool hadError = false;
@@ -2842,18 +3118,25 @@ static bool destroyEncodeSession(NVContext *nvCtx) {
                     (int) nvCtx->contextId
                 );
             }
-            LOG("destroyEncodeSession context_id=%d begin recycleCudaContextAfterLastSession", (int) nvCtx->contextId);
-            recycleCudaContextAfterLastSession(drv, "all_sessions_destroyed");
-            LOG("destroyEncodeSession context_id=%d done recycleCudaContextAfterLastSession", (int) nvCtx->contextId);
-            LOG(
-                "destroyEncodeSession context_id=%d begin reloadGlobalCodecFunctionsAfterLastSession",
-                (int) nvCtx->contextId
-            );
-            reloadGlobalCodecFunctionsAfterLastSession(drv, "all_sessions_destroyed");
-            LOG(
-                "destroyEncodeSession context_id=%d done reloadGlobalCodecFunctionsAfterLastSession",
-                (int) nvCtx->contextId
-            );
+            if (nvEnableExperimentalDirectEncodeCudaArrayNv12()) {
+                LOG(
+                    "destroyEncodeSession context_id=%d skipping recycle/reload after last session while experimental direct CUDAARRAY NV12 is enabled",
+                    (int) nvCtx->contextId
+                );
+            } else {
+                LOG("destroyEncodeSession context_id=%d begin recycleCudaContextAfterLastSession", (int) nvCtx->contextId);
+                recycleCudaContextAfterLastSession(drv, "all_sessions_destroyed");
+                LOG("destroyEncodeSession context_id=%d done recycleCudaContextAfterLastSession", (int) nvCtx->contextId);
+                LOG(
+                    "destroyEncodeSession context_id=%d begin reloadGlobalCodecFunctionsAfterLastSession",
+                    (int) nvCtx->contextId
+                );
+                reloadGlobalCodecFunctionsAfterLastSession(drv, "all_sessions_destroyed");
+                LOG(
+                    "destroyEncodeSession context_id=%d done reloadGlobalCodecFunctionsAfterLastSession",
+                    (int) nvCtx->contextId
+                );
+            }
             pthread_mutex_unlock(&drv->objectCreationMutex);
         }
     }
@@ -3141,74 +3424,29 @@ static bool initEncodeSession(NVContext *nvCtx) {
     noteNvencBitstreamCreate(nvCtx->encodeBitstream);
     LOG("bitstream buffer created context_id=%d handle=%p", (int) nvCtx->contextId, nvCtx->encodeBitstream);
 
-    if (CHECK_CUDA_RESULT(cu->cuCtxPushCurrent(drv->cudaContext))) {
-        destroyEncodeSession(nvCtx);
-        return false;
+    const bool deferLegacyStagingInput =
+        nvEnableExperimentalDirectEncodeCudaArrayNv12() &&
+        inputBufferFormat == NV_ENC_BUFFER_FORMAT_NV12;
+    if (!deferLegacyStagingInput) {
+        if (CHECK_CUDA_RESULT(cu->cuCtxPushCurrent(drv->cudaContext))) {
+            destroyEncodeSession(nvCtx);
+            return false;
+        }
+        if (!ensureEncodeInputRegisteredCurrentContext(nvCtx)) {
+            cu->cuCtxPopCurrent(NULL);
+            destroyEncodeSession(nvCtx);
+            return false;
+        }
+        if (CHECK_CUDA_RESULT(cu->cuCtxPopCurrent(NULL))) {
+            destroyEncodeSession(nvCtx);
+            return false;
+        }
+    } else {
+        LOG(
+            "deferring legacy staging input allocation/register for context_id=%d while experimental direct CUDAARRAY NV12 is enabled",
+            (int) nvCtx->contextId
+        );
     }
-    const bool inputIs444 =
-        inputBufferFormat == NV_ENC_BUFFER_FORMAT_YUV444 ||
-        inputBufferFormat == NV_ENC_BUFFER_FORMAT_YUV444_10BIT;
-    const bool inputIs422 =
-#if NVENCAPI_MAJOR_VERSION >= 13
-        inputBufferFormat == NV_ENC_BUFFER_FORMAT_NV16 ||
-        inputBufferFormat == NV_ENC_BUFFER_FORMAT_P210;
-#else
-        false;
-#endif
-    const uint32_t inputBytesPerSample =
-        (inputBufferFormat == NV_ENC_BUFFER_FORMAT_YUV420_10BIT ||
-         inputBufferFormat == NV_ENC_BUFFER_FORMAT_YUV444_10BIT
-#if NVENCAPI_MAJOR_VERSION >= 13
-         || inputBufferFormat == NV_ENC_BUFFER_FORMAT_P210
-#endif
-        ) ? 2u : 1u;
-    const size_t inputWidthBytes = (size_t) nvCtx->width * inputBytesPerSample;
-    const size_t inputTotalHeight = inputIs444
-        ? (size_t) nvCtx->height * 3u
-        : (inputIs422
-            ? (size_t) nvCtx->height * 2u
-            : (size_t) nvCtx->height + ((size_t) nvCtx->height >> 1));
-
-    CUresult inputAllocResult = cu->cuMemAllocPitch(&nvCtx->encodeInputBuffer, &nvCtx->encodeInputPitch, inputWidthBytes, inputTotalHeight, 16);
-    if (CHECK_CUDA_RESULT(inputAllocResult)) {
-        cu->cuCtxPopCurrent(NULL);
-        destroyEncodeSession(nvCtx);
-        return false;
-    }
-    nvCtx->encodeInputBytes = nvCtx->encodeInputPitch * inputTotalHeight;
-    noteEncodeInputAlloc(nvCtx->encodeInputBytes);
-    if (CHECK_CUDA_RESULT(cu->cuCtxPopCurrent(NULL))) {
-        destroyEncodeSession(nvCtx);
-        return false;
-    }
-    LOG(
-        "CUDA encode input allocated context_id=%d ptr=%p pitch=%zu widthBytes=%zu totalHeight=%zu fmt=0x%x",
-        (int) nvCtx->contextId,
-        (void *) nvCtx->encodeInputBuffer,
-        nvCtx->encodeInputPitch,
-        inputWidthBytes,
-        inputTotalHeight,
-        inputBufferFormat
-    );
-
-    NV_ENC_REGISTER_RESOURCE registerParams = {0};
-    registerParams.version = nvencStructVersionForApi(NV_ENC_REGISTER_RESOURCE_VER, negotiatedApiVersion);
-    registerParams.resourceType = NV_ENC_INPUT_RESOURCE_TYPE_CUDADEVICEPTR;
-    registerParams.width = nvCtx->width;
-    registerParams.height = nvCtx->height;
-    registerParams.pitch = (uint32_t)nvCtx->encodeInputPitch;
-    registerParams.resourceToRegister = (void *)nvCtx->encodeInputBuffer;
-    registerParams.bufferFormat = inputBufferFormat;
-    registerParams.bufferUsage = NV_ENC_INPUT_IMAGE;
-
-    status = nvCtx->encodeApi.nvEncRegisterResource(nvCtx->encoder, &registerParams);
-    if (!checkNvencStatus(status, "nvEncRegisterResource")) {
-        destroyEncodeSession(nvCtx);
-        return false;
-    }
-    nvCtx->encodeRegisteredInput = registerParams.registeredResource;
-    noteNvencRegisteredCreate(nvCtx->encodeRegisteredInput);
-    LOG("registered encode input context_id=%d resource=%p", (int) nvCtx->contextId, nvCtx->encodeRegisteredInput);
 
     nvCtx->encodeSessionInitialized = true;
     LOG("encode session initialized successfully context_id=%d", (int) nvCtx->contextId);
@@ -5950,6 +6188,14 @@ static VAStatus nvRenderPicture(
 static VAStatus nvEncodeEndPicture(VADriverContextP ctx, NVContext *nvCtx) {
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
     NVSurface *surface = nvCtx->renderTarget;
+    const uint32_t negotiatedApiVersion =
+        nvCtx->encodeNvencApiVersion != 0 ? nvCtx->encodeNvencApiVersion : NVENCAPI_VERSION;
+    NV_ENC_MAP_INPUT_RESOURCE mapInput = {0};
+    NV_ENC_REGISTERED_PTR directRegisteredInput = NULL;
+    uint32_t inputPitchForFrame = 0;
+    const uint64_t encodeInputTimestamp = nvCtx->encodeFrameIdx;
+    bool usingDirectEncodeInput = false;
+    bool allowDirectCudaArrayRetry = nvEnableExperimentalDirectEncodeCudaArrayNv12();
     LOG(
         "begin: surface=%p codedBuffer=%u forceIDR=%d frameIdx=%llu sessionInitialized=%d",
         (void *) surface,
@@ -6008,38 +6254,100 @@ static VAStatus nvEncodeEndPicture(VADriverContextP ctx, NVContext *nvCtx) {
         CHECK_CUDA_RESULT_RETURN(cu->cuCtxPopCurrent(NULL), VA_STATUS_ERROR_OPERATION_FAILED);
         return VA_STATUS_ERROR_OPERATION_FAILED;
     }
-    if (!copySurfaceToEncodeInputBuffer(nvCtx, surface)) {
-        LOG("copySurfaceToEncodeInputBuffer failed");
-        CHECK_CUDA_RESULT_RETURN(cu->cuCtxPopCurrent(NULL), VA_STATUS_ERROR_OPERATION_FAILED);
-        return VA_STATUS_ERROR_OPERATION_FAILED;
-    }
-    CHECK_CUDA_RESULT_RETURN(cu->cuCtxPopCurrent(NULL), VA_STATUS_ERROR_OPERATION_FAILED);
-    LOG("surface copy finished, entering NVENC map/encode");
-
-    const uint32_t negotiatedApiVersion =
-        nvCtx->encodeNvencApiVersion != 0 ? nvCtx->encodeNvencApiVersion : NVENCAPI_VERSION;
-
-    NV_ENC_MAP_INPUT_RESOURCE mapInput = {0};
+prepare_input:
+    memset(&mapInput, 0, sizeof(mapInput));
     mapInput.version = nvencStructVersionForApi(NV_ENC_MAP_INPUT_RESOURCE_VER, negotiatedApiVersion);
-    mapInput.registeredResource = nvCtx->encodeRegisteredInput;
-    if (!checkNvencStatus(nvCtx->encodeApi.nvEncMapInputResource(nvCtx->encoder, &mapInput), "nvEncMapInputResource")) {
-        LOG("nvEncMapInputResource failed");
-        return VA_STATUS_ERROR_ENCODING_ERROR;
+    inputPitchForFrame = (uint32_t) nvCtx->encodeInputPitch;
+
+    if (!usingDirectEncodeInput && allowDirectCudaArrayRetry &&
+        tryRegisterDirectEncodeInputCudaArrayNv12(
+            nvCtx,
+            surface,
+            &directRegisteredInput,
+            &inputPitchForFrame)) {
+        mapInput.registeredResource = directRegisteredInput;
+        if (checkNvencStatus(
+                nvCtx->encodeApi.nvEncMapInputResource(nvCtx->encoder, &mapInput),
+                "nvEncMapInputResource(direct CUDAARRAY NV12)")) {
+            noteNvencMappedCreate(mapInput.mappedResource);
+            LOG(
+                "mapped direct input resource mappedResource=%p mappedBufferFmt=0x%x",
+                mapInput.mappedResource,
+                mapInput.mappedBufferFmt
+            );
+            if (mapInput.mappedBufferFmt == NV_ENC_BUFFER_FORMAT_NV12) {
+                usingDirectEncodeInput = true;
+                LOG(
+                    "encode input prepared path=direct-cudaarray pitch=%u array0=%p array1=%p",
+                    inputPitchForFrame,
+                    (void *) surface->backingImage->arrays[0],
+                    (void *) surface->backingImage->arrays[1]
+                );
+            } else {
+                LOG(
+                    "direct encode cudaarray reject reason=mapped_format_mismatch mappedFmt=0x%x expected=0x%x",
+                    mapInput.mappedBufferFmt,
+                    NV_ENC_BUFFER_FORMAT_NV12
+                );
+                noteNvencMappedDestroy(mapInput.mappedResource);
+                checkNvencStatus(
+                    nvCtx->encodeApi.nvEncUnmapInputResource(nvCtx->encoder, mapInput.mappedResource),
+                    "nvEncUnmapInputResource(direct CUDAARRAY NV12)"
+                );
+                mapInput.mappedResource = NULL;
+                cleanupDirectEncodeRegisteredInput(nvCtx, &directRegisteredInput);
+            }
+        } else {
+            LOG("direct encode cudaarray reject reason=map_failed");
+            cleanupDirectEncodeRegisteredInput(nvCtx, &directRegisteredInput);
+        }
+        allowDirectCudaArrayRetry = false;
     }
-    noteNvencMappedCreate(mapInput.mappedResource);
-    LOG("mapped input resource mappedResource=%p", mapInput.mappedResource);
+
+    if (!usingDirectEncodeInput) {
+        if (!ensureEncodeInputRegisteredCurrentContext(nvCtx)) {
+            LOG("failed to lazily prepare staging input buffer");
+            CHECK_CUDA_RESULT_RETURN(cu->cuCtxPopCurrent(NULL), VA_STATUS_ERROR_OPERATION_FAILED);
+            return VA_STATUS_ERROR_OPERATION_FAILED;
+        }
+        if (!copySurfaceToEncodeInputBuffer(nvCtx, surface)) {
+            LOG("copySurfaceToEncodeInputBuffer failed");
+            CHECK_CUDA_RESULT_RETURN(cu->cuCtxPopCurrent(NULL), VA_STATUS_ERROR_OPERATION_FAILED);
+            return VA_STATUS_ERROR_OPERATION_FAILED;
+        }
+        CHECK_CUDA_RESULT_RETURN(cu->cuCtxPopCurrent(NULL), VA_STATUS_ERROR_OPERATION_FAILED);
+        LOG("surface copy finished, entering NVENC map/encode");
+
+        mapInput.registeredResource = nvCtx->encodeRegisteredInput;
+        if (!checkNvencStatus(
+                nvCtx->encodeApi.nvEncMapInputResource(nvCtx->encoder, &mapInput),
+                "nvEncMapInputResource")) {
+            LOG("nvEncMapInputResource failed");
+            return VA_STATUS_ERROR_ENCODING_ERROR;
+        }
+        noteNvencMappedCreate(mapInput.mappedResource);
+        LOG("mapped input resource mappedResource=%p", mapInput.mappedResource);
+        LOG(
+            "encode input prepared path=copy-to-staging pitch=%u entering NVENC map/encode",
+            inputPitchForFrame
+        );
+    } else {
+        CHECK_CUDA_RESULT_RETURN(cu->cuCtxPopCurrent(NULL), VA_STATUS_ERROR_OPERATION_FAILED);
+    }
 
     NV_ENC_PIC_PARAMS picParams = {0};
     picParams.version = nvencStructVersionForApi(NV_ENC_PIC_PARAMS_VER, negotiatedApiVersion);
     picParams.inputWidth = surface->width;
     picParams.inputHeight = surface->height;
-    picParams.inputPitch = (uint32_t)nvCtx->encodeInputPitch;
+    picParams.inputPitch = inputPitchForFrame;
     picParams.inputBuffer = mapInput.mappedResource;
     picParams.outputBitstream = nvCtx->encodeBitstream;
-    picParams.inputTimeStamp = nvCtx->encodeFrameIdx++;
-    picParams.bufferFmt = nvCtx->encodeInputFormat != NV_ENC_BUFFER_FORMAT_UNDEFINED
-        ? nvCtx->encodeInputFormat
-        : NV_ENC_BUFFER_FORMAT_NV12;
+    picParams.inputTimeStamp = encodeInputTimestamp;
+    picParams.bufferFmt = usingDirectEncodeInput
+        ? mapInput.mappedBufferFmt
+        : (nvCtx->encodeInputFormat != NV_ENC_BUFFER_FORMAT_UNDEFINED
+            ? nvCtx->encodeInputFormat
+            : NV_ENC_BUFFER_FORMAT_NV12);
     picParams.pictureStruct = NV_ENC_PIC_STRUCT_FRAME;
     const bool useHevcPackedHeaders =
         isHEVCEncodeProfile(nvCtx->profile) &&
@@ -6068,10 +6376,25 @@ static VAStatus nvEncodeEndPicture(VADriverContextP ctx, NVContext *nvCtx) {
     VAStatus status = VA_STATUS_SUCCESS;
     if (!checkNvencStatus(nvCtx->encodeApi.nvEncEncodePicture(nvCtx->encoder, &picParams), "nvEncEncodePicture")) {
         LOG("nvEncEncodePicture failed");
+        if (usingDirectEncodeInput) {
+            LOG("direct encode cudaarray path failed during encode; retrying with staging copy");
+            if (mapInput.mappedResource != NULL) {
+                noteNvencMappedDestroy(mapInput.mappedResource);
+                checkNvencStatus(
+                    nvCtx->encodeApi.nvEncUnmapInputResource(nvCtx->encoder, mapInput.mappedResource),
+                    "nvEncUnmapInputResource(direct CUDAARRAY NV12)"
+                );
+                mapInput.mappedResource = NULL;
+            }
+            cleanupDirectEncodeRegisteredInput(nvCtx, &directRegisteredInput);
+            usingDirectEncodeInput = false;
+            goto prepare_input;
+        }
         status = VA_STATUS_ERROR_ENCODING_ERROR;
         goto out_unmap;
     }
     LOG("nvEncEncodePicture succeeded");
+    nvCtx->encodeFrameIdx++;
 
     NV_ENC_LOCK_BITSTREAM lockBitstream = {0};
     lockBitstream.version = nvencStructVersionForApi(NV_ENC_LOCK_BITSTREAM_VER, negotiatedApiVersion);
@@ -6142,6 +6465,7 @@ out_unmap:
         noteNvencMappedDestroy(mapInput.mappedResource);
     }
     checkNvencStatus(nvCtx->encodeApi.nvEncUnmapInputResource(nvCtx->encoder, mapInput.mappedResource), "nvEncUnmapInputResource");
+    cleanupDirectEncodeRegisteredInput(nvCtx, &directRegisteredInput);
     LOG("input resource unmapped status=%d", status);
     return status;
 }
@@ -8012,9 +8336,15 @@ static VAStatus nvTerminate( VADriverContextP ctx )
     free(drv);
 
     if (lastInstance) {
-        resetProcessTransientState();
-        releaseGlobalCodecFunctions();
-        LOG("Released global CUDA/NVDEC/NVENC function tables after last instance shutdown");
+        if (nvEnableExperimentalDirectEncodeCudaArrayNv12()) {
+            LOG(
+                "Skipping global CUDA/NVDEC/NVENC function table release after last instance shutdown while experimental direct CUDAARRAY NV12 is enabled"
+            );
+        } else {
+            resetProcessTransientState();
+            releaseGlobalCodecFunctions();
+            LOG("Released global CUDA/NVDEC/NVENC function tables after last instance shutdown");
+        }
     }
 
     return VA_STATUS_SUCCESS;
