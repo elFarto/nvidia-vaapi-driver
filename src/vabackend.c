@@ -2407,8 +2407,11 @@ static bool copySurfaceToEncodeInputBuffer(NVContext *nvCtx, NVSurface *surface)
     }
 
     for (uint32_t i = 0; i < planeCount; i++) {
-        if (surface->backingImage->arrays[i] == NULL) {
-            LOG("surface backing plane %u is NULL", i);
+        const bool hasArrayView = surface->backingImage->arrays[i] != NULL;
+        const bool hasBufferView =
+            surface->backingImage->cudaImages[i].mappedBuffer != 0;
+        if (!hasArrayView && !hasBufferView) {
+            LOG("surface backing plane %u has neither array nor mapped-buffer view", i);
             return false;
         }
         if (surface->backingImage->strides[i] > 0 &&
@@ -2479,17 +2482,31 @@ static bool copySurfaceToEncodeInputBuffer(NVContext *nvCtx, NVSurface *surface)
         CHECK_CUDA_RESULT_RETURN(cu->cuMemsetD8Async(nvCtx->encodeInputBuffer + (planeBytes * 2), 0x80, planeBytes, 0), false);
     }
 
+    const bool plane0UsesMappedBuffer =
+        surface->backingImage->arrays[0] == NULL &&
+        surface->backingImage->cudaImages[0].mappedBuffer != 0;
     CUDA_MEMCPY2D plane0Copy = {
-        .srcMemoryType = CU_MEMORYTYPE_ARRAY,
-        .srcArray = surface->backingImage->arrays[0],
-        .srcXInBytes = srcXInBytes,
-        .srcY = srcOffsetY,
         .dstMemoryType = CU_MEMORYTYPE_DEVICE,
         .dstDevice = nvCtx->encodeInputBuffer,
         .dstPitch = nvCtx->encodeInputPitch,
         .WidthInBytes = copyWidthBytes,
         .Height = copyHeightPixels,
     };
+    if (plane0UsesMappedBuffer) {
+        plane0Copy.srcMemoryType = CU_MEMORYTYPE_DEVICE;
+        plane0Copy.srcDevice =
+            surface->backingImage->cudaImages[0].mappedBuffer +
+            (CUdeviceptr)(size_t)surface->backingImage->offsets[0] +
+            (CUdeviceptr)srcXInBytes +
+            (CUdeviceptr)((size_t)srcOffsetY *
+                          (size_t)surface->backingImage->strides[0]);
+        plane0Copy.srcPitch = (size_t)surface->backingImage->strides[0];
+    } else {
+        plane0Copy.srcMemoryType = CU_MEMORYTYPE_ARRAY;
+        plane0Copy.srcArray = surface->backingImage->arrays[0];
+        plane0Copy.srcXInBytes = srcXInBytes;
+        plane0Copy.srcY = srcOffsetY;
+    }
 
     if (cu->cuMemcpy2DAsync != NULL) {
         CHECK_CUDA_RESULT_RETURN(cu->cuMemcpy2DAsync(&plane0Copy, 0), false);
@@ -2498,11 +2515,13 @@ static bool copySurfaceToEncodeInputBuffer(NVContext *nvCtx, NVSurface *surface)
     }
 
     if (is444) {
+        const bool plane1UsesMappedBuffer =
+            surface->backingImage->arrays[1] == NULL &&
+            surface->backingImage->cudaImages[1].mappedBuffer != 0;
+        const bool plane2UsesMappedBuffer =
+            surface->backingImage->arrays[2] == NULL &&
+            surface->backingImage->cudaImages[2].mappedBuffer != 0;
         CUDA_MEMCPY2D plane1Copy = {
-            .srcMemoryType = CU_MEMORYTYPE_ARRAY,
-            .srcArray = surface->backingImage->arrays[1],
-            .srcXInBytes = srcXInBytes,
-            .srcY = srcOffsetY,
             .dstMemoryType = CU_MEMORYTYPE_DEVICE,
             .dstDevice = nvCtx->encodeInputBuffer + planeBytes,
             .dstPitch = nvCtx->encodeInputPitch,
@@ -2510,16 +2529,42 @@ static bool copySurfaceToEncodeInputBuffer(NVContext *nvCtx, NVSurface *surface)
             .Height = copyHeightPixels,
         };
         CUDA_MEMCPY2D plane2Copy = {
-            .srcMemoryType = CU_MEMORYTYPE_ARRAY,
-            .srcArray = surface->backingImage->arrays[2],
-            .srcXInBytes = srcXInBytes,
-            .srcY = srcOffsetY,
             .dstMemoryType = CU_MEMORYTYPE_DEVICE,
             .dstDevice = nvCtx->encodeInputBuffer + (planeBytes * 2),
             .dstPitch = nvCtx->encodeInputPitch,
             .WidthInBytes = copyWidthBytes,
             .Height = copyHeightPixels,
         };
+        if (plane1UsesMappedBuffer) {
+            plane1Copy.srcMemoryType = CU_MEMORYTYPE_DEVICE;
+            plane1Copy.srcDevice =
+                surface->backingImage->cudaImages[1].mappedBuffer +
+                (CUdeviceptr)(size_t)surface->backingImage->offsets[1] +
+                (CUdeviceptr)srcXInBytes +
+                (CUdeviceptr)((size_t)srcOffsetY *
+                              (size_t)surface->backingImage->strides[1]);
+            plane1Copy.srcPitch = (size_t)surface->backingImage->strides[1];
+        } else {
+            plane1Copy.srcMemoryType = CU_MEMORYTYPE_ARRAY;
+            plane1Copy.srcArray = surface->backingImage->arrays[1];
+            plane1Copy.srcXInBytes = srcXInBytes;
+            plane1Copy.srcY = srcOffsetY;
+        }
+        if (plane2UsesMappedBuffer) {
+            plane2Copy.srcMemoryType = CU_MEMORYTYPE_DEVICE;
+            plane2Copy.srcDevice =
+                surface->backingImage->cudaImages[2].mappedBuffer +
+                (CUdeviceptr)(size_t)surface->backingImage->offsets[2] +
+                (CUdeviceptr)srcXInBytes +
+                (CUdeviceptr)((size_t)srcOffsetY *
+                              (size_t)surface->backingImage->strides[2]);
+            plane2Copy.srcPitch = (size_t)surface->backingImage->strides[2];
+        } else {
+            plane2Copy.srcMemoryType = CU_MEMORYTYPE_ARRAY;
+            plane2Copy.srcArray = surface->backingImage->arrays[2];
+            plane2Copy.srcXInBytes = srcXInBytes;
+            plane2Copy.srcY = srcOffsetY;
+        }
 
         if (cu->cuMemcpy2DAsync != NULL) {
             CHECK_CUDA_RESULT_RETURN(cu->cuMemcpy2DAsync(&plane1Copy, 0), false);
@@ -2528,17 +2573,31 @@ static bool copySurfaceToEncodeInputBuffer(NVContext *nvCtx, NVSurface *surface)
         }
         CHECK_CUDA_RESULT_RETURN(cu->cuMemcpy2D(&plane2Copy), false);
     } else {
+        const bool chromaUsesMappedBuffer =
+            surface->backingImage->arrays[1] == NULL &&
+            surface->backingImage->cudaImages[1].mappedBuffer != 0;
         CUDA_MEMCPY2D chromaCopy = {
-            .srcMemoryType = CU_MEMORYTYPE_ARRAY,
-            .srcArray = surface->backingImage->arrays[1],
-            .srcXInBytes = srcXInBytes,
-            .srcY = chromaSrcY,
             .dstMemoryType = CU_MEMORYTYPE_DEVICE,
             .dstDevice = nvCtx->encodeInputBuffer + lumaPlaneBytes,
             .dstPitch = nvCtx->encodeInputPitch,
             .WidthInBytes = copyWidthBytes,
             .Height = chromaCopyHeight,
         };
+        if (chromaUsesMappedBuffer) {
+            chromaCopy.srcMemoryType = CU_MEMORYTYPE_DEVICE;
+            chromaCopy.srcDevice =
+                surface->backingImage->cudaImages[1].mappedBuffer +
+                (CUdeviceptr)(size_t)surface->backingImage->offsets[1] +
+                (CUdeviceptr)srcXInBytes +
+                (CUdeviceptr)((size_t)chromaSrcY *
+                              (size_t)surface->backingImage->strides[1]);
+            chromaCopy.srcPitch = (size_t)surface->backingImage->strides[1];
+        } else {
+            chromaCopy.srcMemoryType = CU_MEMORYTYPE_ARRAY;
+            chromaCopy.srcArray = surface->backingImage->arrays[1];
+            chromaCopy.srcXInBytes = srcXInBytes;
+            chromaCopy.srcY = chromaSrcY;
+        }
         CHECK_CUDA_RESULT_RETURN(cu->cuMemcpy2D(&chromaCopy), false);
     }
 

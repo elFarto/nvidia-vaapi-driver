@@ -300,6 +300,49 @@ static bool map_external_memory_to_cuda_array(
     return true;
 }
 
+static bool map_external_memory_to_cuda_buffer(
+    NVDriver *drv,
+    CUexternalMemory extMem,
+    const NVDriverImage *image,
+    CUdeviceptr *outMappedBuffer,
+    CUexternalMemoryHandleType handleTypeForLog
+) {
+    if (drv == NULL || extMem == NULL || image == NULL || outMappedBuffer == NULL) {
+        return false;
+    }
+
+    CUDA_EXTERNAL_MEMORY_BUFFER_DESC bufferDesc = {
+        .offset = 0,
+        .size = image->memorySize,
+        .flags = 0,
+    };
+
+    *outMappedBuffer = 0;
+
+    CUresult mapResult =
+        drv->cu->cuExternalMemoryGetMappedBuffer(outMappedBuffer, extMem, &bufferDesc);
+    if (mapResult != CUDA_SUCCESS) {
+        const char *errStr = "unknown";
+        drv->cu->cuGetErrorString(mapResult, &errStr);
+        LOG(
+            "import_to_cuda map buffer failed handleType=%d cuerr=%d (%s) size=%u width=%u height=%u pitch=%u offset=%u fourcc=0x%x modifier=0x%llx",
+            handleTypeForLog,
+            mapResult,
+            errStr,
+            image->memorySize,
+            image->width,
+            image->height,
+            image->pitch,
+            image->offset,
+            image->fourcc,
+            (unsigned long long)image->mods
+        );
+        return false;
+    }
+
+    return true;
+}
+
 static bool import_to_cuda(NVDriver *drv, NVDriverImage *image, int bpc, int channels, NVCudaImage *cudaImage, CUarray *array) {
     if (image->useDmaBufHandle) {
         LOG(
@@ -383,10 +426,131 @@ static bool import_to_cuda(NVDriver *drv, NVDriverImage *image, int bpc, int cha
     return true;
 }
 
+static bool import_to_cuda_buffer(
+    NVDriver *drv,
+    NVDriverImage *image,
+    NVCudaImage *cudaImage
+) {
+    if (drv == NULL || image == NULL || cudaImage == NULL) {
+        return false;
+    }
+
+    if (drv->cu->cuExternalMemoryGetMappedBuffer == NULL) {
+        LOG("import_to_cuda_buffer skipped: cuExternalMemoryGetMappedBuffer is unavailable");
+        return false;
+    }
+
+    const int sourceFd = image->nvFd;
+    CUexternalMemoryHandleType handleTypes[2] = {0};
+    size_t handleTypeCount = 0;
+    if (image->useDmaBufHandle) {
+#ifdef CU_EXTERNAL_MEMORY_HANDLE_TYPE_DMABUF_FD
+        handleTypes[handleTypeCount++] = CU_EXTERNAL_MEMORY_HANDLE_TYPE_DMABUF_FD;
+#else
+        const CUexternalMemoryHandleType kDmaBufHandleType = (CUexternalMemoryHandleType)9;
+        handleTypes[handleTypeCount++] = kDmaBufHandleType;
+        LOG(
+            "DMABUF_FD handle type is missing from this CUDA SDK; trying numeric handleType=%d for buffer import",
+            (int)kDmaBufHandleType
+        );
+#endif
+        handleTypes[handleTypeCount++] = CU_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD;
+    } else {
+        handleTypes[handleTypeCount++] = CU_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD;
+    }
+
+    for (size_t attempt = 0; attempt < handleTypeCount; attempt++) {
+        const CUexternalMemoryHandleType handleType = handleTypes[attempt];
+        int importAttemptFd = dup(sourceFd);
+        if (importAttemptFd < 0) {
+            LOG(
+                "import_to_cuda_buffer dup failed handleType=%d attempt=%zu/%zu errno=%d",
+                handleType,
+                attempt + 1,
+                handleTypeCount,
+                errno
+            );
+            continue;
+        }
+
+        LOG(
+            "import_to_cuda_buffer begin fd=%d size=%u width=%u height=%u pitch=%u offset=%u fourcc=0x%x modifier=0x%llx handleType=%d attempt=%zu/%zu",
+            importAttemptFd,
+            image->memorySize,
+            image->width,
+            image->height,
+            image->pitch,
+            image->offset,
+            image->fourcc,
+            (unsigned long long)image->mods,
+            handleType,
+            attempt + 1,
+            handleTypeCount
+        );
+
+        CUDA_EXTERNAL_MEMORY_HANDLE_DESC extMemDesc = {
+            .type = handleType,
+            .handle.fd = importAttemptFd,
+            .flags = 0,
+            .size = image->memorySize,
+        };
+
+        CUresult importResult =
+            drv->cu->cuImportExternalMemory(&cudaImage->extMem, &extMemDesc);
+        if (importResult != CUDA_SUCCESS) {
+            const char *errStr = "unknown";
+            drv->cu->cuGetErrorString(importResult, &errStr);
+            LOG(
+                "import_to_cuda_buffer import failed handleType=%d attempt=%zu/%zu cuerr=%d (%s)",
+                handleType,
+                attempt + 1,
+                handleTypeCount,
+                importResult,
+                errStr
+            );
+            backendCloseTrackedNvKmsFd(importAttemptFd, "import_to_cuda_buffer_import_failed");
+            continue;
+        }
+
+        directInitCudaImage(cudaImage, importAttemptFd);
+        if (sourceFd != 0) {
+            directCloseImportedPlaneFd(sourceFd, "import_to_cuda_buffer_source_fd_replaced_by_dup");
+            image->nvFd = 0;
+            if (image->nvFd2 == sourceFd) {
+                image->nvFd2 = 0;
+            }
+        }
+
+        if (!map_external_memory_to_cuda_buffer(
+                drv,
+                cudaImage->extMem,
+                image,
+                &cudaImage->mappedBuffer,
+                handleType)) {
+            CHECK_CUDA_RESULT(drv->cu->cuDestroyExternalMemory(cudaImage->extMem));
+            cudaImage->extMem = NULL;
+            directReleaseCudaImportedFd(cudaImage, "import_to_cuda_buffer_map_failed");
+            continue;
+        }
+
+        cudaImage->mappedBufferSize = image->memorySize;
+        LOG(
+            "import_to_cuda_buffer success buffer=%p handleType=%d",
+            (void *)cudaImage->mappedBuffer,
+            handleType
+        );
+        return true;
+    }
+
+    return false;
+}
+
 static void direct_releaseTemporaryCudaImage(NVDriver *drv, NVCudaImage *cudaImage) {
     if (cudaImage == NULL) {
         return;
     }
+    cudaImage->mappedBuffer = 0;
+    cudaImage->mappedBufferSize = 0;
     if (cudaImage->mipmapArray != NULL) {
         drv->cu->cuMipmappedArrayDestroy(cudaImage->mipmapArray);
         cudaImage->mipmapArray = NULL;
@@ -756,6 +920,8 @@ static void destroyBackingImage(NVDriver *drv, BackingImage *img) {
         if (img->arrays[i] != NULL) {
             CHECK_CUDA_RESULT(drv->cu->cuArrayDestroy(img->arrays[i]));
         }
+        img->cudaImages[i].mappedBuffer = 0;
+        img->cudaImages[i].mappedBufferSize = 0;
 
         if (img->cudaImages[i].mipmapArray != NULL) {
             CHECK_CUDA_RESULT(drv->cu->cuMipmappedArrayDestroy(img->cudaImages[i].mipmapArray));
@@ -803,6 +969,8 @@ static void directReleaseBackingCudaViews(NVDriver *drv, BackingImage *img, cons
             CHECK_CUDA_RESULT(drv->cu->cuArrayDestroy(img->arrays[i]));
             img->arrays[i] = NULL;
         }
+        img->cudaImages[i].mappedBuffer = 0;
+        img->cudaImages[i].mappedBufferSize = 0;
 
         if (img->cudaImages[i].mipmapArray != NULL) {
             CHECK_CUDA_RESULT(drv->cu->cuMipmappedArrayDestroy(img->cudaImages[i].mipmapArray));
@@ -836,7 +1004,7 @@ static bool directRestoreBackingCudaViews(NVDriver *drv, BackingImage *img, cons
 
     const NVFormatInfo *fmtInfo = &formatsInfo[img->format];
     for (uint32_t i = 0; i < fmtInfo->numPlanes; i++) {
-        if (img->arrays[i] != NULL) {
+        if (img->arrays[i] != NULL || img->cudaImages[i].mappedBuffer != 0) {
             continue;
         }
         if (img->fds[i] < 0) {
@@ -1182,7 +1350,8 @@ static bool direct_realiseSurface(NVDriver *drv, NVSurface *surface) {
         }
 
         direct_attachBackingImageToSurface(drv, surface, img);
-    } else if (surface->backingImage->arrays[0] == NULL) {
+    } else if (surface->backingImage->arrays[0] == NULL &&
+               surface->backingImage->cudaImages[0].mappedBuffer == 0) {
         if (!directRestoreBackingCudaViews(drv, surface->backingImage, "realiseSurface_restore")) {
             LOG("Unable to restore surface backing CUDA views: %p (%d)", surface, surface->pictureIdx)
             pthread_mutex_unlock(&surface->mutex);
@@ -1942,6 +2111,7 @@ static bool direct_importExternalSurfaceImpl(NVDriver *drv, NVSurface *surface, 
     backingImage->fourcc = desc->fourcc;
     backingImage->width = surface->width;
     backingImage->height = surface->height;
+    bool importedWithMappedBuffers = false;
     for (uint32_t i = 0; i < fmtInfo->numPlanes; i++) {
         if (planeObjectIndex[i] >= desc->num_objects) {
             LOG("External plane %u has invalid object index %u (objects=%u)", i, planeObjectIndex[i], desc->num_objects);
@@ -2019,6 +2189,7 @@ static bool direct_importExternalSurfaceImpl(NVDriver *drv, NVSurface *surface, 
             importFormat == NV_FORMAT_444P &&
             enable444PDirectImport &&
             isLinearModifier;
+        const bool useBufferDirectForLinear444 = usePitchWidthForLinear444;
         uint32_t importWidth = planeWidth;
         if (!isLinearModifier && usePitchWidthForNonLinear) {
             importWidth = pitchWidth;
@@ -2124,13 +2295,14 @@ static bool direct_importExternalSurfaceImpl(NVDriver *drv, NVSurface *surface, 
             (unsigned long long)modifier
         );
         LOG(
-            "Import external plane %u mapping mode: linear=%s importWidth=%u objectSize=%u (descSize=%u minPlaneSize=%llu)",
+            "Import external plane %u mapping mode: linear=%s importWidth=%u objectSize=%u (descSize=%u minPlaneSize=%llu) buffer_direct_linear_444=%s",
             i,
             isLinearModifier ? "yes" : "no",
             importImage.width,
             importImage.memorySize,
             desc->objects[importObjectIndex].size,
-            (unsigned long long)minPlaneSize
+            (unsigned long long)minPlaneSize,
+            useBufferDirectForLinear444 ? "yes" : "no"
         );
 
         bool importedPlane = false;
@@ -2153,7 +2325,11 @@ static bool direct_importExternalSurfaceImpl(NVDriver *drv, NVSurface *surface, 
                 planeObjectIndex[0]
             );
         }
-        if (tryShareExtMemFromPlane0) {
+        if (useBufferDirectForLinear444) {
+            importedWithMappedBuffers = true;
+            importedPlane =
+                import_to_cuda_buffer(drv, &importImage, &backingImage->cudaImages[i]);
+        } else if (tryShareExtMemFromPlane0) {
             LOG(
                 "Import external plane %u trying shared extMem mapping from plane0 extMem=%p object=%u object0=%u same-backing=%s",
                 i,
@@ -2288,7 +2464,9 @@ static bool direct_importExternalSurfaceImpl(NVDriver *drv, NVSurface *surface, 
 
     direct_attachBackingImageToSurface(drv, surface, backingImage);
     LOG(
-        "Imported external surface %ux%u into CUDA arrays fourcc=0x%x",
+        importedWithMappedBuffers
+            ? "Imported external surface %ux%u into CUDA buffer views fourcc=0x%x"
+            : "Imported external surface %ux%u into CUDA arrays fourcc=0x%x",
         surface->width,
         surface->height,
         desc->fourcc

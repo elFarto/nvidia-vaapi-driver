@@ -101,6 +101,8 @@ typedef struct
 typedef struct {
     CUexternalMemory extMem;
     CUmipmappedArray mipmapArray;
+    CUdeviceptr mappedBuffer;
+    uint64_t mappedBufferSize;
     int importedFd;
 } NVCudaImage;
 
