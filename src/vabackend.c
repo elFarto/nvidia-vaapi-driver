@@ -106,6 +106,48 @@ static bool nvEnableExperimentalDirectEncodeCudaArrayNv12(void)
     return isTruthyEnv(getenv("NVD_EXPERIMENTAL_DIRECT_ENCODE_CUDAARRAY_NV12"));
 }
 
+static bool nvEnableExperimentalDirectEncodeCudaPtrNv12(void)
+{
+    return isTruthyEnv(getenv("NVD_EXPERIMENTAL_DIRECT_ENCODE_CUDAPTR_NV12"));
+}
+
+static bool nvEnableExperimentalDirectEncodeCudaPtrTightRepackNv12(void)
+{
+    return isTruthyEnv(getenv("NVD_EXPERIMENTAL_DIRECT_ENCODE_CUDAPTR_NV12_TIGHT_REPACK"));
+}
+
+typedef enum {
+    NV_DIRECT_ENCODE_TIGHT_REPACK_SOURCE_AUTO = 0,
+    NV_DIRECT_ENCODE_TIGHT_REPACK_SOURCE_WHOLE_FRAME,
+    NV_DIRECT_ENCODE_TIGHT_REPACK_SOURCE_PER_PLANE,
+} NvDirectEncodeTightRepackSourceMode;
+
+static NvDirectEncodeTightRepackSourceMode nvDirectEncodeTightRepackSourceMode(void)
+{
+    const char *value =
+        getenv("NVD_EXPERIMENTAL_DIRECT_ENCODE_CUDAPTR_NV12_TIGHT_REPACK_SOURCE");
+    if (value == NULL || value[0] == '\0' || strcmp(value, "auto") == 0) {
+        return NV_DIRECT_ENCODE_TIGHT_REPACK_SOURCE_AUTO;
+    }
+    if (strcmp(value, "whole-frame") == 0 ||
+        strcmp(value, "whole_frame") == 0 ||
+        strcmp(value, "wholeframe") == 0) {
+        return NV_DIRECT_ENCODE_TIGHT_REPACK_SOURCE_WHOLE_FRAME;
+    }
+    if (strcmp(value, "per-plane") == 0 ||
+        strcmp(value, "per_plane") == 0 ||
+        strcmp(value, "perplane") == 0 ||
+        strcmp(value, "plane") == 0) {
+        return NV_DIRECT_ENCODE_TIGHT_REPACK_SOURCE_PER_PLANE;
+    }
+    return NV_DIRECT_ENCODE_TIGHT_REPACK_SOURCE_AUTO;
+}
+
+static bool nvAllowImportedGpuCopyDirectEncodeCudaArrayNv12(void)
+{
+    return isTruthyEnv(getenv("NVD_EXPERIMENTAL_ALLOW_IMPORTED_GPU_COPY_DIRECT_ENCODE"));
+}
+
 static pthread_mutex_t concurrency_mutex = PTHREAD_MUTEX_INITIALIZER;
 static uint32_t instances;
 static uint32_t max_instances;
@@ -2776,19 +2818,26 @@ static bool tryRegisterDirectEncodeInputCudaArrayNv12(
         );
         return false;
     }
-    if (backingImage->importedGpuCopy) {
+    if (backingImage->importedGpuCopy &&
+        !nvAllowImportedGpuCopyDirectEncodeCudaArrayNv12()) {
         LOG("direct encode cudaarray reject reason=imported_gpu_copy_backing");
-        return false;
+        return false;   
     }
-    if (backingImage->cudaImages[0].mappedBuffer != 0 ||
-        backingImage->cudaImages[1].mappedBuffer != 0) {
+    if (backingImage->importedGpuCopy) {
         LOG(
-            "direct encode cudaarray reject reason=buffer_view_present buffer0=%p buffer1=%p",
-            (void *) backingImage->cudaImages[0].mappedBuffer,
-            (void *) backingImage->cudaImages[1].mappedBuffer
+            "direct encode cudaarray allowing imported_gpu_copy_backing via "
+            "NVD_EXPERIMENTAL_ALLOW_IMPORTED_GPU_COPY_DIRECT_ENCODE"
         );
-        return false;
     }
+    // if (backingImage->cudaImages[0].mappedBuffer != 0 ||
+    //     backingImage->cudaImages[1].mappedBuffer != 0) {
+    //     LOG(
+    //         "direct encode cudaarray reject reason=buffer_view_present buffer0=%p buffer1=%p",
+    //         (void *) backingImage->cudaImages[0].mappedBuffer,
+    //         (void *) backingImage->cudaImages[1].mappedBuffer
+    //     );
+    //     return false;
+    // }
 
     if (backingImage->directEncodeWholeFrameArray != NULL) {
         directArray = backingImage->directEncodeWholeFrameArray;
@@ -2878,6 +2927,361 @@ static bool tryRegisterDirectEncodeInputCudaArrayNv12(
         (void *) backingImage->arrays[0],
         (void *) backingImage->arrays[1],
         (void *) backingImage->directEncodeWholeFrameArray,
+        *inputPitch,
+        (unsigned long long) backingImage->mods[0],
+        (unsigned long long) backingImage->mods[1]
+    );
+    return true;
+}
+
+static bool ensureDirectEncodeTightCudaPtrNv12Buffer(
+        NVContext *nvCtx,
+        NVSurface *surface)
+{
+    NVDriver *drv = nvCtx != NULL ? nvCtx->drv : NULL;
+    CudaFunctions *cu = drv != NULL ? drv->cu : NULL;
+    BackingImage *backingImage = surface != NULL ? surface->backingImage : NULL;
+    const NvDirectEncodeTightRepackSourceMode requestedSourceMode =
+        nvDirectEncodeTightRepackSourceMode();
+    const uint32_t chromaRows = surface != NULL ? ((surface->height + 1u) / 2u) : 0u;
+    const uint32_t totalRows = surface != NULL ? (surface->height + chromaRows) : 0u;
+    const size_t copyWidthBytes = surface != NULL ? (size_t) surface->width : 0u;
+    bool wholeFrameMappedBufferReady = false;
+    bool plane0UsesMappedBuffer = false;
+    bool plane1UsesMappedBuffer = false;
+    bool useWholeFrameSource = false;
+    const char *sourceModeName = "auto";
+
+    if (drv == NULL || cu == NULL || surface == NULL || backingImage == NULL) {
+        LOG("direct encode cudaptr tight reject reason=missing_surface_backing");
+        return false;
+    }
+    if (surface->format != cudaVideoSurfaceFormat_NV12 ||
+        backingImage->format != NV_FORMAT_NV12) {
+        LOG(
+            "direct encode cudaptr tight reject reason=format_not_nv12 surface_format=%d backing_format=%d",
+            surface->format,
+            backingImage->format
+        );
+        return false;
+    }
+
+    if (directEnsureWholeFrameNv12CudaBuffer(drv, backingImage)) {
+        wholeFrameMappedBufferReady =
+            backingImage->directEncodeWholeFrameCudaImage.mappedBuffer != 0 &&
+            backingImage->directEncodeWholeFramePitch == (uint32_t) backingImage->strides[0];
+    }
+    if (copyWidthBytes == 0u || surface->height == 0u || totalRows == 0u) {
+        LOG(
+            "direct encode cudaptr tight reject reason=invalid_size width=%u height=%u rows=%u",
+            surface->width,
+            surface->height,
+            totalRows
+        );
+        return false;
+    }
+
+    if (backingImage->directEncodeTightCudaBuffer != 0 &&
+        (backingImage->directEncodeTightCudaBufferPitch < copyWidthBytes ||
+         backingImage->directEncodeTightCudaBufferRows != totalRows)) {
+        CHECK_CUDA_RESULT(cu->cuMemFree(backingImage->directEncodeTightCudaBuffer));
+        backingImage->directEncodeTightCudaBuffer = 0;
+        backingImage->directEncodeTightCudaBufferSize = 0;
+        backingImage->directEncodeTightCudaBufferPitch = 0;
+        backingImage->directEncodeTightCudaBufferRows = 0;
+    }
+
+    if (backingImage->directEncodeTightCudaBuffer == 0) {
+        size_t tightPitch = 0;
+        CUdeviceptr tightBuffer = 0;
+        CUresult allocResult = cu->cuMemAllocPitch(
+            &tightBuffer,
+            &tightPitch,
+            copyWidthBytes,
+            totalRows,
+            16
+        );
+        if (CHECK_CUDA_RESULT(allocResult)) {
+            LOG(
+                "direct encode cudaptr tight reject reason=alloc_failed widthBytes=%zu rows=%u",
+                copyWidthBytes,
+                totalRows
+            );
+            return false;
+        }
+        backingImage->directEncodeTightCudaBuffer = tightBuffer;
+        backingImage->directEncodeTightCudaBufferPitch = (uint32_t) tightPitch;
+        backingImage->directEncodeTightCudaBufferRows = totalRows;
+        backingImage->directEncodeTightCudaBufferSize = tightPitch * totalRows;
+    }
+
+    plane0UsesMappedBuffer =
+        backingImage->arrays[0] == NULL &&
+        backingImage->cudaImages[0].mappedBuffer != 0;
+    plane1UsesMappedBuffer =
+        backingImage->arrays[1] == NULL &&
+        backingImage->cudaImages[1].mappedBuffer != 0;
+
+    const bool plane0ViewReady =
+        plane0UsesMappedBuffer || backingImage->arrays[0] != NULL;
+    const bool plane1ViewReady =
+        plane1UsesMappedBuffer || backingImage->arrays[1] != NULL;
+
+    switch (requestedSourceMode) {
+    case NV_DIRECT_ENCODE_TIGHT_REPACK_SOURCE_WHOLE_FRAME:
+        useWholeFrameSource = true;
+        sourceModeName = "whole-frame-buffer";
+        break;
+    case NV_DIRECT_ENCODE_TIGHT_REPACK_SOURCE_PER_PLANE:
+        useWholeFrameSource = false;
+        sourceModeName = "per-plane-view";
+        break;
+    case NV_DIRECT_ENCODE_TIGHT_REPACK_SOURCE_AUTO:
+    default:
+        useWholeFrameSource = wholeFrameMappedBufferReady;
+        sourceModeName = useWholeFrameSource ? "whole-frame-buffer" : "per-plane-view";
+        break;
+    }
+
+    if (useWholeFrameSource && !wholeFrameMappedBufferReady) {
+        LOG(
+            "direct encode cudaptr tight reject reason=missing_requested_whole_frame_source requested_source=%s",
+            sourceModeName
+        );
+        return false;
+    }
+    if (!useWholeFrameSource && !plane0ViewReady) {
+        LOG("direct encode cudaptr tight reject reason=missing_plane0_view");
+        return false;
+    }
+    if (!useWholeFrameSource && !plane1ViewReady) {
+        LOG("direct encode cudaptr tight reject reason=missing_plane1_view");
+        return false;
+    }
+
+    const size_t tightPitch = backingImage->directEncodeTightCudaBufferPitch;
+    const size_t lumaPlaneBytes = tightPitch * surface->height;
+    const size_t chromaPlaneBytes = tightPitch * chromaRows;
+    if (tightPitch > copyWidthBytes && cu->cuMemsetD8Async != NULL) {
+        CHECK_CUDA_RESULT_RETURN(
+            cu->cuMemsetD8Async(
+                backingImage->directEncodeTightCudaBuffer,
+                0,
+                lumaPlaneBytes,
+                0),
+            false);
+        CHECK_CUDA_RESULT_RETURN(
+            cu->cuMemsetD8Async(
+                backingImage->directEncodeTightCudaBuffer + lumaPlaneBytes,
+                0x80,
+                chromaPlaneBytes,
+                0),
+            false);
+        if (optionalCuCtxSynchronize != NULL) {
+            CHECK_CUDA_RESULT_RETURN(optionalCuCtxSynchronize(), false);
+        }
+    }
+
+    CUDA_MEMCPY2D lumaCopy = {
+        .dstMemoryType = CU_MEMORYTYPE_DEVICE,
+        .dstDevice = backingImage->directEncodeTightCudaBuffer,
+        .dstPitch = tightPitch,
+        .WidthInBytes = copyWidthBytes,
+        .Height = surface->height,
+    };
+    if (useWholeFrameSource) {
+        lumaCopy.srcMemoryType = CU_MEMORYTYPE_DEVICE;
+        lumaCopy.srcDevice = backingImage->directEncodeWholeFrameCudaImage.mappedBuffer;
+        lumaCopy.srcPitch = (size_t) backingImage->directEncodeWholeFramePitch;
+    } else if (plane0UsesMappedBuffer) {
+        lumaCopy.srcMemoryType = CU_MEMORYTYPE_DEVICE;
+        lumaCopy.srcDevice =
+            backingImage->cudaImages[0].mappedBuffer +
+            (CUdeviceptr)(size_t) backingImage->offsets[0];
+        lumaCopy.srcPitch = (size_t) backingImage->strides[0];
+    } else {
+        lumaCopy.srcMemoryType = CU_MEMORYTYPE_ARRAY;
+        lumaCopy.srcArray = backingImage->arrays[0];
+    }
+    CHECK_CUDA_RESULT_RETURN(cu->cuMemcpy2D(&lumaCopy), false);
+
+    CUDA_MEMCPY2D chromaCopy = {
+        .dstMemoryType = CU_MEMORYTYPE_DEVICE,
+        .dstDevice = backingImage->directEncodeTightCudaBuffer + lumaPlaneBytes,
+        .dstPitch = tightPitch,
+        .WidthInBytes = copyWidthBytes,
+        .Height = chromaRows,
+    };
+    if (useWholeFrameSource) {
+        chromaCopy.srcMemoryType = CU_MEMORYTYPE_DEVICE;
+        chromaCopy.srcDevice =
+            backingImage->directEncodeWholeFrameCudaImage.mappedBuffer +
+            (CUdeviceptr)(size_t) backingImage->offsets[1];
+        chromaCopy.srcPitch = (size_t) backingImage->directEncodeWholeFramePitch;
+    } else if (plane1UsesMappedBuffer) {
+        chromaCopy.srcMemoryType = CU_MEMORYTYPE_DEVICE;
+        chromaCopy.srcDevice =
+            backingImage->cudaImages[1].mappedBuffer +
+            (CUdeviceptr)(size_t) backingImage->offsets[1];
+        chromaCopy.srcPitch = (size_t) backingImage->strides[1];
+    } else {
+        chromaCopy.srcMemoryType = CU_MEMORYTYPE_ARRAY;
+        chromaCopy.srcArray = backingImage->arrays[1];
+    }
+    CHECK_CUDA_RESULT_RETURN(cu->cuMemcpy2D(&chromaCopy), false);
+
+    LOG(
+        "direct encode cudaptr tight buffer ready ptr=%p size=%llu pitch=%u rows=%u width=%u height=%u source_offset1=%d tight_offset1=%zu source_mode=%s",
+        (void *) backingImage->directEncodeTightCudaBuffer,
+        (unsigned long long) backingImage->directEncodeTightCudaBufferSize,
+        backingImage->directEncodeTightCudaBufferPitch,
+        backingImage->directEncodeTightCudaBufferRows,
+        surface->width,
+        surface->height,
+        backingImage->offsets[1],
+        lumaPlaneBytes,
+        sourceModeName
+    );
+    return true;
+}
+
+static bool tryRegisterDirectEncodeInputCudaPtrNv12(
+        NVContext *nvCtx,
+        NVSurface *surface,
+        NV_ENC_REGISTERED_PTR *registeredInput,
+        uint32_t *inputPitch)
+{
+    BackingImage *backingImage = surface != NULL ? surface->backingImage : NULL;
+    CUdeviceptr directPtr = 0;
+    uint32_t directPitch = 0;
+    const char *directSource = "none";
+
+    if (registeredInput == NULL || inputPitch == NULL) {
+        return false;
+    }
+    *registeredInput = NULL;
+    *inputPitch = 0;
+
+    if (nvCtx->encoder == NULL) {
+        LOG("direct encode cudaptr reject reason=encoder_not_initialized");
+        return false;
+    }
+    if (nvCtx->encodeInputFormat != NV_ENC_BUFFER_FORMAT_NV12) {
+        LOG(
+            "direct encode cudaptr reject reason=input_format_not_nv12 fmt=0x%x",
+            nvCtx->encodeInputFormat
+        );
+        return false;
+    }
+    if (surface == NULL || backingImage == NULL) {
+        LOG("direct encode cudaptr reject reason=missing_surface_backing");
+        return false;
+    }
+    if (surface->format != cudaVideoSurfaceFormat_NV12) {
+        LOG(
+            "direct encode cudaptr reject reason=surface_format_not_nv12 surface_format=%d",
+            surface->format
+        );
+        return false;
+    }
+    if (backingImage->importedGpuCopy &&
+        !nvAllowImportedGpuCopyDirectEncodeCudaArrayNv12()) {
+        LOG("direct encode cudaptr reject reason=imported_gpu_copy_backing");
+        return false;
+    }
+    if (backingImage->importedGpuCopy) {
+        LOG(
+            "direct encode cudaptr allowing imported_gpu_copy_backing via "
+            "NVD_EXPERIMENTAL_ALLOW_IMPORTED_GPU_COPY_DIRECT_ENCODE"
+        );
+    }
+
+    if (nvEnableExperimentalDirectEncodeCudaPtrTightRepackNv12()) {
+        if (!ensureDirectEncodeTightCudaPtrNv12Buffer(nvCtx, surface)) {
+            LOG(
+                "direct encode cudaptr reject reason=tight_repack_unavailable ptr=%p size=%llu",
+                (void *) backingImage->directEncodeTightCudaBuffer,
+                (unsigned long long) backingImage->directEncodeTightCudaBufferSize
+            );
+            return false;
+        }
+        directPtr = backingImage->directEncodeTightCudaBuffer;
+        directPitch = backingImage->directEncodeTightCudaBufferPitch;
+        directSource = "tight-repack-buffer";
+    } else {
+        if (!directEnsureWholeFrameNv12CudaBuffer(nvCtx->drv, backingImage)) {
+            LOG(
+                "direct encode cudaptr reject reason=whole_frame_buffer_unavailable ptr=%p size=%llu",
+                (void *) backingImage->directEncodeWholeFrameCudaImage.mappedBuffer,
+                (unsigned long long) backingImage->directEncodeWholeFrameCudaImage.mappedBufferSize
+            );
+            return false;
+        }
+
+        directPtr = backingImage->directEncodeWholeFrameCudaImage.mappedBuffer;
+        directPitch = backingImage->directEncodeWholeFramePitch;
+        directSource = "whole-frame-buffer";
+    }
+
+    if (directPtr == 0) {
+        LOG("direct encode cudaptr reject reason=missing_mapped_buffer");
+        return false;
+    }
+    if ((directPitch & 3u) != 0) {
+        LOG(
+            "direct encode cudaptr reject reason=pitch_multiple_of_4_required width=%u",
+            directPitch
+        );
+        return false;
+    }
+
+    const uint32_t negotiatedApiVersion =
+        nvCtx->encodeNvencApiVersion != 0 ? nvCtx->encodeNvencApiVersion : NVENCAPI_VERSION;
+    NV_ENC_REGISTER_RESOURCE registerParams = {0};
+    registerParams.version = nvencStructVersionForApi(
+        NV_ENC_REGISTER_RESOURCE_VER,
+        negotiatedApiVersion
+    );
+    registerParams.resourceType = NV_ENC_INPUT_RESOURCE_TYPE_CUDADEVICEPTR;
+    registerParams.width = surface->width;
+    registerParams.height = surface->height;
+    registerParams.pitch = directPitch;
+    registerParams.resourceToRegister = (void *) directPtr;
+    registerParams.bufferFormat = NV_ENC_BUFFER_FORMAT_NV12;
+    registerParams.bufferUsage = NV_ENC_INPUT_IMAGE;
+
+    NVENCSTATUS status = nvCtx->encodeApi.nvEncRegisterResource(
+        nvCtx->encoder,
+        &registerParams
+    );
+    if (!checkNvencStatus(status, "nvEncRegisterResource(direct CUDAPTR NV12)")) {
+        LOG(
+            "direct encode cudaptr reject reason=register_failed source=%s ptr=%p size=%llu width=%u height=%u pitch=%u modifier0=0x%llx modifier1=0x%llx",
+            directSource,
+            (void *) directPtr,
+            (unsigned long long) (nvEnableExperimentalDirectEncodeCudaPtrTightRepackNv12()
+                ? backingImage->directEncodeTightCudaBufferSize
+                : backingImage->directEncodeWholeFrameCudaImage.mappedBufferSize),
+            surface->width,
+            surface->height,
+            registerParams.pitch,
+            (unsigned long long) backingImage->mods[0],
+            (unsigned long long) backingImage->mods[1]
+        );
+        return false;
+    }
+
+    *registeredInput = registerParams.registeredResource;
+    *inputPitch = registerParams.pitch;
+    noteNvencRegisteredCreate(*registeredInput);
+    LOG(
+        "direct encode cudaptr registered resource=%p source=%s ptr=%p size=%llu pitch=%u modifier0=0x%llx modifier1=0x%llx",
+        *registeredInput,
+        directSource,
+        (void *) directPtr,
+        (unsigned long long) (nvEnableExperimentalDirectEncodeCudaPtrTightRepackNv12()
+            ? backingImage->directEncodeTightCudaBufferSize
+            : backingImage->directEncodeWholeFrameCudaImage.mappedBufferSize),
         *inputPitch,
         (unsigned long long) backingImage->mods[0],
         (unsigned long long) backingImage->mods[1]
@@ -3118,9 +3522,10 @@ static bool destroyEncodeSession(NVContext *nvCtx) {
                     (int) nvCtx->contextId
                 );
             }
-            if (nvEnableExperimentalDirectEncodeCudaArrayNv12()) {
+            if (nvEnableExperimentalDirectEncodeCudaArrayNv12() ||
+                nvEnableExperimentalDirectEncodeCudaPtrNv12()) {
                 LOG(
-                    "destroyEncodeSession context_id=%d skipping recycle/reload after last session while experimental direct CUDAARRAY NV12 is enabled",
+                    "destroyEncodeSession context_id=%d skipping recycle/reload after last session while experimental direct NV12 path is enabled",
                     (int) nvCtx->contextId
                 );
             } else {
@@ -3425,7 +3830,8 @@ static bool initEncodeSession(NVContext *nvCtx) {
     LOG("bitstream buffer created context_id=%d handle=%p", (int) nvCtx->contextId, nvCtx->encodeBitstream);
 
     const bool deferLegacyStagingInput =
-        nvEnableExperimentalDirectEncodeCudaArrayNv12() &&
+        (nvEnableExperimentalDirectEncodeCudaArrayNv12() ||
+         nvEnableExperimentalDirectEncodeCudaPtrNv12()) &&
         inputBufferFormat == NV_ENC_BUFFER_FORMAT_NV12;
     if (!deferLegacyStagingInput) {
         if (CHECK_CUDA_RESULT(cu->cuCtxPushCurrent(drv->cudaContext))) {
@@ -3443,7 +3849,7 @@ static bool initEncodeSession(NVContext *nvCtx) {
         }
     } else {
         LOG(
-            "deferring legacy staging input allocation/register for context_id=%d while experimental direct CUDAARRAY NV12 is enabled",
+            "deferring legacy staging input allocation/register for context_id=%d while experimental direct NV12 path is enabled",
             (int) nvCtx->contextId
         );
     }
@@ -6195,6 +6601,7 @@ static VAStatus nvEncodeEndPicture(VADriverContextP ctx, NVContext *nvCtx) {
     uint32_t inputPitchForFrame = 0;
     const uint64_t encodeInputTimestamp = nvCtx->encodeFrameIdx;
     bool usingDirectEncodeInput = false;
+    bool allowDirectCudaPtrRetry = nvEnableExperimentalDirectEncodeCudaPtrNv12();
     bool allowDirectCudaArrayRetry = nvEnableExperimentalDirectEncodeCudaArrayNv12();
     LOG(
         "begin: surface=%p codedBuffer=%u forceIDR=%d frameIdx=%llu sessionInitialized=%d",
@@ -6258,6 +6665,52 @@ prepare_input:
     memset(&mapInput, 0, sizeof(mapInput));
     mapInput.version = nvencStructVersionForApi(NV_ENC_MAP_INPUT_RESOURCE_VER, negotiatedApiVersion);
     inputPitchForFrame = (uint32_t) nvCtx->encodeInputPitch;
+
+    if (!usingDirectEncodeInput && allowDirectCudaPtrRetry &&
+        tryRegisterDirectEncodeInputCudaPtrNv12(
+            nvCtx,
+            surface,
+            &directRegisteredInput,
+            &inputPitchForFrame)) {
+        mapInput.registeredResource = directRegisteredInput;
+        if (checkNvencStatus(
+                nvCtx->encodeApi.nvEncMapInputResource(nvCtx->encoder, &mapInput),
+                "nvEncMapInputResource(direct CUDAPTR NV12)")) {
+            noteNvencMappedCreate(mapInput.mappedResource);
+            LOG(
+                "mapped direct input resource mappedResource=%p mappedBufferFmt=0x%x",
+                mapInput.mappedResource,
+                mapInput.mappedBufferFmt
+            );
+            if (mapInput.mappedBufferFmt == NV_ENC_BUFFER_FORMAT_NV12) {
+                usingDirectEncodeInput = true;
+                LOG(
+                    "encode input prepared path=direct-cudaptr pitch=%u buffer=%p",
+                    inputPitchForFrame,
+                    (void *) (nvEnableExperimentalDirectEncodeCudaPtrTightRepackNv12()
+                        ? surface->backingImage->directEncodeTightCudaBuffer
+                        : surface->backingImage->directEncodeWholeFrameCudaImage.mappedBuffer)
+                );
+            } else {
+                LOG(
+                    "direct encode cudaptr reject reason=mapped_format_mismatch mappedFmt=0x%x expected=0x%x",
+                    mapInput.mappedBufferFmt,
+                    NV_ENC_BUFFER_FORMAT_NV12
+                );
+                noteNvencMappedDestroy(mapInput.mappedResource);
+                checkNvencStatus(
+                    nvCtx->encodeApi.nvEncUnmapInputResource(nvCtx->encoder, mapInput.mappedResource),
+                    "nvEncUnmapInputResource(direct CUDAPTR NV12)"
+                );
+                mapInput.mappedResource = NULL;
+                cleanupDirectEncodeRegisteredInput(nvCtx, &directRegisteredInput);
+            }
+        } else {
+            LOG("direct encode cudaptr reject reason=map_failed");
+            cleanupDirectEncodeRegisteredInput(nvCtx, &directRegisteredInput);
+        }
+        allowDirectCudaPtrRetry = false;
+    }
 
     if (!usingDirectEncodeInput && allowDirectCudaArrayRetry &&
         tryRegisterDirectEncodeInputCudaArrayNv12(
@@ -8336,9 +8789,10 @@ static VAStatus nvTerminate( VADriverContextP ctx )
     free(drv);
 
     if (lastInstance) {
-        if (nvEnableExperimentalDirectEncodeCudaArrayNv12()) {
+        if (nvEnableExperimentalDirectEncodeCudaArrayNv12() ||
+            nvEnableExperimentalDirectEncodeCudaPtrNv12()) {
             LOG(
-                "Skipping global CUDA/NVDEC/NVENC function table release after last instance shutdown while experimental direct CUDAARRAY NV12 is enabled"
+                "Skipping global CUDA/NVDEC/NVENC function table release after last instance shutdown while experimental direct NV12 path is enabled"
             );
         } else {
             resetProcessTransientState();

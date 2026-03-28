@@ -27,6 +27,14 @@ static void directReleaseWholeFrameNv12CudaArray(NVDriver *drv, BackingImage *im
 static bool direct_isLinearModifier(uint64_t modifier);
 static bool directFdsShareBacking(int fdA, int fdB);
 
+static bool directAllowImportedGpuCopyWholeFrame(void) {
+    return isTruthyEnv(getenv("NVD_EXPERIMENTAL_ALLOW_IMPORTED_GPU_COPY_DIRECT_ENCODE"));
+}
+
+static bool directEnableExperimentalWholeFrameCudaBufferNv12(void) {
+    return isTruthyEnv(getenv("NVD_EXPERIMENTAL_DIRECT_ENCODE_CUDAPTR_NV12"));
+}
+
 static void directCloseImportedPlaneFd(int fd, const char *reason) {
     if (fd < 0) {
         return;
@@ -142,6 +150,57 @@ static void directInitCudaImage(NVCudaImage *cudaImage, int importedFd) {
     }
 
     cudaImage->importedFd = importedFd;
+}
+
+static void directLogBackingImageSummary(const char *tag, const BackingImage *img) {
+    if (tag == NULL || img == NULL) {
+        return;
+    }
+
+    LOG(
+        "%s backing=%p format=%d fourcc=0x%x size=%ux%u importedGpuCopy=%s epoch=%llu"
+        " p0{fd=%d off=%d stride=%d mod=0x%llx size=%u array=%p mapped=%p}"
+        " p1{fd=%d off=%d stride=%d mod=0x%llx size=%u array=%p mapped=%p}"
+        " p2{fd=%d off=%d stride=%d mod=0x%llx size=%u array=%p mapped=%p}"
+        " whole{array=%p pitch=%u rows=%u}"
+        " tight{ptr=%p size=%llu pitch=%u rows=%u}",
+        tag,
+        (void *) img,
+        img->format,
+        img->fourcc,
+        img->width,
+        img->height,
+        img->importedGpuCopy ? "yes" : "no",
+        (unsigned long long) img->resourceEpoch,
+        img->fds[0],
+        img->offsets[0],
+        img->strides[0],
+        (unsigned long long) img->mods[0],
+        img->size[0],
+        (void *) img->arrays[0],
+        (void *) img->cudaImages[0].mappedBuffer,
+        img->fds[1],
+        img->offsets[1],
+        img->strides[1],
+        (unsigned long long) img->mods[1],
+        img->size[1],
+        (void *) img->arrays[1],
+        (void *) img->cudaImages[1].mappedBuffer,
+        img->fds[2],
+        img->offsets[2],
+        img->strides[2],
+        (unsigned long long) img->mods[2],
+        img->size[2],
+        (void *) img->arrays[2],
+        (void *) img->cudaImages[2].mappedBuffer,
+        (void *) img->directEncodeWholeFrameArray,
+        img->directEncodeWholeFramePitch,
+        img->directEncodeWholeFrameRows,
+        (void *) img->directEncodeTightCudaBuffer,
+        (unsigned long long) img->directEncodeTightCudaBufferSize,
+        img->directEncodeTightCudaBufferPitch,
+        img->directEncodeTightCudaBufferRows
+    );
 }
 
 typedef enum Direct444PImportMode {
@@ -674,6 +733,14 @@ static void directReleaseWholeFrameNv12CudaArray(
 
     img->directEncodeWholeFramePitch = 0;
     img->directEncodeWholeFrameRows = 0;
+
+    if (img->directEncodeTightCudaBuffer != 0) {
+        CHECK_CUDA_RESULT(drv->cu->cuMemFree(img->directEncodeTightCudaBuffer));
+        img->directEncodeTightCudaBuffer = 0;
+    }
+    img->directEncodeTightCudaBufferSize = 0;
+    img->directEncodeTightCudaBufferPitch = 0;
+    img->directEncodeTightCudaBufferRows = 0;
 }
 
 static bool copy_external_plane_to_cuda_array_via_import(
@@ -1022,9 +1089,15 @@ bool directEnsureWholeFrameNv12CudaArray(NVDriver *drv, BackingImage *img) {
         );
         return false;
     }
-    if (img->importedGpuCopy) {
+    if (img->importedGpuCopy && !directAllowImportedGpuCopyWholeFrame()) {
         LOG("direct encode whole-frame reject reason=imported_gpu_copy_backing");
         return false;
+    }
+    if (img->importedGpuCopy) {
+        LOG(
+            "direct encode whole-frame allowing imported_gpu_copy_backing via "
+            "NVD_EXPERIMENTAL_ALLOW_IMPORTED_GPU_COPY_DIRECT_ENCODE"
+        );
     }
     if (img->fds[0] < 0 || img->fds[1] < 0) {
         LOG(
@@ -1034,18 +1107,18 @@ bool directEnsureWholeFrameNv12CudaArray(NVDriver *drv, BackingImage *img) {
         );
         return false;
     }
-    if (!directFdsShareBacking(img->fds[0], img->fds[1]) ||
-        img->size[0] == 0 ||
-        img->size[0] != img->size[1]) {
-        LOG(
-            "direct encode whole-frame reject reason=planes_do_not_share_backing fd0=%d fd1=%d size0=%u size1=%u",
-            img->fds[0],
-            img->fds[1],
-            img->size[0],
-            img->size[1]
-        );
-        return false;
-    }
+    // if (!directFdsShareBacking(img->fds[0], img->fds[1]) ||
+    //     img->size[0] == 0 ||
+    //     img->size[0] != img->size[1]) {
+    //     LOG(
+    //         "direct encode whole-frame reject reason=planes_do_not_share_backing fd0=%d fd1=%d size0=%u size1=%u",
+    //         img->fds[0],
+    //         img->fds[1],
+    //         img->size[0],
+    //         img->size[1]
+    //     );
+    //     return false;
+    // }
     if (img->offsets[0] != 0) {
         LOG(
             "direct encode whole-frame reject reason=luma_offset_nonzero offset0=%d",
@@ -1127,6 +1200,132 @@ bool directEnsureWholeFrameNv12CudaArray(NVDriver *drv, BackingImage *img) {
     LOG(
         "direct encode whole-frame ready array=%p pitch=%u rows=%u fd0=%d fd1=%d modifier0=0x%llx modifier1=0x%llx offset1=%d",
         (void *) img->directEncodeWholeFrameArray,
+        img->directEncodeWholeFramePitch,
+        img->directEncodeWholeFrameRows,
+        img->fds[0],
+        img->fds[1],
+        (unsigned long long) img->mods[0],
+        (unsigned long long) img->mods[1],
+        img->offsets[1]
+    );
+    return true;
+}
+
+bool directEnsureWholeFrameNv12CudaBuffer(NVDriver *drv, BackingImage *img) {
+    if (drv == NULL || img == NULL) {
+        return false;
+    }
+    if (!directEnableExperimentalWholeFrameCudaBufferNv12()) {
+        LOG("direct encode whole-frame buffer reject reason=feature_disabled");
+        return false;
+    }
+    if (img->directEncodeWholeFrameCudaImage.mappedBuffer != 0) {
+        return true;
+    }
+    if (img->format != NV_FORMAT_NV12) {
+        LOG(
+            "direct encode whole-frame buffer reject reason=format_not_nv12 format=%d",
+            img->format
+        );
+        return false;
+    }
+    if (img->importedGpuCopy && !directAllowImportedGpuCopyWholeFrame()) {
+        LOG("direct encode whole-frame buffer reject reason=imported_gpu_copy_backing");
+        return false;
+    }
+    if (img->importedGpuCopy) {
+        LOG(
+            "direct encode whole-frame buffer allowing imported_gpu_copy_backing via "
+            "NVD_EXPERIMENTAL_ALLOW_IMPORTED_GPU_COPY_DIRECT_ENCODE"
+        );
+    }
+    if (img->fds[0] < 0 || img->fds[1] < 0) {
+        LOG(
+            "direct encode whole-frame buffer reject reason=missing_plane_fds fd0=%d fd1=%d",
+            img->fds[0],
+            img->fds[1]
+        );
+        return false;
+    }
+    if (img->offsets[0] != 0) {
+        LOG(
+            "direct encode whole-frame buffer reject reason=luma_offset_nonzero offset0=%d",
+            img->offsets[0]
+        );
+        return false;
+    }
+    if (img->strides[0] == 0 ||
+        img->strides[1] == 0 ||
+        img->strides[0] != img->strides[1]) {
+        LOG(
+            "direct encode whole-frame buffer reject reason=pitch_mismatch stride0=%d stride1=%d",
+            img->strides[0],
+            img->strides[1]
+        );
+        return false;
+    }
+
+    const uint32_t chromaRows = (img->height + 1u) / 2u;
+    const uint32_t wholeFrameRows = img->height + chromaRows;
+    int importFd = convertDmabufFdToNvFd(
+        img->fds[0],
+        drv->driverContext.drmFd,
+        drv->driverContext.nvctlFd,
+        drv->driverContext.driverMajorVersion
+    );
+    if (importFd < 0) {
+        LOG(
+            "direct encode whole-frame buffer reject reason=nvkms_conversion_failed retained_fd=%d",
+            img->fds[0]
+        );
+        return false;
+    }
+
+    NVDriverImage importImage = {
+        .nvFd = importFd,
+        .nvFd2 = importFd,
+        .drmFd = img->fds[0],
+        .useDmaBufHandle = false,
+        .width = (uint32_t) img->strides[0],
+        .height = wholeFrameRows,
+        .mods = img->mods[0],
+        .memorySize = img->size[0],
+        .offset = 0,
+        .pitch = (uint32_t) img->strides[0],
+        .fourcc = DRM_FORMAT_R8,
+    };
+
+    if (!import_to_cuda_buffer(
+            drv,
+            &importImage,
+            &img->directEncodeWholeFrameCudaImage)) {
+        if (importImage.nvFd != 0) {
+            directCloseImportedPlaneFd(
+                importImage.nvFd,
+                "direct_encode_whole_frame_buffer_import_failed");
+        }
+        directReleaseWholeFrameNv12CudaArray(
+            drv,
+            img,
+            "direct_encode_whole_frame_buffer_import_rollback");
+        LOG(
+            "direct encode whole-frame buffer reject reason=import_failed stride=%d rows=%u size0=%u modifier0=0x%llx modifier1=0x%llx offset1=%d",
+            img->strides[0],
+            wholeFrameRows,
+            img->size[0],
+            (unsigned long long) img->mods[0],
+            (unsigned long long) img->mods[1],
+            img->offsets[1]
+        );
+        return false;
+    }
+
+    img->directEncodeWholeFramePitch = (uint32_t) img->strides[0];
+    img->directEncodeWholeFrameRows = wholeFrameRows;
+    LOG(
+        "direct encode whole-frame buffer ready ptr=%p size=%llu pitch=%u rows=%u fd0=%d fd1=%d modifier0=0x%llx modifier1=0x%llx offset1=%d",
+        (void *) img->directEncodeWholeFrameCudaImage.mappedBuffer,
+        (unsigned long long) img->directEncodeWholeFrameCudaImage.mappedBufferSize,
         img->directEncodeWholeFramePitch,
         img->directEncodeWholeFrameRows,
         img->fds[0],
@@ -1309,6 +1508,7 @@ static bool directRestoreBackingCudaViews(NVDriver *drv, BackingImage *img, cons
 static void direct_attachBackingImageToSurface(NVDriver *drv, NVSurface *surface, BackingImage *img) {
     surface->backingImage = img;
     img->surface = surface;
+    directLogBackingImageSummary("attach_surface", img);
 }
 
 static void direct_detachBackingImageFromSurface(NVDriver *drv, NVSurface *surface) {
