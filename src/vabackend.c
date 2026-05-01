@@ -192,6 +192,135 @@ static const char nv12ToArgbPtx[] =
 "    ret;\n"
 "}\n";
 
+static const char p010ToArgbPtx[] =
+".version 3.2\n"
+".target sm_30\n"
+".address_size 64\n"
+".visible .entry p010_to_argb(\n"
+"    .param .u64 p_y,\n"
+"    .param .u64 p_uv,\n"
+"    .param .u64 p_dst,\n"
+"    .param .u32 p_width,\n"
+"    .param .u32 p_height,\n"
+"    .param .u32 p_y_pitch,\n"
+"    .param .u32 p_uv_pitch,\n"
+"    .param .u32 p_dst_pitch,\n"
+"    .param .u32 p_order\n"
+")\n"
+"{\n"
+"    .reg .pred %p<5>;\n"
+"    .reg .b32 %r<70>;\n"
+"    .reg .b64 %rd<18>;\n"
+"    ld.param.u64 %rd1, [p_y];\n"
+"    ld.param.u64 %rd2, [p_uv];\n"
+"    ld.param.u64 %rd3, [p_dst];\n"
+"    ld.param.u32 %r1, [p_width];\n"
+"    ld.param.u32 %r2, [p_height];\n"
+"    ld.param.u32 %r3, [p_y_pitch];\n"
+"    ld.param.u32 %r4, [p_uv_pitch];\n"
+"    ld.param.u32 %r5, [p_dst_pitch];\n"
+"    ld.param.u32 %r6, [p_order];\n"
+"    mov.u32 %r7, %ctaid.x;\n"
+"    mov.u32 %r8, %ntid.x;\n"
+"    mov.u32 %r9, %tid.x;\n"
+"    mad.lo.u32 %r10, %r7, %r8, %r9;\n"
+"    mov.u32 %r11, %ctaid.y;\n"
+"    mov.u32 %r12, %ntid.y;\n"
+"    mov.u32 %r13, %tid.y;\n"
+"    mad.lo.u32 %r14, %r11, %r12, %r13;\n"
+"    setp.ge.u32 %p1, %r10, %r1;\n"
+"    @%p1 bra DONE;\n"
+"    setp.ge.u32 %p2, %r14, %r2;\n"
+"    @%p2 bra DONE;\n"
+"    mul.wide.u32 %rd4, %r14, %r3;\n"
+"    add.u64 %rd4, %rd1, %rd4;\n"
+"    cvt.u64.u32 %rd5, %r10;\n"
+"    shl.b64 %rd5, %rd5, 1;\n" // 2 bytes per pixel
+"    add.u64 %rd4, %rd4, %rd5;\n"
+"    ld.global.u16 %r15, [%rd4];\n" // Load 16-bit Y
+"    shr.u32 %r15, %r15, 8;\n"       // Shift to 8-bit range
+"    shr.u32 %r16, %r14, 1;\n"
+"    and.b32 %r17, %r10, -2;\n"
+"    mul.wide.u32 %rd6, %r16, %r4;\n"
+"    add.u64 %rd6, %rd2, %rd6;\n"
+"    cvt.u64.u32 %rd7, %r17;\n"
+"    shl.b64 %rd7, %rd7, 1;\n" // 2 bytes per pixel
+"    add.u64 %rd6, %rd6, %rd7;\n"
+"    ld.global.u16 %r18, [%rd6];\n" // Load 16-bit U
+"    shr.u32 %r18, %r18, 8;\n"       // Shift to 8-bit range
+"    add.u64 %rd6, %rd6, 2;\n"       // Advance 2 bytes for V
+"    ld.global.u16 %r19, [%rd6];\n" // Load 16-bit V
+"    shr.u32 %r19, %r19, 8;\n"       // Shift to 8-bit range
+"    sub.s32 %r20, %r15, 16;\n"
+"    sub.s32 %r21, %r18, 128;\n"
+"    sub.s32 %r22, %r19, 128;\n"
+"    mul.lo.s32 %r23, %r20, 298;\n"
+"    mul.lo.s32 %r24, %r22, 409;\n"
+"    add.s32 %r25, %r23, %r24;\n"
+"    add.s32 %r25, %r25, 128;\n"
+"    shr.s32 %r26, %r25, 8;\n"
+"    max.s32 %r26, %r26, 0;\n"
+"    min.s32 %r26, %r26, 255;\n"
+"    mul.lo.s32 %r27, %r21, 100;\n"
+"    sub.s32 %r28, %r23, %r27;\n"
+"    mul.lo.s32 %r29, %r22, 208;\n"
+"    sub.s32 %r30, %r28, %r29;\n"
+"    add.s32 %r30, %r30, 128;\n"
+"    shr.s32 %r31, %r30, 8;\n"
+"    max.s32 %r31, %r31, 0;\n"
+"    min.s32 %r31, %r31, 255;\n"
+"    mul.lo.s32 %r32, %r21, 516;\n"
+"    add.s32 %r33, %r23, %r32;\n"
+"    add.s32 %r33, %r33, 128;\n"
+"    shr.s32 %r34, %r33, 8;\n"
+"    max.s32 %r34, %r34, 0;\n"
+"    min.s32 %r34, %r34, 255;\n"
+"    setp.eq.u32 %p3, %r6, 1;\n"
+"    @%p3 bra RGBA;\n"
+"    setp.eq.u32 %p4, %r6, 2;\n"
+"    @%p4 bra ARGB;\n"
+"    setp.eq.u32 %p5, %r6, 3;\n"
+"    @%p5 bra ABGR;\n"
+"BGRA:\n"
+"    shl.b32 %r35, %r31, 8;\n"
+"    or.b32 %r36, %r34, %r35;\n"
+"    shl.b32 %r37, %r26, 16;\n"
+"    or.b32 %r38, %r36, %r37;\n"
+"    mov.u32 %r39, -16777216;\n"
+"    or.b32 %r40, %r38, %r39;\n"
+"    bra STORE;\n"
+"RGBA:\n"
+"    shl.b32 %r35, %r31, 8;\n"
+"    or.b32 %r36, %r26, %r35;\n"
+"    shl.b32 %r37, %r34, 16;\n"
+"    or.b32 %r38, %r36, %r37;\n"
+"    mov.u32 %r39, -16777216;\n"
+"    or.b32 %r40, %r38, %r39;\n"
+"    bra STORE;\n"
+"ARGB:\n"
+"    shl.b32 %r35, %r26, 8;\n"
+"    shl.b32 %r36, %r31, 16;\n"
+"    or.b32 %r37, %r35, %r36;\n"
+"    shl.b32 %r38, %r34, 24;\n"
+"    or.b32 %r40, %r37, %r38;\n"
+"    bra STORE;\n"
+"ABGR:\n"
+"    shl.b32 %r35, %r34, 8;\n"
+"    shl.b32 %r36, %r31, 16;\n"
+"    or.b32 %r37, %r35, %r36;\n"
+"    shl.b32 %r38, %r26, 24;\n"
+"    or.b32 %r40, %r37, %r38;\n"
+"STORE:\n"
+"    mul.wide.u32 %rd8, %r14, %r5;\n"
+"    add.u64 %rd8, %rd3, %rd8;\n"
+"    cvt.u64.u32 %rd9, %r10;\n"
+"    shl.b64 %rd9, %rd9, 2;\n"
+"    add.u64 %rd8, %rd8, %rd9;\n"
+"    st.global.u32 [%rd8], %r40;\n"
+"DONE:\n"
+"    ret;\n"
+"}\n";
+
 extern const NVCodec __start_nvd_codecs[];
 extern const NVCodec __stop_nvd_codecs[];
 
@@ -1358,6 +1487,7 @@ static bool importExternalBackingToCuda(NVDriver *drv, BackingImage *img) {
         .flags = 0,
         .size = img->totalSize
     };
+    LOG("Importing external memory to CUDA: fd=%d size=%u", importFd, img->totalSize);
     if (CHECK_CUDA_RESULT(drv->cu->cuImportExternalMemory(&img->extMem, &extMemDesc))) {
         close(importFd);
         return false;
@@ -1979,26 +2109,48 @@ static uint8_t clampU8(int value) {
     return (uint8_t) value;
 }
 
-static bool loadVideoProcKernel(NVDriver *drv) {
-    if (drv->nv12ToArgbKernel != NULL) {
+static bool loadVideoProcKernel(NVDriver *drv, bool is16Bit) {
+    if (is16Bit) {
+        if (drv->p010ToArgbKernel != NULL) {
+            return true;
+        }
+        if (drv->videoProcKernelP010Failed) {
+            return false;
+        }
+
+        if (CHECK_CUDA_RESULT(drv->cu->cuModuleLoadData(&drv->videoProcModuleP010, p010ToArgbPtx)) ||
+            CHECK_CUDA_RESULT(drv->cu->cuModuleGetFunction(&drv->p010ToArgbKernel, drv->videoProcModuleP010, "p010_to_argb"))) {
+            if (drv->videoProcModuleP010 != NULL) {
+                CHECK_CUDA_RESULT(drv->cu->cuModuleUnload(drv->videoProcModuleP010));
+                drv->videoProcModuleP010 = NULL;
+            }
+            drv->p010ToArgbKernel = NULL;
+            drv->videoProcKernelP010Failed = true;
+            return false;
+        }
+
+        return true;
+    } else {
+        if (drv->nv12ToArgbKernel != NULL) {
+            return true;
+        }
+        if (drv->videoProcKernelFailed) {
+            return false;
+        }
+
+        if (CHECK_CUDA_RESULT(drv->cu->cuModuleLoadData(&drv->videoProcModule, nv12ToArgbPtx)) ||
+            CHECK_CUDA_RESULT(drv->cu->cuModuleGetFunction(&drv->nv12ToArgbKernel, drv->videoProcModule, "nv12_to_argb"))) {
+            if (drv->videoProcModule != NULL) {
+                CHECK_CUDA_RESULT(drv->cu->cuModuleUnload(drv->videoProcModule));
+                drv->videoProcModule = NULL;
+            }
+            drv->nv12ToArgbKernel = NULL;
+            drv->videoProcKernelFailed = true;
+            return false;
+        }
+
         return true;
     }
-    if (drv->videoProcKernelFailed) {
-        return false;
-    }
-
-    if (CHECK_CUDA_RESULT(drv->cu->cuModuleLoadData(&drv->videoProcModule, nv12ToArgbPtx)) ||
-        CHECK_CUDA_RESULT(drv->cu->cuModuleGetFunction(&drv->nv12ToArgbKernel, drv->videoProcModule, "nv12_to_argb"))) {
-        if (drv->videoProcModule != NULL) {
-            CHECK_CUDA_RESULT(drv->cu->cuModuleUnload(drv->videoProcModule));
-            drv->videoProcModule = NULL;
-        }
-        drv->nv12ToArgbKernel = NULL;
-        drv->videoProcKernelFailed = true;
-        return false;
-    }
-
-    return true;
 }
 
 static uint32_t rgbOrderForFourcc(uint32_t fourcc) {
@@ -2076,20 +2228,21 @@ static void writeRgbPixel(uint8_t *dst, uint32_t fourcc, uint8_t r, uint8_t g, u
     }
 }
 
-static bool convertNV12ToARGBCuda(NVDriver *drv, BackingImage *srcImg, BackingImage *dstImg, uint32_t width, uint32_t height) {
+static bool convertNV12ToARGBCuda(NVDriver *drv, BackingImage *srcImg, BackingImage *dstImg, uint32_t width, uint32_t height, bool is16Bit) {
     if (srcImg->arrays[0] == NULL || srcImg->arrays[1] == NULL) {
         return false;
     }
 
-    const size_t ySize = (size_t) width * height;
+    const size_t bpp = is16Bit ? 2 : 1;
+    const size_t ySize = (size_t) width * height * bpp;
     const size_t uvHeight = (height + 1) / 2;
-    const size_t uvSize = (size_t) width * uvHeight;
+    const size_t uvSize = (size_t) width * uvHeight * bpp;
     const size_t argbSize = (size_t) width * height * 4;
     CUdeviceptr dstDevice = dstImg->externalDevicePtr != 0 ? dstImg->externalDevicePtr + (CUdeviceptr) dstImg->offsets[0] : drv->videoProcArgbBuffer;
     uint32_t dstPitch = dstImg->externalDevicePtr != 0 ? (uint32_t) dstImg->strides[0] : width * 4;
 
     pthread_mutex_lock(&drv->exportMutex);
-    if (!loadVideoProcKernel(drv) ||
+    if (!loadVideoProcKernel(drv, is16Bit) ||
         !ensureVideoProcBuffer(drv, &drv->videoProcYBuffer, &drv->videoProcYBufferSize, ySize) ||
         !ensureVideoProcBuffer(drv, &drv->videoProcUVBuffer, &drv->videoProcUVBufferSize, uvSize)) {
         goto fail;
@@ -2107,8 +2260,8 @@ static bool convertNV12ToARGBCuda(NVDriver *drv, BackingImage *srcImg, BackingIm
         .srcArray = srcImg->arrays[0],
         .dstMemoryType = CU_MEMORYTYPE_DEVICE,
         .dstDevice = drv->videoProcYBuffer,
-        .dstPitch = width,
-        .WidthInBytes = width,
+        .dstPitch = width * bpp,
+        .WidthInBytes = width * bpp,
         .Height = height
     };
     CUDA_MEMCPY2D uvCpy = {
@@ -2116,8 +2269,8 @@ static bool convertNV12ToARGBCuda(NVDriver *drv, BackingImage *srcImg, BackingIm
         .srcArray = srcImg->arrays[1],
         .dstMemoryType = CU_MEMORYTYPE_DEVICE,
         .dstDevice = drv->videoProcUVBuffer,
-        .dstPitch = width,
-        .WidthInBytes = width,
+        .dstPitch = width * bpp,
+        .WidthInBytes = width * bpp,
         .Height = uvHeight
     };
     if (CHECK_CUDA_RESULT(drv->cu->cuMemcpy2D(&yCpy)) ||
@@ -2125,8 +2278,8 @@ static bool convertNV12ToARGBCuda(NVDriver *drv, BackingImage *srcImg, BackingIm
         goto fail;
     }
 
-    uint32_t yPitch = width;
-    uint32_t uvPitch = width;
+    uint32_t yPitch = width * bpp;
+    uint32_t uvPitch = width * bpp;
     uint32_t order = rgbOrderForFourcc((uint32_t) dstImg->fourcc);
     void *args[] = {
         &drv->videoProcYBuffer,
@@ -2139,7 +2292,8 @@ static bool convertNV12ToARGBCuda(NVDriver *drv, BackingImage *srcImg, BackingIm
         &dstPitch,
         &order
     };
-    if (CHECK_CUDA_RESULT(drv->cu->cuLaunchKernel(drv->nv12ToArgbKernel,
+    CUfunction kernel = is16Bit ? drv->p010ToArgbKernel : drv->nv12ToArgbKernel;
+    if (CHECK_CUDA_RESULT(drv->cu->cuLaunchKernel(kernel,
             (width + 15) / 16, (height + 15) / 16, 1,
             16, 16, 1, 0, 0, args, NULL))) {
         goto fail;
@@ -2169,8 +2323,10 @@ fail:
 }
 
 static bool convertNV12ToARGB(NVDriver *drv, BackingImage *srcImg, BackingImage *dstImg, uint32_t width, uint32_t height) {
+    const bool is16Bit = srcImg->format == NV_FORMAT_P010 || srcImg->format == NV_FORMAT_P012;
+
     if (dstImg->externalMapping == NULL || dstImg->externalDevicePtr != 0) {
-        if (convertNV12ToARGBCuda(drv, srcImg, dstImg, width, height)) {
+        if (convertNV12ToARGBCuda(drv, srcImg, dstImg, width, height, is16Bit)) {
             nvStatsIncrement(drv, NV_STAT_VIDEOPROC_CUDA);
             static bool loggedCudaVideoProc = false;
             if (!loggedCudaVideoProc) {
@@ -2179,13 +2335,16 @@ static bool convertNV12ToARGB(NVDriver *drv, BackingImage *srcImg, BackingImage 
             }
             return true;
         }
-        nvStatsIncrement(drv, NV_STAT_VIDEOPROC_CUDA_FAILURES);
-        LOG("CUDA NV12 to RGB conversion failed, falling back to CPU");
+        if (!is16Bit) {
+            nvStatsIncrement(drv, NV_STAT_VIDEOPROC_CUDA_FAILURES);
+            LOG("CUDA NV12 to RGB conversion failed, falling back to CPU");
+        }
     }
     nvStatsIncrement(drv, NV_STAT_VIDEOPROC_CPU_FALLBACK);
 
-    const size_t ySize = (size_t) width * height;
-    const size_t uvSize = (size_t) width * ((height + 1) / 2);
+    const size_t bpp = is16Bit ? 2 : 1;
+    const size_t ySize = (size_t) width * height * bpp;
+    const size_t uvSize = (size_t) width * ((height + 1) / 2) * bpp;
     const size_t argbSize = (size_t) width * height * 4;
     uint8_t *yPlane = malloc(ySize);
     uint8_t *uvPlane = malloc(uvSize);
@@ -2201,10 +2360,10 @@ static bool convertNV12ToARGB(NVDriver *drv, BackingImage *srcImg, BackingImage 
         const uint8_t *srcY = (const uint8_t*) srcImg->externalMapping + srcImg->offsets[0];
         const uint8_t *srcUV = (const uint8_t*) srcImg->externalMapping + srcImg->offsets[1];
         for (uint32_t y = 0; y < height; y++) {
-            memcpy(yPlane + (size_t) y * width, srcY + (size_t) y * srcImg->strides[0], width);
+            memcpy(yPlane + (size_t) y * width * bpp, srcY + (size_t) y * srcImg->strides[0], width * bpp);
         }
         for (uint32_t y = 0; y < (height + 1) / 2; y++) {
-            memcpy(uvPlane + (size_t) y * width, srcUV + (size_t) y * srcImg->strides[1], width);
+            memcpy(uvPlane + (size_t) y * width * bpp, srcUV + (size_t) y * srcImg->strides[1], width * bpp);
         }
     } else {
         CUDA_MEMCPY2D yCpy = {
@@ -2212,8 +2371,8 @@ static bool convertNV12ToARGB(NVDriver *drv, BackingImage *srcImg, BackingImage 
             .srcArray = srcImg->arrays[0],
             .dstMemoryType = CU_MEMORYTYPE_HOST,
             .dstHost = yPlane,
-            .dstPitch = width,
-            .WidthInBytes = width,
+            .dstPitch = width * bpp,
+            .WidthInBytes = width * bpp,
             .Height = height
         };
         CUDA_MEMCPY2D uvCpy = {
@@ -2221,8 +2380,8 @@ static bool convertNV12ToARGB(NVDriver *drv, BackingImage *srcImg, BackingImage 
             .srcArray = srcImg->arrays[1],
             .dstMemoryType = CU_MEMORYTYPE_HOST,
             .dstHost = uvPlane,
-            .dstPitch = width,
-            .WidthInBytes = width,
+            .dstPitch = width * bpp,
+            .WidthInBytes = width * bpp,
             .Height = (height + 1) / 2
         };
 
@@ -2232,10 +2391,20 @@ static bool convertNV12ToARGB(NVDriver *drv, BackingImage *srcImg, BackingImage 
 
     for (uint32_t y = 0; y < height; y++) {
         for (uint32_t x = 0; x < width; x++) {
-            const int yy = yPlane[(size_t) y * width + x];
-            const size_t uvIndex = (size_t) (y / 2) * width + (x & ~1u);
-            const int u = uvPlane[uvIndex];
-            const int v = uvPlane[uvIndex + 1];
+            int yy, u, v;
+            if (is16Bit) {
+                const uint16_t *yPlane16 = (const uint16_t*) yPlane;
+                const uint16_t *uvPlane16 = (const uint16_t*) uvPlane;
+                yy = yPlane16[(size_t) y * width + x] >> 8;
+                const size_t uvIndex = (size_t) (y / 2) * width + (x & ~1u);
+                u = uvPlane16[uvIndex] >> 8;
+                v = uvPlane16[uvIndex + 1] >> 8;
+            } else {
+                yy = yPlane[(size_t) y * width + x];
+                const size_t uvIndex = (size_t) (y / 2) * width + (x & ~1u);
+                u = uvPlane[uvIndex];
+                v = uvPlane[uvIndex + 1];
+            }
             const int c = yy - 16;
             const int d = u - 128;
             const int e = v - 128;
@@ -2323,7 +2492,7 @@ static bool copySurfaceBackingImage(NVDriver *drv, NVSurface *src, NVSurface *ds
 
     BackingImage *srcImg = src->backingImage;
     BackingImage *dstImg = dst->backingImage;
-    if (srcImg != NULL && dstImg != NULL && srcImg->format == NV_FORMAT_NV12 && dstImg->format == NV_FORMAT_ARGB) {
+    if (srcImg != NULL && dstImg != NULL && (srcImg->format == NV_FORMAT_NV12 || srcImg->format == NV_FORMAT_P010 || srcImg->format == NV_FORMAT_P012) && dstImg->format == NV_FORMAT_ARGB) {
         bool ret = convertNV12ToARGB(drv, srcImg, dstImg, srcRegion.width, srcRegion.height);
         bool popFailed = CHECK_CUDA_RESULT(cu->cuCtxPopCurrent(NULL));
         if (!ret) {
@@ -3360,6 +3529,11 @@ static VAStatus nvTerminate( VADriverContextP ctx )
         CHECK_CUDA_RESULT(cu->cuModuleUnload(drv->videoProcModule));
         drv->videoProcModule = NULL;
         drv->nv12ToArgbKernel = NULL;
+    }
+    if (drv->videoProcModuleP010 != NULL) {
+        CHECK_CUDA_RESULT(cu->cuModuleUnload(drv->videoProcModuleP010));
+        drv->videoProcModuleP010 = NULL;
+        drv->p010ToArgbKernel = NULL;
     }
     if (drv->videoProcYBuffer != 0) {
         CHECK_CUDA_RESULT(cu->cuMemFree(drv->videoProcYBuffer));
