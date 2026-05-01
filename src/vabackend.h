@@ -186,6 +186,9 @@ typedef struct _NVDriver
     DescriptorMode          descriptorMode;
     CUmodule                videoProcModule;
     CUfunction              nv12ToArgbKernel;
+    CUfunction              p010ToArgbKernel;
+    CUmodule                videoProcModuleP010;
+    bool                    videoProcKernelP010Failed;
     bool                    videoProcKernelFailed;
     CUdeviceptr             videoProcYBuffer;
     CUdeviceptr             videoProcUVBuffer;
