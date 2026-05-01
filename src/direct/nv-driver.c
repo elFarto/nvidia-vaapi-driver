@@ -492,12 +492,43 @@ bool alloc_memory(const NVDriverContext *context, const uint32_t size, int *fd) 
 }
 
 static uint32_t calculate_log2_gobs_per_block_y(const uint32_t height) {
-     uint32_t log2GobsPerBlockY = height < 86 ? 3 : 4; //TODO 86 is a guess, 80px high needs 3, 112px needs 4, 96px needs 4, 88px needs 4, 86px needs 4
-     if (height < 43) log2GobsPerBlockY = 2;
-     if (height < 22) log2GobsPerBlockY = 1;
-     if (height < 11) log2GobsPerBlockY = 0;
+    uint32_t log2GobsPerBlockY = 4; // 16 gobs/block
 
-     return log2GobsPerBlockY;
+    const uint64_t heightAndOneHalf = (uint64_t)height + ((uint64_t)height / 2ULL);
+    const uint64_t nvFermiBlockLinearGobHeight = GOB_HEIGHT_IN_BYTES;
+
+    // If we're wasting too much memory, cap the block height
+    while ((log2GobsPerBlockY > 0U) &&
+           (((nvFermiBlockLinearGobHeight * ((uint64_t)1ULL << log2GobsPerBlockY))) >
+            heightAndOneHalf)) {
+        log2GobsPerBlockY--;
+    }
+
+    // If there is more than one gob per block,
+    if (log2GobsPerBlockY > 0U) {
+
+        // Proposed shrunk block size.
+        // compute a new proposedBlockSize, based on a gob size that is half
+        // of the current value (log2 - 1).  the "if(log2 > 0)" above keeps this
+        // value always ">= 0".
+        uint32_t proposedBlockSize =
+            GOB_HEIGHT_IN_BYTES << (log2GobsPerBlockY - 1U);
+
+        // While the proposedBlockSize is greater than the image size,
+        while (proposedBlockSize >= height) {
+            // It's safe to cut the gobs per block in half.
+            --log2GobsPerBlockY;
+
+            // If we've hit 1 gob per block, stop.
+            if (log2GobsPerBlockY == 0U) {
+                break;
+            }
+            // Otherwise, divide the proposed block dimension/size by two.
+            proposedBlockSize /= 2U;
+        }
+    }
+
+    return log2GobsPerBlockY;
 }
 
 uint32_t calculate_unified_image_layout(const NVDriverContext *context, NVDriverImage images[], const uint32_t width, const uint32_t height,
@@ -568,7 +599,7 @@ bool alloc_buffer(NVDriverContext *context, const uint32_t totalSize, const NVDr
          .surfaceParams = {
              .layout = NvKmsSurfaceMemoryLayoutBlockLinear,
              .blockLinear = {
-                 .genericMemory = context->useSystemMemory ? 1 : 0,
+                 .genericMemory = 0,
                  .pitchInBlocks = pitchInBlocks,
                  .log2GobsPerBlock.x = images[0].log2GobsPerBlockX,
                  .log2GobsPerBlock.y = images[0].log2GobsPerBlockY,
@@ -674,7 +705,7 @@ err:
      }
 
      //now export the dma-buf
-     uint32_t pitchInBlocks = widthInBytes / (gobWidthInBytes << log2GobsPerBlockX);
+     uint32_t pitchInBlocks = widthInBytes / gobWidthInBytes;
 
      //printf("got gobsPerBlock: %ux%u %u %u %u %d\n", width, height, log2GobsPerBlockX, log2GobsPerBlockY, log2GobsPerBlockZ, pitchInBlocks);
      //duplicate the fd so we don't invalidate it by importing it
