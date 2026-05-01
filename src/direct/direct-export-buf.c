@@ -220,7 +220,7 @@ static BackingImage *direct_allocateBackingImage_single(NVDriver *drv, NVSurface
 
     backingImage->totalSize = calculate_unified_image_layout(&drv->driverContext, driverImages, surface->width, surface->height,
                                                              fmtInfo->bppc, fmtInfo->numPlanes, fmtInfo->plane);
-    LOG("Allocating single BackingImage: %p %ux%u = %u bytes", backingImage, surface->width, surface->height, backingImage->totalSize)
+    LOG_DEBUG("Allocating single BackingImage: %p %ux%u = %u bytes", backingImage, surface->width, surface->height, backingImage->totalSize);
 
     int memFd = -1;
     int memFd2 = -1;
@@ -228,7 +228,7 @@ static BackingImage *direct_allocateBackingImage_single(NVDriver *drv, NVSurface
     if (!alloc_buffer(&drv->driverContext, backingImage->totalSize, driverImages, &memFd, &memFd2, &drmFd)) {
         goto fail;
     }
-    LOG("Allocate single Buffer: %d %d %d", memFd, memFd2, drmFd)
+    LOG_DEBUG("Allocate single Buffer: %d %d %d", memFd, memFd2, drmFd);
 
     const CUDA_EXTERNAL_MEMORY_HANDLE_DESC extMemDesc = {
         .type      = CU_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD,
@@ -237,7 +237,7 @@ static BackingImage *direct_allocateBackingImage_single(NVDriver *drv, NVSurface
         .size      = backingImage->totalSize
     };
 
-    LOG("Importing single memory to CUDA")
+    LOG_DEBUG("Importing single memory to CUDA");
     if (CHECK_CUDA_RESULT(drv->cu->cuImportExternalMemory(&backingImage->extMem, &extMemDesc))) {
         goto fail;
     }
@@ -345,7 +345,7 @@ static BackingImage *direct_allocateBackingImage(NVDriver *drv, NVSurface *surfa
     const NVFormatInfo *fmtInfo = &formatsInfo[backingImage->format];
     const NVFormatPlane *p = fmtInfo->plane;
 
-    LOG("Allocating BackingImages: %p %dx%d", backingImage, surface->width, surface->height);
+    LOG_DEBUG("Allocating BackingImages: %p %dx%d", backingImage, surface->width, surface->height);
     for (uint32_t i = 0; i < fmtInfo->numPlanes; i++) {
         alloc_image(&drv->driverContext, surface->width >> p[i].ss.x, surface->height >> p[i].ss.y,
                     p[i].channelCount, 8 * fmtInfo->bppc, p[i].fourcc, &driverImages[i]);

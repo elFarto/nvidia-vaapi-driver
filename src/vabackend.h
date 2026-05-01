@@ -294,10 +294,12 @@ int pictureIdxFromSurfaceId(NVDriver *ctx, VASurfaceID surf);
 NVSurface* nvSurfaceFromSurfaceId(NVDriver *drv, VASurfaceID surf);
 bool checkCudaErrors(CUresult err, const char *file, const char *function, const int line);
 void logger(const char *filename, const char *function, int line, const char *msg, ...);
+bool nvdLogDebugEnabled(void);
 #define CHECK_CUDA_RESULT(err) checkCudaErrors(err, __FILE__, __func__, __LINE__)
 #define CHECK_CUDA_RESULT_RETURN(err, ret) if (checkCudaErrors(err, __FILE__, __func__, __LINE__)) { return ret; }
 #define cudaVideoCodec_NONE ((cudaVideoCodec) -1)
 #define LOG(...) logger(__FILE__, __func__, __LINE__, __VA_ARGS__);
+#define LOG_DEBUG(...) do { if (nvdLogDebugEnabled()) { logger(__FILE__, __func__, __LINE__, __VA_ARGS__); } } while (0)
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
 #define PTROFF(base, bytes) ((void *)((unsigned char *)(base) + (bytes)))
 #define DECLARE_CODEC(name) \
