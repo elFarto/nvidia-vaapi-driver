@@ -118,7 +118,12 @@ typedef struct _BackingImage {
     bool        isSingleBuffer;
     bool        isExternalBuffer;
     bool        borrowedCudaResources;
-    NVSurface   *borrowedSurface;
+    struct _BackingImage *borrowedBackingImage;
+    atomic_uint borrowCount;
+    bool        syncInitialized;
+    bool        resolving;
+    pthread_mutex_t mutex;
+    pthread_cond_t  cond;
     void        *externalMapping;
     uint32_t    externalMappingSize;
     CUdeviceptr externalDevicePtr;
@@ -225,6 +230,10 @@ typedef struct _NVContext
     bool                av1BitstreamCompacted;
     CUVIDPICPARAMS      pPicParams;
     const struct _NVCodec *codec;
+    cudaVideoCodec      cudaCodec;
+    cudaVideoSurfaceFormat decoderSurfaceFormat;
+    cudaVideoChromaFormat decoderChromaFormat;
+    int                 decoderBitDepth;
     int                 currentPictureId;
     pthread_t           resolveThread;
     pthread_mutex_t     resolveMutex;
