@@ -2,9 +2,11 @@
 
 #include "../vabackend.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <ffnvcodec/dynlink_loader.h>
 #include <sys/stat.h>
 #include <sys/ioctl.h>
+#include <sys/mman.h>
 #include <fcntl.h>
 #include <unistd.h>
 #ifdef __linux__
@@ -17,6 +19,17 @@
 #include <drm_fourcc.h>
 
 static void destroyBackingImage(NVDriver *drv, BackingImage *img);
+
+static bool isRgbSurfaceFourcc(uint32_t fourcc) {
+    return fourcc == VA_FOURCC_ARGB ||
+           fourcc == VA_FOURCC_XRGB ||
+           fourcc == VA_FOURCC_ABGR ||
+           fourcc == VA_FOURCC_XBGR ||
+           fourcc == VA_FOURCC_RGBA ||
+           fourcc == VA_FOURCC_RGBX ||
+           fourcc == VA_FOURCC_BGRA ||
+           fourcc == VA_FOURCC_BGRX;
+}
 
 static void findGPUIndexFromFd(NVDriver *drv) {
     //find the CUDA device id
@@ -151,10 +164,143 @@ static void direct_releaseExporter(NVDriver *drv) {
     free_nvdriver(&drv->driverContext);
 }
 
+static BackingImage *direct_allocateBackingImage_single(NVDriver *drv, NVSurface *surface) {
+    NVDriverImage driverImages[3] = { 0 };
+    BackingImage *backingImage = calloc(1, sizeof(BackingImage));
+    if (backingImage == NULL) {
+        return NULL;
+    }
+
+    backingImage->isSingleBuffer = true;
+    for (int i = 0; i < 4; i++) {
+        backingImage->fds[i] = -1;
+    }
+
+    if (isRgbSurfaceFourcc((uint32_t) surface->fourcc)) {
+        backingImage->format = NV_FORMAT_ARGB;
+    } else {
+    switch (surface->format)
+    {
+    case cudaVideoSurfaceFormat_P016:
+        switch (surface->bitDepth) {
+        case 10:
+            backingImage->format = NV_FORMAT_P010;
+            break;
+        case 12:
+            backingImage->format = NV_FORMAT_P012;
+            break;
+        default:
+            backingImage->format = NV_FORMAT_P016;
+            break;
+        }
+        break;
+
+    case cudaVideoSurfaceFormat_YUV444_16Bit:
+        backingImage->format = NV_FORMAT_Q416;
+        break;
+
+    case cudaVideoSurfaceFormat_YUV444:
+        backingImage->format = NV_FORMAT_444P;
+        break;
+
+    default:
+        backingImage->format = NV_FORMAT_NV12;
+        break;
+    }
+    }
+
+    const NVFormatInfo *fmtInfo = &formatsInfo[backingImage->format];
+
+    backingImage->totalSize = calculate_unified_image_layout(&drv->driverContext, driverImages, surface->width, surface->height,
+                                                             fmtInfo->bppc, fmtInfo->numPlanes, fmtInfo->plane);
+    LOG("Allocating single BackingImage: %p %ux%u = %u bytes", backingImage, surface->width, surface->height, backingImage->totalSize)
+
+    int memFd = -1;
+    int memFd2 = -1;
+    int drmFd = -1;
+    if (!alloc_buffer(&drv->driverContext, backingImage->totalSize, driverImages, &memFd, &memFd2, &drmFd)) {
+        goto fail;
+    }
+    LOG("Allocate single Buffer: %d %d %d", memFd, memFd2, drmFd)
+
+    const CUDA_EXTERNAL_MEMORY_HANDLE_DESC extMemDesc = {
+        .type      = CU_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD,
+        .handle.fd = memFd,
+        .flags     = 0,
+        .size      = backingImage->totalSize
+    };
+
+    LOG("Importing single memory to CUDA")
+    if (CHECK_CUDA_RESULT(drv->cu->cuImportExternalMemory(&backingImage->extMem, &extMemDesc))) {
+        goto fail;
+    }
+
+    close(memFd2);
+    memFd = -1;
+    memFd2 = -1;
+
+    for (uint32_t i = 0; i < fmtInfo->numPlanes; i++) {
+        CUDA_EXTERNAL_MEMORY_MIPMAPPED_ARRAY_DESC mipmapArrayDesc = {
+            .arrayDesc = {
+                .Width = driverImages[i].width,
+                .Height = driverImages[i].height,
+                .Depth = 0,
+                .Format = fmtInfo->bppc == 1 ? CU_AD_FORMAT_UNSIGNED_INT8 : CU_AD_FORMAT_UNSIGNED_INT16,
+                .NumChannels = fmtInfo->plane[i].channelCount,
+                .Flags = 0
+            },
+            .numLevels = 1,
+            .offset = driverImages[i].offset
+        };
+
+        if (CHECK_CUDA_RESULT(drv->cu->cuExternalMemoryGetMappedMipmappedArray(&backingImage->cudaImages[i].mipmapArray, backingImage->extMem, &mipmapArrayDesc))) {
+            goto fail;
+        }
+
+        if (CHECK_CUDA_RESULT(drv->cu->cuMipmappedArrayGetLevel(&backingImage->arrays[i], backingImage->cudaImages[i].mipmapArray, 0))) {
+            goto fail;
+        }
+    }
+
+    backingImage->width = surface->width;
+    backingImage->height = surface->height;
+    backingImage->fourcc = fmtInfo->fourcc;
+    backingImage->fds[0] = drmFd;
+    for (uint32_t i = 0; i < fmtInfo->numPlanes; i++) {
+        backingImage->strides[i] = driverImages[i].pitch;
+        backingImage->mods[i] = driverImages[i].mods;
+        backingImage->offsets[i] = driverImages[i].offset;
+        backingImage->size[i] = driverImages[i].memorySize;
+    }
+
+    return backingImage;
+
+fail:
+    if (memFd >= 0) {
+        close(memFd);
+    }
+    if (memFd2 >= 0) {
+        close(memFd2);
+    }
+    if (drmFd >= 0) {
+        close(drmFd);
+    }
+
+    destroyBackingImage(drv, backingImage);
+    return NULL;
+}
+
 static BackingImage *direct_allocateBackingImage(NVDriver *drv, NVSurface *surface) {
+    if (drv->descriptorMode == DESCRIPTOR_MODE_SINGLE && !isRgbSurfaceFourcc((uint32_t) surface->fourcc)) {
+        return direct_allocateBackingImage_single(drv, surface);
+    }
+
     NVDriverImage driverImages[3] = { 0 };
     BackingImage *backingImage = calloc(1, sizeof(BackingImage));
 
+    if (isRgbSurfaceFourcc((uint32_t) surface->fourcc)) {
+        backingImage->format = NV_FORMAT_ARGB;
+    } else {
     switch (surface->format)
     {
     case cudaVideoSurfaceFormat_P016:
@@ -182,6 +328,7 @@ static BackingImage *direct_allocateBackingImage(NVDriver *drv, NVSurface *surfa
     default:
         backingImage->format = NV_FORMAT_NV12;
         break;
+    }
     }
 
     const NVFormatInfo *fmtInfo = &formatsInfo[backingImage->format];
@@ -237,23 +384,44 @@ static void destroyBackingImage(NVDriver *drv, BackingImage *img) {
         img->surface->backingImage = NULL;
     }
 
+    if (img->externalMapping != NULL) {
+        munmap(img->externalMapping, img->externalMappingSize);
+        img->externalMapping = NULL;
+        img->externalMappingSize = 0;
+    }
+    if (img->externalDevicePtr != 0) {
+        CHECK_CUDA_RESULT(drv->cu->cuMemFree(img->externalDevicePtr));
+        img->externalDevicePtr = 0;
+        img->externalDeviceSize = 0;
+    }
+
     for (int i = 0; i < 4; i++) {
         if (img->fds[i] > 0) {
             close(img->fds[i]);
         }
     }
 
-    for (uint32_t i = 0; i < fmtInfo->numPlanes; i++) {
-        if (img->arrays[i] != NULL) {
-            CHECK_CUDA_RESULT(drv->cu->cuArrayDestroy(img->arrays[i]));
+    if (!img->borrowedCudaResources) {
+        for (uint32_t i = 0; i < fmtInfo->numPlanes; i++) {
+            if (img->arrays[i] != NULL) {
+                CHECK_CUDA_RESULT(drv->cu->cuArrayDestroy(img->arrays[i]));
+            }
+
+            if (img->cudaImages[i].mipmapArray != NULL) {
+                CHECK_CUDA_RESULT(drv->cu->cuMipmappedArrayDestroy(img->cudaImages[i].mipmapArray));
+            }
         }
 
-        if (img->cudaImages[i].mipmapArray != NULL) {
-            CHECK_CUDA_RESULT(drv->cu->cuMipmappedArrayDestroy(img->cudaImages[i].mipmapArray));
-        }
-
-        if (img->cudaImages[i].extMem != NULL) {
-            CHECK_CUDA_RESULT(drv->cu->cuDestroyExternalMemory(img->cudaImages[i].extMem));
+        if (img->isSingleBuffer) {
+            if (img->extMem != NULL) {
+                CHECK_CUDA_RESULT(drv->cu->cuDestroyExternalMemory(img->extMem));
+            }
+        } else {
+            for (uint32_t i = 0; i < fmtInfo->numPlanes; i++) {
+                if (img->cudaImages[i].extMem != NULL) {
+                    CHECK_CUDA_RESULT(drv->cu->cuDestroyExternalMemory(img->cudaImages[i].extMem));
+                }
+            }
         }
     }
 
@@ -292,6 +460,41 @@ static bool copyFrameToSurface(NVDriver *drv, CUdeviceptr ptr, NVSurface *surfac
 
     for (uint32_t i = 0; i < fmtInfo->numPlanes; i++) {
         const NVFormatPlane *p = &fmtInfo->plane[i];
+        const uint32_t widthInBytes = (surface->width >> p->ss.x) * fmtInfo->bppc * p->channelCount;
+        const uint32_t height = surface->height >> p->ss.y;
+        if (surface->backingImage->externalMapping != NULL) {
+            uint8_t *plane = malloc((size_t) widthInBytes * height);
+            if (plane == NULL) {
+                return false;
+            }
+            CUDA_MEMCPY2D cpy = {
+                .srcMemoryType = CU_MEMORYTYPE_DEVICE,
+                .srcDevice = ptr,
+                .srcY = y,
+                .srcPitch = pitch,
+                .dstMemoryType = CU_MEMORYTYPE_HOST,
+                .dstHost = plane,
+                .dstPitch = widthInBytes,
+                .Height = height,
+                .WidthInBytes = widthInBytes
+            };
+            bool failed = CHECK_CUDA_RESULT(drv->cu->cuMemcpy2D(&cpy));
+            if (!failed) {
+                uint8_t *dst = (uint8_t*) surface->backingImage->externalMapping + surface->backingImage->offsets[i];
+                for (uint32_t row = 0; row < height; row++) {
+                    memcpy(dst + (size_t) row * surface->backingImage->strides[i],
+                           plane + (size_t) row * widthInBytes,
+                           widthInBytes);
+                }
+            }
+            free(plane);
+            if (failed) {
+                return false;
+            }
+            y += height;
+            continue;
+        }
+
         CUDA_MEMCPY2D cpy = {
             .srcMemoryType = CU_MEMORYTYPE_DEVICE,
             .srcDevice = ptr,
@@ -299,15 +502,15 @@ static bool copyFrameToSurface(NVDriver *drv, CUdeviceptr ptr, NVSurface *surfac
             .srcPitch = pitch,
             .dstMemoryType = CU_MEMORYTYPE_ARRAY,
             .dstArray = surface->backingImage->arrays[i],
-            .Height = surface->height >> p->ss.y,
-            .WidthInBytes = (surface->width >> p->ss.x) * fmtInfo->bppc * p->channelCount
+            .Height = height,
+            .WidthInBytes = widthInBytes
         };
         if (i == fmtInfo->numPlanes - 1) {
             CHECK_CUDA_RESULT(drv->cu->cuMemcpy2D(&cpy));
         } else {
             CHECK_CUDA_RESULT(drv->cu->cuMemcpy2DAsync(&cpy, 0));
         }
-        y += surface->height >> p->ss.y;
+        y += height;
     }
 
     //notify anyone waiting for us to be resolved
@@ -345,6 +548,10 @@ static bool direct_exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surf
     }
 
     if (ptr != 0) {
+        nvStatsIncrement(drv, NV_STAT_EXPORT_COPIES);
+        if (surface->backingImage != NULL && surface->backingImage->externalMapping != NULL) {
+            nvStatsIncrement(drv, NV_STAT_EXPORT_HOST_COPIES);
+        }
         copyFrameToSurface(drv, ptr, surface, pitch);
     } else {
         LOG("exporting with null ptr")
@@ -362,18 +569,36 @@ static bool direct_fillExportDescriptor(NVDriver *drv, NVSurface *surface, VADRM
     desc->height = surface->height;
 
     desc->num_layers = fmtInfo->numPlanes;
-    desc->num_objects = fmtInfo->numPlanes;
+    nvStatsIncrement(drv, NV_STAT_EXPORT_DESCRIPTORS);
+    if (img->isSingleBuffer) {
+        nvStatsIncrement(drv, NV_STAT_EXPORT_DESCRIPTORS_SINGLE);
+        desc->num_objects = 1;
+        desc->objects[0].fd = dup(img->fds[0]);
+        desc->objects[0].size = img->totalSize;
+        desc->objects[0].drm_format_modifier = img->mods[0];
 
-    for (uint32_t i = 0; i < fmtInfo->numPlanes; i++) {
-        desc->objects[i].fd = dup(img->fds[i]);
-        desc->objects[i].size = img->size[i];
-        desc->objects[i].drm_format_modifier = img->mods[i];
+        for (uint32_t i = 0; i < fmtInfo->numPlanes; i++) {
+            desc->layers[i].drm_format = fmtInfo->plane[i].fourcc;
+            desc->layers[i].num_planes = 1;
+            desc->layers[i].object_index[0] = 0;
+            desc->layers[i].offset[0] = img->offsets[i];
+            desc->layers[i].pitch[0] = img->strides[i];
+        }
+    } else {
+        nvStatsIncrement(drv, NV_STAT_EXPORT_DESCRIPTORS_MULTI);
+        desc->num_objects = fmtInfo->numPlanes;
 
-        desc->layers[i].drm_format = fmtInfo->plane[i].fourcc;
-        desc->layers[i].num_planes = 1;
-        desc->layers[i].object_index[0] = i;
-        desc->layers[i].offset[0] = img->offsets[i];
-        desc->layers[i].pitch[0] = img->strides[i];
+        for (uint32_t i = 0; i < fmtInfo->numPlanes; i++) {
+            desc->objects[i].fd = dup(img->fds[i]);
+            desc->objects[i].size = img->size[i];
+            desc->objects[i].drm_format_modifier = img->mods[i];
+
+            desc->layers[i].drm_format = fmtInfo->plane[i].fourcc;
+            desc->layers[i].num_planes = 1;
+            desc->layers[i].object_index[0] = i;
+            desc->layers[i].offset[0] = img->offsets[i];
+            desc->layers[i].pitch[0] = img->strides[i];
+        }
     }
 
     return true;
