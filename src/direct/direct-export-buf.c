@@ -164,12 +164,19 @@ static void direct_releaseExporter(NVDriver *drv) {
     free_nvdriver(&drv->driverContext);
 }
 
+static void initBackingImageSync(BackingImage *img) {
+    pthread_mutex_init(&img->mutex, NULL);
+    pthread_cond_init(&img->cond, NULL);
+    img->syncInitialized = true;
+}
+
 static BackingImage *direct_allocateBackingImage_single(NVDriver *drv, NVSurface *surface) {
     NVDriverImage driverImages[3] = { 0 };
     BackingImage *backingImage = calloc(1, sizeof(BackingImage));
     if (backingImage == NULL) {
         return NULL;
     }
+    initBackingImageSync(backingImage);
 
     backingImage->isSingleBuffer = true;
     for (int i = 0; i < 4; i++) {
@@ -297,6 +304,10 @@ static BackingImage *direct_allocateBackingImage(NVDriver *drv, NVSurface *surfa
 
     NVDriverImage driverImages[3] = { 0 };
     BackingImage *backingImage = calloc(1, sizeof(BackingImage));
+    if (backingImage == NULL) {
+        return NULL;
+    }
+    initBackingImageSync(backingImage);
 
     if (isRgbSurfaceFourcc((uint32_t) surface->fourcc)) {
         backingImage->format = NV_FORMAT_ARGB;
@@ -383,6 +394,10 @@ static void destroyBackingImage(NVDriver *drv, BackingImage *img) {
     if (img->surface != NULL) {
         img->surface->backingImage = NULL;
     }
+    if (img->borrowedBackingImage != NULL && atomic_load(&img->borrowedBackingImage->borrowCount) > 0) {
+        atomic_fetch_sub(&img->borrowedBackingImage->borrowCount, 1);
+        img->borrowedBackingImage = NULL;
+    }
 
     if (img->externalMapping != NULL) {
         munmap(img->externalMapping, img->externalMappingSize);
@@ -424,9 +439,31 @@ static void destroyBackingImage(NVDriver *drv, BackingImage *img) {
             }
         }
     }
+    if (img->syncInitialized) {
+        pthread_cond_destroy(&img->cond);
+        pthread_mutex_destroy(&img->mutex);
+    }
 
     memset(img, 0, sizeof(BackingImage));
     free(img);
+}
+
+static bool pruneDetachedBackingImages(NVDriver *drv) {
+    bool pruned = false;
+
+    pthread_mutex_lock(&drv->imagesMutex);
+
+    ARRAY_FOR_EACH_REV(BackingImage*, it, &drv->images)
+        if (it->surface == NULL && atomic_load(&it->borrowCount) == 0) {
+            destroyBackingImage(drv, it);
+            remove_element_at(&drv->images, it_idx);
+            pruned = true;
+        }
+    END_FOR_EACH
+
+    pthread_mutex_unlock(&drv->imagesMutex);
+
+    return pruned;
 }
 
 static void direct_attachBackingImageToSurface(NVSurface *surface, BackingImage *img) {
@@ -439,7 +476,13 @@ static void direct_detachBackingImageFromSurface(NVDriver *drv, NVSurface *surfa
         return;
     }
 
-    destroyBackingImage(drv, surface->backingImage);
+    if (surface->backingImage->isExternalBuffer || surface->backingImage->borrowedCudaResources) {
+        destroyBackingImage(drv, surface->backingImage);
+        surface->backingImage = NULL;
+        return;
+    }
+
+    surface->backingImage->surface = NULL;
     surface->backingImage = NULL;
 }
 
@@ -530,12 +573,21 @@ static bool direct_realiseSurface(NVDriver *drv, NVSurface *surface) {
         //try to find a free surface
         BackingImage *img = direct_allocateBackingImage(drv, surface);
         if (img == NULL) {
-            LOG("Unable to realise surface: %p (%d)", surface, surface->pictureIdx)
-            pthread_mutex_unlock(&surface->mutex);
-            return false;
+            if (pruneDetachedBackingImages(drv)) {
+                LOG("Pruned detached BackingImages after allocation failure")
+                img = direct_allocateBackingImage(drv, surface);
+            }
+            if (img == NULL) {
+                LOG("Unable to realise surface: %p (%d)", surface, surface->pictureIdx)
+                pthread_mutex_unlock(&surface->mutex);
+                return false;
+            }
         }
 
         direct_attachBackingImageToSurface(surface, img);
+        pthread_mutex_lock(&drv->imagesMutex);
+        add_element(&drv->images, img);
+        pthread_mutex_unlock(&drv->imagesMutex);
     }
     pthread_mutex_unlock(&surface->mutex);
 
@@ -548,11 +600,26 @@ static bool direct_exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surf
     }
 
     if (ptr != 0) {
+        BackingImage *img = surface->backingImage;
+        if (img != NULL && img->syncInitialized) {
+            pthread_mutex_lock(&img->mutex);
+            img->resolving = true;
+            pthread_mutex_unlock(&img->mutex);
+        }
         nvStatsIncrement(drv, NV_STAT_EXPORT_COPIES);
-        if (surface->backingImage != NULL && surface->backingImage->externalMapping != NULL) {
+        if (img != NULL && img->externalMapping != NULL) {
             nvStatsIncrement(drv, NV_STAT_EXPORT_HOST_COPIES);
         }
-        copyFrameToSurface(drv, ptr, surface, pitch);
+        bool copied = copyFrameToSurface(drv, ptr, surface, pitch);
+        if (img != NULL && img->syncInitialized) {
+            pthread_mutex_lock(&img->mutex);
+            img->resolving = false;
+            pthread_cond_broadcast(&img->cond);
+            pthread_mutex_unlock(&img->mutex);
+        }
+        if (!copied) {
+            return false;
+        }
     } else {
         LOG("exporting with null ptr")
     }
