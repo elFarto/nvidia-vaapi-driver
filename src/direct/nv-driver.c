@@ -569,8 +569,8 @@ uint32_t calculate_unified_image_layout(const NVDriverContext *context, NVDriver
          images[i].log2GobsPerBlockY = log2GobsPerBlockY;
          images[i].log2GobsPerBlockZ = log2GobsPerBlockZ;
 
-         LOG("Unified layout plane %u: %ux%u offset=%u pitch=%u size=%u log2GobsPerBlockY=%u",
-             i, images[i].width, images[i].height, images[i].offset, images[i].pitch, images[i].memorySize, log2GobsPerBlockY);
+         LOG_DEBUG("Unified layout plane %u: %ux%u offset=%u pitch=%u size=%u log2GobsPerBlockY=%u",
+                   i, images[i].width, images[i].height, images[i].offset, images[i].pitch, images[i].memorySize, log2GobsPerBlockY);
 
          offset += images[i].memorySize;
          offset = ROUND_UP(offset, SINGLE_BUFFER_PLANE_ALIGNMENT);
@@ -615,8 +615,8 @@ bool alloc_buffer(NVDriverContext *context, const uint32_t totalSize, const NVDr
          .nvkms_params_size = context->driverMajorVersion == 470 ? 0x20 : sizeof(nvkmsParams) //needs to be 0x20 in the 470 series driver
      };
 
-     LOG("alloc_buffer: totalSize=%u importSize=%u pitchInBlocks=%u log2GobsPerBlockY=%u",
-         totalSize, imageSizeInBytes, pitchInBlocks, images[0].log2GobsPerBlockY);
+     LOG_DEBUG("alloc_buffer: totalSize=%u importSize=%u pitchInBlocks=%u log2GobsPerBlockY=%u",
+               totalSize, imageSizeInBytes, pitchInBlocks, images[0].log2GobsPerBlockY);
 
      int drmret = ioctl(context->drmFd, DRM_IOCTL_NVIDIA_GEM_IMPORT_NVKMS_MEMORY, &params);
      if (drmret != 0) {

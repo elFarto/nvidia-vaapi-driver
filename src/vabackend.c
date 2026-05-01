@@ -4,7 +4,6 @@
 #include "backend-common.h"
 
 #include <assert.h>
-#include <ctype.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -326,6 +325,7 @@ extern const NVCodec __stop_nvd_codecs[];
 
 static FILE *LOG_OUTPUT;
 static FILE *STATS_OUTPUT;
+static bool LOG_DEBUG_ENABLED;
 
 static int gpu = -1;
 static enum {
@@ -419,62 +419,21 @@ static BackingImage *retainBackingImageByFd(NVDriver *drv, int fd, NVFormat form
     return ret;
 }
 
-static bool processNameContainsChromiumName(const char *name) {
-    return strstr(name, "chrome") != NULL ||
-           strstr(name, "chromium") != NULL ||
-           strstr(name, "brave") != NULL ||
-           strstr(name, "vivaldi") != NULL ||
-           strstr(name, "opera") != NULL ||
-           strstr(name, "microsoft-edge") != NULL ||
-           strstr(name, "edge") != NULL ||
-           strstr(name, "thorium") != NULL;
-}
-
-static bool processName_isChromium(void) {
-#ifdef __linux__
-    char comm[256] = { 0 };
-    int fd = open("/proc/self/comm", O_RDONLY);
-    if (fd >= 0) {
-        ssize_t n = read(fd, comm, sizeof(comm) - 1);
-        close(fd);
-        if (n > 0) {
-            for (ssize_t i = 0; i < n; i++) {
-                comm[i] = (char) tolower((unsigned char) comm[i]);
-            }
-            if (processNameContainsChromiumName(comm)) {
-                return true;
-            }
-        }
-    }
-
-    char exe[512] = { 0 };
-    ssize_t m = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
-    if (m > 0) {
-        for (ssize_t i = 0; i < m; i++) {
-            exe[i] = (char) tolower((unsigned char) exe[i]);
-        }
-        if (processNameContainsChromiumName(exe)) {
-            return true;
-        }
-    }
-#endif
-
-    return false;
-}
-
 __attribute__ ((constructor))
 static void init() {
     char *nvdLog = getenv("NVD_LOG");
     if (nvdLog != NULL) {
         if (strcmp(nvdLog, "1") == 0) {
             LOG_OUTPUT = stdout;
-	} else {
-	    LOG_OUTPUT = fopen(nvdLog, "a");
-	    if (LOG_OUTPUT == NULL) {
-		LOG_OUTPUT = stdout;
+        } else {
+            LOG_OUTPUT = fopen(nvdLog, "a");
+            if (LOG_OUTPUT == NULL) {
+                LOG_OUTPUT = stdout;
             }
         }
     }
+    char *nvdLogVerbose = getenv("NVD_LOG_VERBOSE");
+    LOG_DEBUG_ENABLED = nvdLogVerbose != NULL && strcmp(nvdLogVerbose, "0") != 0;
     char *nvdStats = getenv("NVD_STATS");
     if (nvdStats != NULL && strcmp(nvdStats, "0") != 0) {
         char *nvdStatsLog = getenv("NVD_STATS_LOG");
@@ -579,6 +538,10 @@ void logger(const char *filename, const char *function, int line, const char *ms
 
     fprintf(LOG_OUTPUT, "%10ld.%09ld [%d-%d] %s:%4d %24s %s\n", (long)tp.tv_sec, tp.tv_nsec, getpid(), nv_gettid(), filename, line, function, formattedMessage);
     fflush(LOG_OUTPUT);
+}
+
+bool nvdLogDebugEnabled(void) {
+    return LOG_DEBUG_ENABLED;
 }
 
 bool checkCudaErrors(CUresult err, const char *file, const char *function, const int line) {
@@ -1485,7 +1448,7 @@ static bool importExternalBackingToCuda(NVDriver *drv, BackingImage *img) {
         .flags = 0,
         .size = img->totalSize
     };
-    LOG("Importing external memory to CUDA: fd=%d size=%u", importFd, img->totalSize);
+    LOG_DEBUG("Importing external memory to CUDA: fd=%d size=%u", importFd, img->totalSize);
     if (CHECK_CUDA_RESULT(drv->cu->cuImportExternalMemory(&img->extMem, &extMemDesc))) {
         close(importFd);
         return false;
@@ -1552,7 +1515,7 @@ static bool importExternalBufferToCuda(NVDriver *drv, BackingImage *img) {
     img->externalDeviceSize = img->totalSize;
     img->isSingleBuffer = true;
     char fourcc[5];
-    LOG("Imported external %s surface as CUDA mapped buffer", fourccString((uint32_t) img->fourcc, fourcc));
+    LOG_DEBUG("Imported external %s surface as CUDA mapped buffer", fourccString((uint32_t) img->fourcc, fourcc));
     return true;
 }
 
@@ -1762,9 +1725,9 @@ static VAStatus nvCreateSurfaces2(
             suf->backingImage = img;
             img->surface = suf;
             char fourcc[5];
-            LOG("Importing surface %ux%u, format %X/%s (%p)", width, height, format, fourccString(surfaceFourcc, fourcc), suf);
+            LOG_DEBUG("Importing surface %ux%u, format %X/%s (%p)", width, height, format, fourccString(surfaceFourcc, fourcc), suf);
         } else {
-            LOG("Creating surface %ux%u, format %X (%p)", width, height, format, suf);
+            LOG_DEBUG("Creating surface %ux%u, format %X (%p)", width, height, format, suf);
         }
     }
 
@@ -1800,7 +1763,7 @@ static VAStatus nvDestroySurfaces(
             return VA_STATUS_ERROR_INVALID_SURFACE;
         }
 
-        LOG("Destroying surface %d (%p)", surface->pictureIdx, surface);
+        LOG_DEBUG("Destroying surface %d (%p)", surface->pictureIdx, surface);
 
         drv->backend->detachBackingImageFromSurface(drv, surface);
 
@@ -2186,6 +2149,8 @@ static uint8_t clampU8(int value) {
 
 static bool loadVideoProcKernel(NVDriver *drv, bool is16Bit) {
     if (is16Bit) {
+        static bool loggedP010KernelFailure = false;
+
         if (drv->p010ToArgbKernel != NULL) {
             return true;
         }
@@ -2201,11 +2166,17 @@ static bool loadVideoProcKernel(NVDriver *drv, bool is16Bit) {
             }
             drv->p010ToArgbKernel = NULL;
             drv->videoProcKernelP010Failed = true;
+            if (!loggedP010KernelFailure) {
+                LOG("CUDA P010 VideoProc kernel unavailable, using CPU fallback");
+                loggedP010KernelFailure = true;
+            }
             return false;
         }
 
         return true;
     } else {
+        static bool loggedNV12KernelFailure = false;
+
         if (drv->nv12ToArgbKernel != NULL) {
             return true;
         }
@@ -2221,6 +2192,10 @@ static bool loadVideoProcKernel(NVDriver *drv, bool is16Bit) {
             }
             drv->nv12ToArgbKernel = NULL;
             drv->videoProcKernelFailed = true;
+            if (!loggedNV12KernelFailure) {
+                LOG("CUDA NV12 VideoProc kernel unavailable, using CPU fallback");
+                loggedNV12KernelFailure = true;
+            }
             return false;
         }
 
@@ -2405,14 +2380,16 @@ static bool convertNV12ToARGB(NVDriver *drv, BackingImage *srcImg, BackingImage 
             nvStatsIncrement(drv, NV_STAT_VIDEOPROC_CUDA);
             static bool loggedCudaVideoProc = false;
             if (!loggedCudaVideoProc) {
-                LOG("Using CUDA NV12 to RGB VideoProc conversion");
+                LOG("Using CUDA VideoProc conversion");
                 loggedCudaVideoProc = true;
             }
             return true;
         }
-        if (!is16Bit) {
-            nvStatsIncrement(drv, NV_STAT_VIDEOPROC_CUDA_FAILURES);
-            LOG("CUDA NV12 to RGB conversion failed, falling back to CPU");
+        nvStatsIncrement(drv, NV_STAT_VIDEOPROC_CUDA_FAILURES);
+        static bool loggedCudaFallback = false;
+        if (!loggedCudaFallback) {
+            LOG("CUDA %s to RGB conversion failed, falling back to CPU", is16Bit ? "P010" : "NV12");
+            loggedCudaFallback = true;
         }
     }
     nvStatsIncrement(drv, NV_STAT_VIDEOPROC_CPU_FALLBACK);
@@ -3306,7 +3283,7 @@ static VAStatus nvQuerySurfaceAttributes(
 
     if (cfg->chromaFormat != cudaVideoChromaFormat_420 && cfg->chromaFormat != cudaVideoChromaFormat_444) {
         //TODO not sure what pixel formats are needed for 422 formats
-        LOG("Unknown chrome format: %d", cfg->chromaFormat);
+        LOG("Unknown chroma format: %d", cfg->chromaFormat);
         return VA_STATUS_ERROR_INVALID_CONFIG;
     }
 
@@ -3764,8 +3741,11 @@ VAStatus __vaDriverInit_1_0(VADriverContextP ctx) {
         drv->descriptorMode = DESCRIPTOR_MODE_SINGLE;
     } else if (modeEnv != NULL && strcmp(modeEnv, "multi") == 0) {
         drv->descriptorMode = DESCRIPTOR_MODE_MULTI;
+    } else if (modeEnv != NULL && strcmp(modeEnv, "auto") != 0) {
+        LOG("Ignoring invalid NVD_DESCRIPTOR_MODE=%s", modeEnv);
+        drv->descriptorMode = DESCRIPTOR_MODE_SINGLE;
     } else {
-        drv->descriptorMode = processName_isChromium() ? DESCRIPTOR_MODE_SINGLE : DESCRIPTOR_MODE_MULTI;
+        drv->descriptorMode = DESCRIPTOR_MODE_SINGLE;
     }
     LOG("Descriptor mode: %s", drv->descriptorMode == DESCRIPTOR_MODE_SINGLE ? "single" : "multi")
 
