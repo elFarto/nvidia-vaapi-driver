@@ -57,6 +57,7 @@ sources = [
     'src/h264.c',
     'src/hevc.c',
     'src/jpeg.c',
+    'src/kernels.c',
     'src/mpeg2.c',
     'src/mpeg4.c',
     'src/vabackend.c',

@@ -5,6 +5,8 @@
 #include <va/va_backend.h>
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
+#include <sys/types.h>
+#include <sys/stat.h>
 #include <stdbool.h>
 #include <stdatomic.h>
 #include <va/va_drmcommon.h>
@@ -106,6 +108,8 @@ typedef struct _BackingImage {
     uint32_t    height;
     int         fourcc;
     int         fds[4];
+    dev_t       st_dev[4];
+    ino_t       st_ino[4];
     int         offsets[4];
     int         strides[4];
     uint64_t    mods[4];
@@ -201,6 +205,12 @@ typedef struct _NVDriver
     size_t                  videoProcYBufferSize;
     size_t                  videoProcUVBufferSize;
     size_t                  videoProcArgbBufferSize;
+    void                    *cpuVideoProcYBuffer;
+    void                    *cpuVideoProcUVBuffer;
+    void                    *cpuVideoProcArgbBuffer;
+    size_t                  cpuVideoProcYBufferSize;
+    size_t                  cpuVideoProcUVBufferSize;
+    size_t                  cpuVideoProcArgbBufferSize;
     bool                    statsEnabled;
     uint64_t                statsLogInterval;
     atomic_uint_fast64_t    stats[NV_STAT_COUNT];

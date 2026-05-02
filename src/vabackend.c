@@ -2,6 +2,7 @@
 
 #include "vabackend.h"
 #include "backend-common.h"
+#include "kernels.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -74,245 +75,6 @@ static uint32_t max_instances;
 static CudaFunctions *cu;
 static CuvidFunctions *cv;
 
-static const char nv12ToArgbPtx[] =
-".version 3.2\n"
-".target sm_30\n"
-".address_size 64\n"
-".visible .entry nv12_to_argb(\n"
-"    .param .u64 p_y,\n"
-"    .param .u64 p_uv,\n"
-"    .param .u64 p_dst,\n"
-"    .param .u32 p_width,\n"
-"    .param .u32 p_height,\n"
-"    .param .u32 p_y_pitch,\n"
-"    .param .u32 p_uv_pitch,\n"
-"    .param .u32 p_dst_pitch,\n"
-"    .param .u32 p_order\n"
-")\n"
-"{\n"
-"    .reg .pred %p<5>;\n"
-"    .reg .b32 %r<70>;\n"
-"    .reg .b64 %rd<18>;\n"
-"    ld.param.u64 %rd1, [p_y];\n"
-"    ld.param.u64 %rd2, [p_uv];\n"
-"    ld.param.u64 %rd3, [p_dst];\n"
-"    ld.param.u32 %r1, [p_width];\n"
-"    ld.param.u32 %r2, [p_height];\n"
-"    ld.param.u32 %r3, [p_y_pitch];\n"
-"    ld.param.u32 %r4, [p_uv_pitch];\n"
-"    ld.param.u32 %r5, [p_dst_pitch];\n"
-"    ld.param.u32 %r6, [p_order];\n"
-"    mov.u32 %r7, %ctaid.x;\n"
-"    mov.u32 %r8, %ntid.x;\n"
-"    mov.u32 %r9, %tid.x;\n"
-"    mad.lo.u32 %r10, %r7, %r8, %r9;\n"
-"    mov.u32 %r11, %ctaid.y;\n"
-"    mov.u32 %r12, %ntid.y;\n"
-"    mov.u32 %r13, %tid.y;\n"
-"    mad.lo.u32 %r14, %r11, %r12, %r13;\n"
-"    setp.ge.u32 %p1, %r10, %r1;\n"
-"    @%p1 bra DONE;\n"
-"    setp.ge.u32 %p2, %r14, %r2;\n"
-"    @%p2 bra DONE;\n"
-"    mul.wide.u32 %rd4, %r14, %r3;\n"
-"    add.u64 %rd4, %rd1, %rd4;\n"
-"    cvt.u64.u32 %rd5, %r10;\n"
-"    add.u64 %rd4, %rd4, %rd5;\n"
-"    ld.global.u8 %r15, [%rd4];\n"
-"    shr.u32 %r16, %r14, 1;\n"
-"    and.b32 %r17, %r10, -2;\n"
-"    mul.wide.u32 %rd6, %r16, %r4;\n"
-"    add.u64 %rd6, %rd2, %rd6;\n"
-"    cvt.u64.u32 %rd7, %r17;\n"
-"    add.u64 %rd6, %rd6, %rd7;\n"
-"    ld.global.u8 %r18, [%rd6];\n"
-"    add.u64 %rd8, %rd6, 1;\n"
-"    ld.global.u8 %r19, [%rd8];\n"
-"    sub.s32 %r20, %r15, 16;\n"
-"    max.s32 %r20, %r20, 0;\n"
-"    sub.s32 %r21, %r18, 128;\n"
-"    sub.s32 %r22, %r19, 128;\n"
-"    mul.lo.s32 %r23, %r20, 298;\n"
-"    mul.lo.s32 %r24, %r22, 409;\n"
-"    add.s32 %r25, %r23, %r24;\n"
-"    add.s32 %r25, %r25, 128;\n"
-"    shr.s32 %r25, %r25, 8;\n"
-"    max.s32 %r25, %r25, 0;\n"
-"    min.s32 %r25, %r25, 255;\n"
-"    mul.lo.s32 %r26, %r21, 100;\n"
-"    sub.s32 %r27, %r23, %r26;\n"
-"    mul.lo.s32 %r28, %r22, 208;\n"
-"    sub.s32 %r27, %r27, %r28;\n"
-"    add.s32 %r27, %r27, 128;\n"
-"    shr.s32 %r27, %r27, 8;\n"
-"    max.s32 %r27, %r27, 0;\n"
-"    min.s32 %r27, %r27, 255;\n"
-"    mul.lo.s32 %r29, %r21, 516;\n"
-"    add.s32 %r30, %r23, %r29;\n"
-"    add.s32 %r30, %r30, 128;\n"
-"    shr.s32 %r30, %r30, 8;\n"
-"    max.s32 %r30, %r30, 0;\n"
-"    min.s32 %r30, %r30, 255;\n"
-"    mul.wide.u32 %rd9, %r14, %r5;\n"
-"    add.u64 %rd9, %rd3, %rd9;\n"
-"    mul.wide.u32 %rd10, %r10, 4;\n"
-"    add.u64 %rd9, %rd9, %rd10;\n"
-"    mov.u32 %r31, 255;\n"
-"    setp.eq.u32 %p1, %r6, 1;\n"
-"    @%p1 bra STORE_RGBA;\n"
-"    setp.eq.u32 %p2, %r6, 2;\n"
-"    @%p2 bra STORE_ARGB;\n"
-"    setp.eq.u32 %p3, %r6, 3;\n"
-"    @%p3 bra STORE_ABGR;\n"
-"STORE_BGRA:\n"
-"    st.global.u8 [%rd9], %r30;\n"
-"    st.global.u8 [%rd9+1], %r27;\n"
-"    st.global.u8 [%rd9+2], %r25;\n"
-"    st.global.u8 [%rd9+3], %r31;\n"
-"    bra DONE;\n"
-"STORE_RGBA:\n"
-"    st.global.u8 [%rd9], %r25;\n"
-"    st.global.u8 [%rd9+1], %r27;\n"
-"    st.global.u8 [%rd9+2], %r30;\n"
-"    st.global.u8 [%rd9+3], %r31;\n"
-"    bra DONE;\n"
-"STORE_ARGB:\n"
-"    st.global.u8 [%rd9], %r31;\n"
-"    st.global.u8 [%rd9+1], %r25;\n"
-"    st.global.u8 [%rd9+2], %r27;\n"
-"    st.global.u8 [%rd9+3], %r30;\n"
-"    bra DONE;\n"
-"STORE_ABGR:\n"
-"    st.global.u8 [%rd9], %r31;\n"
-"    st.global.u8 [%rd9+1], %r30;\n"
-"    st.global.u8 [%rd9+2], %r27;\n"
-"    st.global.u8 [%rd9+3], %r25;\n"
-"DONE:\n"
-"    ret;\n"
-"}\n";
-
-static const char p010ToArgbPtx[] =
-".version 3.2\n"
-".target sm_30\n"
-".address_size 64\n"
-".visible .entry p010_to_argb(\n"
-"    .param .u64 p_y,\n"
-"    .param .u64 p_uv,\n"
-"    .param .u64 p_dst,\n"
-"    .param .u32 p_width,\n"
-"    .param .u32 p_height,\n"
-"    .param .u32 p_y_pitch,\n"
-"    .param .u32 p_uv_pitch,\n"
-"    .param .u32 p_dst_pitch,\n"
-"    .param .u32 p_order\n"
-")\n"
-"{\n"
-"    .reg .pred %p<5>;\n"
-"    .reg .b32 %r<70>;\n"
-"    .reg .b64 %rd<18>;\n"
-"    ld.param.u64 %rd1, [p_y];\n"
-"    ld.param.u64 %rd2, [p_uv];\n"
-"    ld.param.u64 %rd3, [p_dst];\n"
-"    ld.param.u32 %r1, [p_width];\n"
-"    ld.param.u32 %r2, [p_height];\n"
-"    ld.param.u32 %r3, [p_y_pitch];\n"
-"    ld.param.u32 %r4, [p_uv_pitch];\n"
-"    ld.param.u32 %r5, [p_dst_pitch];\n"
-"    ld.param.u32 %r6, [p_order];\n"
-"    mov.u32 %r7, %ctaid.x;\n"
-"    mov.u32 %r8, %ntid.x;\n"
-"    mov.u32 %r9, %tid.x;\n"
-"    mad.lo.u32 %r10, %r7, %r8, %r9;\n"
-"    mov.u32 %r11, %ctaid.y;\n"
-"    mov.u32 %r12, %ntid.y;\n"
-"    mov.u32 %r13, %tid.y;\n"
-"    mad.lo.u32 %r14, %r11, %r12, %r13;\n"
-"    setp.ge.u32 %p1, %r10, %r1;\n"
-"    @%p1 bra DONE;\n"
-"    setp.ge.u32 %p2, %r14, %r2;\n"
-"    @%p2 bra DONE;\n"
-"    mul.wide.u32 %rd4, %r14, %r3;\n"
-"    add.u64 %rd4, %rd1, %rd4;\n"
-"    cvt.u64.u32 %rd5, %r10;\n"
-"    shl.b64 %rd5, %rd5, 1;\n" // 2 bytes per pixel
-"    add.u64 %rd4, %rd4, %rd5;\n"
-"    ld.global.u16 %r15, [%rd4];\n" // Load 16-bit Y
-"    shr.u32 %r15, %r15, 8;\n"       // Shift to 8-bit range
-"    shr.u32 %r16, %r14, 1;\n"
-"    and.b32 %r17, %r10, -2;\n"
-"    mul.wide.u32 %rd6, %r16, %r4;\n"
-"    add.u64 %rd6, %rd2, %rd6;\n"
-"    cvt.u64.u32 %rd7, %r17;\n"
-"    shl.b64 %rd7, %rd7, 1;\n" // 2 bytes per pixel
-"    add.u64 %rd6, %rd6, %rd7;\n"
-"    ld.global.u16 %r18, [%rd6];\n" // Load 16-bit U
-"    shr.u32 %r18, %r18, 8;\n"       // Shift to 8-bit range
-"    add.u64 %rd6, %rd6, 2;\n"       // Advance 2 bytes for V
-"    ld.global.u16 %r19, [%rd6];\n" // Load 16-bit V
-"    shr.u32 %r19, %r19, 8;\n"       // Shift to 8-bit range
-"    sub.s32 %r20, %r15, 16;\n"
-"    sub.s32 %r21, %r18, 128;\n"
-"    sub.s32 %r22, %r19, 128;\n"
-"    mul.lo.s32 %r23, %r20, 298;\n"
-"    mul.lo.s32 %r24, %r22, 409;\n"
-"    add.s32 %r25, %r23, %r24;\n"
-"    add.s32 %r25, %r25, 128;\n"
-"    shr.s32 %r26, %r25, 8;\n"
-"    max.s32 %r26, %r26, 0;\n"
-"    min.s32 %r26, %r26, 255;\n"
-"    mul.lo.s32 %r27, %r21, 100;\n"
-"    sub.s32 %r28, %r23, %r27;\n"
-"    mul.lo.s32 %r29, %r22, 208;\n"
-"    sub.s32 %r30, %r28, %r29;\n"
-"    add.s32 %r30, %r30, 128;\n"
-"    shr.s32 %r31, %r30, 8;\n"
-"    max.s32 %r31, %r31, 0;\n"
-"    min.s32 %r31, %r31, 255;\n"
-"    mul.lo.s32 %r32, %r21, 516;\n"
-"    add.s32 %r33, %r23, %r32;\n"
-"    add.s32 %r33, %r33, 128;\n"
-"    shr.s32 %r34, %r33, 8;\n"
-"    max.s32 %r34, %r34, 0;\n"
-"    min.s32 %r34, %r34, 255;\n"
-"    mul.wide.u32 %rd8, %r14, %r5;\n"
-"    add.u64 %rd8, %rd3, %rd8;\n"
-"    cvt.u64.u32 %rd9, %r10;\n"
-"    shl.b64 %rd9, %rd9, 2;\n"
-"    add.u64 %rd8, %rd8, %rd9;\n"
-"    mov.u32 %r35, 255;\n"
-"    setp.eq.u32 %p1, %r6, 1;\n"
-"    @%p1 bra STORE_RGBA;\n"
-"    setp.eq.u32 %p2, %r6, 2;\n"
-"    @%p2 bra STORE_ARGB;\n"
-"    setp.eq.u32 %p3, %r6, 3;\n"
-"    @%p3 bra STORE_ABGR;\n"
-"STORE_BGRA:\n"
-"    st.global.u8 [%rd8], %r34;\n"
-"    st.global.u8 [%rd8+1], %r31;\n"
-"    st.global.u8 [%rd8+2], %r26;\n"
-"    st.global.u8 [%rd8+3], %r35;\n"
-"    bra DONE;\n"
-"STORE_RGBA:\n"
-"    st.global.u8 [%rd8], %r26;\n"
-"    st.global.u8 [%rd8+1], %r31;\n"
-"    st.global.u8 [%rd8+2], %r34;\n"
-"    st.global.u8 [%rd8+3], %r35;\n"
-"    bra DONE;\n"
-"STORE_ARGB:\n"
-"    st.global.u8 [%rd8], %r35;\n"
-"    st.global.u8 [%rd8+1], %r26;\n"
-"    st.global.u8 [%rd8+2], %r31;\n"
-"    st.global.u8 [%rd8+3], %r34;\n"
-"    bra DONE;\n"
-"STORE_ABGR:\n"
-"    st.global.u8 [%rd8], %r35;\n"
-"    st.global.u8 [%rd8+1], %r34;\n"
-"    st.global.u8 [%rd8+2], %r31;\n"
-"    st.global.u8 [%rd8+3], %r26;\n"
-"DONE:\n"
-"    ret;\n"
-"}\n";
-
 extern const NVCodec __start_nvd_codecs[];
 extern const NVCodec __stop_nvd_codecs[];
 
@@ -375,22 +137,31 @@ static const char *fourccString(uint32_t fourcc, char out[5]) {
     return out;
 }
 
-static bool fdIsSameFile(int a, int b) {
-    struct stat sa = { 0 };
-    struct stat sb = { 0 };
-    if (a < 0 || b < 0 || fstat(a, &sa) != 0 || fstat(b, &sb) != 0) {
-        return false;
+static void cacheBackingImageFdStat(BackingImage *img, int index) {
+    if (img == NULL || index < 0 || index >= 4 || img->fds[index] < 0) {
+        return;
     }
-    return sa.st_dev == sb.st_dev && sa.st_ino == sb.st_ino;
+
+    struct stat s;
+    if (fstat(img->fds[index], &s) == 0) {
+        img->st_dev[index] = s.st_dev;
+        img->st_ino[index] = s.st_ino;
+    }
 }
 
-static bool backingImageMatchesImport(BackingImage *img, int fd, NVFormat format, uint32_t width, uint32_t height) {
+static bool backingImageFdMatchesStat(const BackingImage *img, const struct stat *fdStat, int index) {
+    return img->fds[index] >= 0 &&
+           img->st_dev[index] == fdStat->st_dev &&
+           img->st_ino[index] == fdStat->st_ino;
+}
+
+static bool backingImageMatchesImport(BackingImage *img, const struct stat *fdStat, NVFormat format, uint32_t width, uint32_t height) {
     if (img == NULL || img->isExternalBuffer || img->borrowedCudaResources ||
         img->format != format || img->width != width || img->height != height) {
         return false;
     }
     for (int i = 0; i < 4; i++) {
-        if (fdIsSameFile(fd, img->fds[i])) {
+        if (backingImageFdMatchesStat(img, fdStat, i)) {
             return true;
         }
     }
@@ -398,10 +169,15 @@ static bool backingImageMatchesImport(BackingImage *img, int fd, NVFormat format
 }
 
 static BackingImage *retainBackingImageByFd(NVDriver *drv, int fd, NVFormat format, uint32_t width, uint32_t height) {
+    struct stat fdStat;
+    if (fd < 0 || fstat(fd, &fdStat) != 0) {
+        return NULL;
+    }
+
     BackingImage *ret = NULL;
     pthread_mutex_lock(&drv->imagesMutex);
     ARRAY_FOR_EACH(BackingImage*, img, &drv->images)
-        if (backingImageMatchesImport(img, fd, format, width, height)) {
+        if (backingImageMatchesImport(img, &fdStat, format, width, height)) {
             ret = img;
             atomic_fetch_add(&ret->borrowCount, 1);
             break;
@@ -1554,6 +1330,7 @@ static BackingImage *createImportedBackingImage(NVDriver *drv, const ImportedSur
         if (img->fds[i] < 0) {
             goto fail;
         }
+        cacheBackingImageFdStat(img, (int) i);
     }
     off_t realSize = lseek(img->fds[0], 0, SEEK_END);
     if (realSize > 0) {
@@ -2241,6 +2018,14 @@ static uint32_t rgbOrderForFourcc(uint32_t fourcc) {
     }
 }
 
+static size_t roundVideoProcBufferSize(size_t requiredSize) {
+    const size_t blockSize = 1024 * 1024;
+    if (requiredSize > SIZE_MAX - (blockSize - 1)) {
+        return requiredSize;
+    }
+    return (requiredSize + blockSize - 1) & ~(blockSize - 1);
+}
+
 static bool ensureVideoProcBuffer(NVDriver *drv, CUdeviceptr *buffer, size_t *bufferSize, size_t requiredSize) {
     if (*bufferSize >= requiredSize && *buffer != 0) {
         return true;
@@ -2252,10 +2037,27 @@ static bool ensureVideoProcBuffer(NVDriver *drv, CUdeviceptr *buffer, size_t *bu
     }
     *buffer = 0;
     *bufferSize = 0;
-    if (CHECK_CUDA_RESULT(drv->cu->cuMemAlloc(buffer, requiredSize))) {
+    const size_t allocSize = roundVideoProcBufferSize(requiredSize);
+    if (CHECK_CUDA_RESULT(drv->cu->cuMemAlloc(buffer, allocSize))) {
         return false;
     }
-    *bufferSize = requiredSize;
+    *bufferSize = allocSize;
+    return true;
+}
+
+static bool ensureCpuVideoProcBuffer(void **buffer, size_t *bufferSize, size_t requiredSize) {
+    if (*bufferSize >= requiredSize && *buffer != NULL) {
+        return true;
+    }
+
+    const size_t allocSize = roundVideoProcBufferSize(requiredSize);
+    void *newBuffer = realloc(*buffer, allocSize);
+    if (newBuffer == NULL) {
+        return false;
+    }
+
+    *buffer = newBuffer;
+    *bufferSize = allocSize;
     return true;
 }
 
@@ -2382,6 +2184,8 @@ static bool convertNV12ToARGBCuda(NVDriver *drv, BackingImage *srcImg, BackingIm
         if (CHECK_CUDA_RESULT(drv->cu->cuMemcpy2D(&argbCpy))) {
             goto fail;
         }
+    } else if (CHECK_CUDA_RESULT(drv->cu->cuStreamSynchronize(0))) {
+        goto fail;
     }
 
     pthread_mutex_unlock(&drv->exportMutex);
@@ -2421,15 +2225,21 @@ static bool convertNV12ToARGB(NVDriver *drv, BackingImage *srcImg, BackingImage 
     const size_t ySize = (size_t) width * height * bpp;
     const size_t uvSize = (size_t) width * ((height + 1) / 2) * bpp;
     const size_t argbSize = (size_t) width * height * 4;
-    uint8_t *yPlane = malloc(ySize);
-    uint8_t *uvPlane = malloc(uvSize);
-    uint8_t *argb = dstImg->externalMapping == NULL ? malloc(argbSize) : NULL;
-    if (yPlane == NULL || uvPlane == NULL || (dstImg->externalMapping == NULL && argb == NULL)) {
-        free(yPlane);
-        free(uvPlane);
-        free(argb);
-        return false;
+
+    pthread_mutex_lock(&drv->exportMutex);
+
+    if (!ensureCpuVideoProcBuffer(&drv->cpuVideoProcYBuffer, &drv->cpuVideoProcYBufferSize, ySize) ||
+        !ensureCpuVideoProcBuffer(&drv->cpuVideoProcUVBuffer, &drv->cpuVideoProcUVBufferSize, uvSize)) {
+        goto fail;
     }
+    if (dstImg->externalMapping == NULL &&
+        !ensureCpuVideoProcBuffer(&drv->cpuVideoProcArgbBuffer, &drv->cpuVideoProcArgbBufferSize, argbSize)) {
+        goto fail;
+    }
+
+    uint8_t *yPlane = drv->cpuVideoProcYBuffer;
+    uint8_t *uvPlane = drv->cpuVideoProcUVBuffer;
+    uint8_t *argb = dstImg->externalMapping == NULL ? drv->cpuVideoProcArgbBuffer : NULL;
 
     if (srcImg->externalMapping != NULL) {
         const uint8_t *srcY = (const uint8_t*) srcImg->externalMapping + srcImg->offsets[0];
@@ -2460,8 +2270,10 @@ static bool convertNV12ToARGB(NVDriver *drv, BackingImage *srcImg, BackingImage 
             .Height = (height + 1) / 2
         };
 
-        CHECK_CUDA_RESULT_RETURN(drv->cu->cuMemcpy2D(&yCpy), false);
-        CHECK_CUDA_RESULT_RETURN(drv->cu->cuMemcpy2D(&uvCpy), false);
+        if (CHECK_CUDA_RESULT(drv->cu->cuMemcpy2D(&yCpy)) ||
+            CHECK_CUDA_RESULT(drv->cu->cuMemcpy2D(&uvCpy))) {
+            goto fail;
+        }
     }
 
     for (uint32_t y = 0; y < height; y++) {
@@ -2500,8 +2312,7 @@ static bool convertNV12ToARGB(NVDriver *drv, BackingImage *srcImg, BackingImage 
     }
 
     if (dstImg->externalMapping != NULL) {
-        free(yPlane);
-        free(uvPlane);
+        pthread_mutex_unlock(&drv->exportMutex);
         return true;
     }
 
@@ -2516,10 +2327,12 @@ static bool convertNV12ToARGB(NVDriver *drv, BackingImage *srcImg, BackingImage 
     };
     bool failed = CHECK_CUDA_RESULT(drv->cu->cuMemcpy2D(&argbCpy));
 
-    free(yPlane);
-    free(uvPlane);
-    free(argb);
+    pthread_mutex_unlock(&drv->exportMutex);
     return !failed;
+
+fail:
+    pthread_mutex_unlock(&drv->exportMutex);
+    return false;
 }
 
 static bool copySurfaceBackingImage(NVDriver *drv, NVSurface *src, NVSurface *dst, const VAProcPipelineParameterBuffer *pipeline) {
@@ -3630,6 +3443,15 @@ static VAStatus nvTerminate( VADriverContextP ctx )
         CHECK_CUDA_RESULT(cu->cuMemFree(drv->videoProcArgbBuffer));
         drv->videoProcArgbBuffer = 0;
     }
+    free(drv->cpuVideoProcYBuffer);
+    free(drv->cpuVideoProcUVBuffer);
+    free(drv->cpuVideoProcArgbBuffer);
+    drv->cpuVideoProcYBuffer = NULL;
+    drv->cpuVideoProcUVBuffer = NULL;
+    drv->cpuVideoProcArgbBuffer = NULL;
+    drv->cpuVideoProcYBufferSize = 0;
+    drv->cpuVideoProcUVBufferSize = 0;
+    drv->cpuVideoProcArgbBufferSize = 0;
 
     drv->backend->releaseExporter(drv);
 
