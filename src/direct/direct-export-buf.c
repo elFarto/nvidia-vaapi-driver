@@ -594,30 +594,47 @@ static bool direct_realiseSurface(NVDriver *drv, NVSurface *surface) {
     return true;
 }
 
+static BackingImage *resolveSyncImage(BackingImage *img) {
+    if (img != NULL && img->borrowedBackingImage != NULL) {
+        return img->borrowedBackingImage;
+    }
+    return img;
+}
+
+static void finishSurfaceResolve(NVSurface *surface) {
+    pthread_mutex_lock(&surface->mutex);
+    surface->resolving = 0;
+    pthread_cond_signal(&surface->cond);
+    pthread_mutex_unlock(&surface->mutex);
+}
+
 static bool direct_exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface, uint32_t pitch) {
     if (!direct_realiseSurface(drv, surface)) {
+        finishSurfaceResolve(surface);
         return false;
     }
 
     if (ptr != 0) {
         BackingImage *img = surface->backingImage;
-        if (img != NULL && img->syncInitialized) {
-            pthread_mutex_lock(&img->mutex);
-            img->resolving = true;
-            pthread_mutex_unlock(&img->mutex);
+        BackingImage *syncImg = resolveSyncImage(img);
+        if (syncImg != NULL && syncImg->syncInitialized) {
+            pthread_mutex_lock(&syncImg->mutex);
+            syncImg->resolving = true;
+            pthread_mutex_unlock(&syncImg->mutex);
         }
         nvStatsIncrement(drv, NV_STAT_EXPORT_COPIES);
         if (img != NULL && img->externalMapping != NULL) {
             nvStatsIncrement(drv, NV_STAT_EXPORT_HOST_COPIES);
         }
         bool copied = copyFrameToSurface(drv, ptr, surface, pitch);
-        if (img != NULL && img->syncInitialized) {
-            pthread_mutex_lock(&img->mutex);
-            img->resolving = false;
-            pthread_cond_broadcast(&img->cond);
-            pthread_mutex_unlock(&img->mutex);
+        if (syncImg != NULL && syncImg->syncInitialized) {
+            pthread_mutex_lock(&syncImg->mutex);
+            syncImg->resolving = false;
+            pthread_cond_broadcast(&syncImg->cond);
+            pthread_mutex_unlock(&syncImg->mutex);
         }
         if (!copied) {
+            finishSurfaceResolve(surface);
             return false;
         }
     } else {

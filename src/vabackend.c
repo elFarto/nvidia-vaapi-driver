@@ -274,48 +274,41 @@ static const char p010ToArgbPtx[] =
 "    shr.s32 %r34, %r33, 8;\n"
 "    max.s32 %r34, %r34, 0;\n"
 "    min.s32 %r34, %r34, 255;\n"
-"    setp.eq.u32 %p3, %r6, 1;\n"
-"    @%p3 bra RGBA;\n"
-"    setp.eq.u32 %p4, %r6, 2;\n"
-"    @%p4 bra ARGB;\n"
-"    setp.eq.u32 %p5, %r6, 3;\n"
-"    @%p5 bra ABGR;\n"
-"BGRA:\n"
-"    shl.b32 %r35, %r31, 8;\n"
-"    or.b32 %r36, %r34, %r35;\n"
-"    shl.b32 %r37, %r26, 16;\n"
-"    or.b32 %r38, %r36, %r37;\n"
-"    mov.u32 %r39, -16777216;\n"
-"    or.b32 %r40, %r38, %r39;\n"
-"    bra STORE;\n"
-"RGBA:\n"
-"    shl.b32 %r35, %r31, 8;\n"
-"    or.b32 %r36, %r26, %r35;\n"
-"    shl.b32 %r37, %r34, 16;\n"
-"    or.b32 %r38, %r36, %r37;\n"
-"    mov.u32 %r39, -16777216;\n"
-"    or.b32 %r40, %r38, %r39;\n"
-"    bra STORE;\n"
-"ARGB:\n"
-"    shl.b32 %r35, %r26, 8;\n"
-"    shl.b32 %r36, %r31, 16;\n"
-"    or.b32 %r37, %r35, %r36;\n"
-"    shl.b32 %r38, %r34, 24;\n"
-"    or.b32 %r40, %r37, %r38;\n"
-"    bra STORE;\n"
-"ABGR:\n"
-"    shl.b32 %r35, %r34, 8;\n"
-"    shl.b32 %r36, %r31, 16;\n"
-"    or.b32 %r37, %r35, %r36;\n"
-"    shl.b32 %r38, %r26, 24;\n"
-"    or.b32 %r40, %r37, %r38;\n"
-"STORE:\n"
 "    mul.wide.u32 %rd8, %r14, %r5;\n"
 "    add.u64 %rd8, %rd3, %rd8;\n"
 "    cvt.u64.u32 %rd9, %r10;\n"
 "    shl.b64 %rd9, %rd9, 2;\n"
 "    add.u64 %rd8, %rd8, %rd9;\n"
-"    st.global.u32 [%rd8], %r40;\n"
+"    mov.u32 %r35, 255;\n"
+"    setp.eq.u32 %p1, %r6, 1;\n"
+"    @%p1 bra STORE_RGBA;\n"
+"    setp.eq.u32 %p2, %r6, 2;\n"
+"    @%p2 bra STORE_ARGB;\n"
+"    setp.eq.u32 %p3, %r6, 3;\n"
+"    @%p3 bra STORE_ABGR;\n"
+"STORE_BGRA:\n"
+"    st.global.u8 [%rd8], %r34;\n"
+"    st.global.u8 [%rd8+1], %r31;\n"
+"    st.global.u8 [%rd8+2], %r26;\n"
+"    st.global.u8 [%rd8+3], %r35;\n"
+"    bra DONE;\n"
+"STORE_RGBA:\n"
+"    st.global.u8 [%rd8], %r26;\n"
+"    st.global.u8 [%rd8+1], %r31;\n"
+"    st.global.u8 [%rd8+2], %r34;\n"
+"    st.global.u8 [%rd8+3], %r35;\n"
+"    bra DONE;\n"
+"STORE_ARGB:\n"
+"    st.global.u8 [%rd8], %r35;\n"
+"    st.global.u8 [%rd8+1], %r26;\n"
+"    st.global.u8 [%rd8+2], %r31;\n"
+"    st.global.u8 [%rd8+3], %r34;\n"
+"    bra DONE;\n"
+"STORE_ABGR:\n"
+"    st.global.u8 [%rd8], %r35;\n"
+"    st.global.u8 [%rd8+1], %r34;\n"
+"    st.global.u8 [%rd8+2], %r31;\n"
+"    st.global.u8 [%rd8+3], %r26;\n"
 "DONE:\n"
 "    ret;\n"
 "}\n";
@@ -758,6 +751,8 @@ int pictureIdxFromSurfaceId(NVDriver *drv, VASurfaceID surfId) {
     return -1;
 }
 
+static void setSurfaceBackingImageResolving(NVSurface *surface, bool resolving);
+
 static cudaVideoCodec vaToCuCodec(VAProfile profile) {
     for (const NVCodec *c = __start_nvd_codecs; c < __stop_nvd_codecs; c++) {
         cudaVideoCodec cvc = c->computeCudaCodec(profile);
@@ -824,6 +819,7 @@ static void* resolveSurfaces(void *param) {
 
         //LOG("Mapping surface %d", surface->pictureIdx);
         if (surface->decodeFailed || CHECK_CUDA_RESULT(cv->cuvidMapVideoFrame(ctx->decoder, surface->pictureIdx, &deviceMemory, &pitch, &procParams))) {
+            setSurfaceBackingImageResolving(surface, false);
             pthread_mutex_lock(&surface->mutex);
             surface->resolving = 0;
             pthread_cond_signal(&surface->cond);
@@ -1621,6 +1617,30 @@ fail:
     return NULL;
 }
 
+static BackingImage *surfaceSyncBackingImage(NVSurface *surface) {
+    if (surface == NULL || surface->backingImage == NULL) {
+        return NULL;
+    }
+    if (surface->backingImage->borrowedBackingImage != NULL) {
+        return surface->backingImage->borrowedBackingImage;
+    }
+    return surface->backingImage;
+}
+
+static void setSurfaceBackingImageResolving(NVSurface *surface, bool resolving) {
+    BackingImage *img = surfaceSyncBackingImage(surface);
+    if (img == NULL || !img->syncInitialized) {
+        return;
+    }
+
+    pthread_mutex_lock(&img->mutex);
+    img->resolving = resolving;
+    if (!resolving) {
+        pthread_cond_broadcast(&img->cond);
+    }
+    pthread_mutex_unlock(&img->mutex);
+}
+
 static VAStatus nvCreateSurfaces2(
             VADriverContextP    ctx,
             unsigned int        format,
@@ -2374,22 +2394,25 @@ fail:
 
 static bool convertNV12ToARGB(NVDriver *drv, BackingImage *srcImg, BackingImage *dstImg, uint32_t width, uint32_t height) {
     const bool is16Bit = srcImg->format == NV_FORMAT_P010 || srcImg->format == NV_FORMAT_P012;
+    const char *formatName = is16Bit ? "P010/P012" : "NV12";
 
     if (dstImg->externalMapping == NULL || dstImg->externalDevicePtr != 0) {
         if (convertNV12ToARGBCuda(drv, srcImg, dstImg, width, height, is16Bit)) {
             nvStatsIncrement(drv, NV_STAT_VIDEOPROC_CUDA);
-            static bool loggedCudaVideoProc = false;
-            if (!loggedCudaVideoProc) {
-                LOG("Using CUDA VideoProc conversion");
-                loggedCudaVideoProc = true;
+            static bool loggedCudaVideoProc[2] = { false, false };
+            const int logIndex = is16Bit ? 1 : 0;
+            if (!loggedCudaVideoProc[logIndex]) {
+                LOG("Using CUDA %s to RGB VideoProc conversion", formatName);
+                loggedCudaVideoProc[logIndex] = true;
             }
             return true;
         }
         nvStatsIncrement(drv, NV_STAT_VIDEOPROC_CUDA_FAILURES);
-        static bool loggedCudaFallback = false;
-        if (!loggedCudaFallback) {
-            LOG("CUDA %s to RGB conversion failed, falling back to CPU", is16Bit ? "P010" : "NV12");
-            loggedCudaFallback = true;
+        static bool loggedCudaFallback[2] = { false, false };
+        const int logIndex = is16Bit ? 1 : 0;
+        if (!loggedCudaFallback[logIndex]) {
+            LOG("CUDA %s to RGB conversion failed, falling back to CPU", formatName);
+            loggedCudaFallback[logIndex] = true;
         }
     }
     nvStatsIncrement(drv, NV_STAT_VIDEOPROC_CPU_FALLBACK);
@@ -2650,6 +2673,7 @@ static VAStatus nvBeginPicture(
 
     //I don't know if we actually need to lock here, nothing should be waiting
     //until after this function returns...
+    setSurfaceBackingImageResolving(surface, true);
     pthread_mutex_lock(&surface->mutex);
     surface->resolving = 1;
     pthread_mutex_unlock(&surface->mutex);
