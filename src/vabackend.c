@@ -17,6 +17,7 @@
 
 #include <va/va_backend.h>
 #include <va/va_drmcommon.h>
+#include <va/va_vpp.h>
 
 #include <drm_fourcc.h>
 
@@ -1345,6 +1346,7 @@ static BackingImage *createImportedBackingImage(NVDriver *drv, const ImportedSur
 
     BackingImage *existing = retainBackingImageByFd(drv, imported->fds[0], format, width, height);
     if (existing != NULL) {
+        nvBackingImageCopyColorMetadata(img, existing);
         const NVFormatInfo *fmtInfo = &formatsInfo[format];
         for (uint32_t i = 0; i < fmtInfo->numPlanes; i++) {
             img->arrays[i] = existing->arrays[i];
@@ -1356,6 +1358,8 @@ static BackingImage *createImportedBackingImage(NVDriver *drv, const ImportedSur
         img->totalSize = existing->totalSize != 0 ? existing->totalSize : existing->size[0];
         img->borrowedCudaResources = true;
         img->borrowedBackingImage = existing;
+        LOG_DEBUG("Imported surface reused backing image color metadata: imported=%p backing=%p color_standard=%s(%d) full_range=%d",
+            img, existing, nvColorStandardName(img->colorStandard), img->colorStandard, img->colorRangeFull);
         return img;
     }
 
@@ -1521,8 +1525,11 @@ static VAStatus nvCreateSurfaces2(
             }
             suf->backingImage = img;
             img->surface = suf;
+            nvSurfaceCopyColorMetadataFromBackingImage(suf, img);
             char fourcc[5];
-            LOG_DEBUG("Importing surface %ux%u, format %X/%s (%p)", width, height, format, fourccString(surfaceFourcc, fourcc), suf);
+            LOG_DEBUG("Importing surface %ux%u, format %X/%s (%p) color_standard=%s(%d) full_range=%d",
+                width, height, format, fourccString(surfaceFourcc, fourcc), suf,
+                nvColorStandardName(suf->colorStandard), suf->colorStandard, suf->colorRangeFull);
         } else {
             LOG_DEBUG("Creating surface %ux%u, format %X (%p)", width, height, format, suf);
         }
@@ -1944,6 +1951,205 @@ static uint8_t clampU8(int value) {
     return (uint8_t) value;
 }
 
+typedef struct {
+    int vToR;
+    int uToG;
+    int vToG;
+    int uToB;
+} ColorMatrix;
+
+typedef struct {
+    int sampleShift;
+    int yOffset;
+    int uvOffset;
+    int rounding;
+    int valueShift;
+} VideoProcSampleInfo;
+
+static const ColorMatrix kColorMatrices[] = {
+    { 409, 100, 208, 516 },
+    { 459,  55, 136, 541 },
+    { 430,  48, 167, 548 },
+};
+
+static const char *colorMatrixName(const ColorMatrix *matrix) {
+    if (matrix == &kColorMatrices[0]) {
+        return "BT.601";
+    }
+    if (matrix == &kColorMatrices[1]) {
+        return "BT.709";
+    }
+    if (matrix == &kColorMatrices[2]) {
+        return "BT.2020";
+    }
+    return "unknown";
+}
+
+VAProcColorStandardType nvColorStandardFromMatrixCoefficients(uint8_t matrixCoefficients) {
+    switch (matrixCoefficients) {
+    case 1:
+        return VAProcColorStandardBT709;
+    case 4:
+        return VAProcColorStandardBT470M;
+    case 5:
+        return VAProcColorStandardBT470BG;
+    case 6:
+        return VAProcColorStandardSMPTE170M;
+    case 7:
+        return VAProcColorStandardSMPTE240M;
+    case 9:
+        return VAProcColorStandardBT2020;
+    default:
+        return VAProcColorStandardNone;
+    }
+}
+
+void nvSurfaceResetColorMetadata(NVSurface *surface) {
+    if (surface == NULL) {
+        return;
+    }
+
+    surface->colorStandard = VAProcColorStandardNone;
+    surface->colorRangeFull = false;
+}
+
+void nvSurfaceSetColorMetadata(NVSurface *surface, VAProcColorStandardType colorStandard, bool colorRangeFull) {
+    if (surface == NULL) {
+        return;
+    }
+
+    surface->colorStandard = colorStandard;
+    surface->colorRangeFull = colorRangeFull;
+}
+
+void nvSurfaceCopyColorMetadata(NVSurface *dst, const NVSurface *src) {
+    if (dst == NULL || src == NULL) {
+        return;
+    }
+
+    dst->colorStandard = src->colorStandard;
+    dst->colorRangeFull = src->colorRangeFull;
+}
+
+static BackingImage *metadataBackingImage(BackingImage *img) {
+    if (img != NULL && img->borrowedBackingImage != NULL) {
+        return img->borrowedBackingImage;
+    }
+    return img;
+}
+
+static const BackingImage *constMetadataBackingImage(const BackingImage *img) {
+    if (img != NULL && img->borrowedBackingImage != NULL) {
+        return img->borrowedBackingImage;
+    }
+    return img;
+}
+
+void nvSurfaceCopyColorMetadataFromBackingImage(NVSurface *surface, const BackingImage *img) {
+    const BackingImage *metadataImg = constMetadataBackingImage(img);
+    if (surface == NULL || metadataImg == NULL) {
+        return;
+    }
+
+    surface->colorStandard = metadataImg->colorStandard;
+    surface->colorRangeFull = metadataImg->colorRangeFull;
+}
+
+void nvBackingImageStoreSurfaceColorMetadata(BackingImage *img, const NVSurface *surface) {
+    BackingImage *metadataImg = metadataBackingImage(img);
+    if (metadataImg == NULL || surface == NULL) {
+        return;
+    }
+
+    metadataImg->colorStandard = surface->colorStandard;
+    metadataImg->colorRangeFull = surface->colorRangeFull;
+}
+
+void nvBackingImageCopyColorMetadata(BackingImage *dst, const BackingImage *src) {
+    const BackingImage *metadataSrc = constMetadataBackingImage(src);
+    if (dst == NULL || metadataSrc == NULL) {
+        return;
+    }
+
+    dst->colorStandard = metadataSrc->colorStandard;
+    dst->colorRangeFull = metadataSrc->colorRangeFull;
+}
+
+const char *nvColorStandardName(VAProcColorStandardType colorStandard) {
+    switch (colorStandard) {
+    case VAProcColorStandardNone:
+        return "None";
+    case VAProcColorStandardBT601:
+        return "BT.601";
+    case VAProcColorStandardBT709:
+        return "BT.709";
+    case VAProcColorStandardBT470M:
+        return "BT.470M";
+    case VAProcColorStandardBT470BG:
+        return "BT.470BG";
+    case VAProcColorStandardSMPTE170M:
+        return "SMPTE170M";
+    case VAProcColorStandardSMPTE240M:
+        return "SMPTE240M";
+    case VAProcColorStandardGenericFilm:
+        return "GenericFilm";
+    case VAProcColorStandardSRGB:
+        return "sRGB";
+    case VAProcColorStandardSTRGB:
+        return "stRGB";
+    case VAProcColorStandardXVYCC601:
+        return "xvYCC601";
+    case VAProcColorStandardXVYCC709:
+        return "xvYCC709";
+    case VAProcColorStandardBT2020:
+        return "BT.2020";
+    case VAProcColorStandardExplicit:
+        return "Explicit";
+    default:
+        return "unknown";
+    }
+}
+
+static const ColorMatrix *colorMatrixForStandard(VAProcColorStandardType colorStandard, uint32_t width) {
+    switch (colorStandard) {
+    case VAProcColorStandardBT601:
+    case VAProcColorStandardSMPTE170M:
+    case VAProcColorStandardBT470M:
+    case VAProcColorStandardBT470BG:
+        return &kColorMatrices[0];
+    case VAProcColorStandardBT709:
+    case VAProcColorStandardSMPTE240M:
+        return &kColorMatrices[1];
+    case VAProcColorStandardBT2020:
+        return &kColorMatrices[2];
+    case VAProcColorStandardNone:
+    default:
+        return width >= 1280 ? &kColorMatrices[1] : &kColorMatrices[0];
+    }
+}
+
+static VAProcColorStandardType effectiveSurfaceColorStandard(const NVSurface *src, const VAProcPipelineParameterBuffer *pipeline) {
+    if (pipeline->surface_color_standard != VAProcColorStandardNone) {
+        return pipeline->surface_color_standard;
+    }
+    if (src != NULL && src->colorStandard != VAProcColorStandardNone) {
+        return src->colorStandard;
+    }
+    return VAProcColorStandardNone;
+}
+
+static VideoProcSampleInfo videoProcSampleInfoForFormat(NVFormat format) {
+    switch (format) {
+    case NV_FORMAT_P010:
+        return (VideoProcSampleInfo) { 6, 64, 512, 512, 10 };
+    case NV_FORMAT_P012:
+        return (VideoProcSampleInfo) { 4, 256, 2048, 2048, 12 };
+    case NV_FORMAT_NV12:
+    default:
+        return (VideoProcSampleInfo) { 0, 16, 128, 128, 8 };
+    }
+}
+
 static bool loadVideoProcKernel(NVDriver *drv, bool is16Bit) {
     if (is16Bit) {
         static bool loggedP010KernelFailure = false;
@@ -2100,11 +2306,12 @@ static void writeRgbPixel(uint8_t *dst, uint32_t fourcc, uint8_t r, uint8_t g, u
     }
 }
 
-static bool convertNV12ToARGBCuda(NVDriver *drv, BackingImage *srcImg, BackingImage *dstImg, uint32_t width, uint32_t height, bool is16Bit) {
+static bool convertNV12ToARGBCuda(NVDriver *drv, BackingImage *srcImg, BackingImage *dstImg, uint32_t width, uint32_t height, bool is16Bit, const ColorMatrix *matrix) {
     if (srcImg->arrays[0] == NULL || srcImg->arrays[1] == NULL) {
         return false;
     }
 
+    const VideoProcSampleInfo sampleInfo = videoProcSampleInfoForFormat(srcImg->format);
     const size_t bpp = is16Bit ? 2 : 1;
     const size_t ySize = (size_t) width * height * bpp;
     const size_t uvHeight = (height + 1) / 2;
@@ -2153,7 +2360,16 @@ static bool convertNV12ToARGBCuda(NVDriver *drv, BackingImage *srcImg, BackingIm
     uint32_t yPitch = width * bpp;
     uint32_t uvPitch = width * bpp;
     uint32_t order = rgbOrderForFourcc((uint32_t) dstImg->fourcc);
-    void *args[] = {
+    uint32_t vToR = (uint32_t) matrix->vToR;
+    uint32_t uToG = (uint32_t) matrix->uToG;
+    uint32_t vToG = (uint32_t) matrix->vToG;
+    uint32_t uToB = (uint32_t) matrix->uToB;
+    uint32_t sampleShift = (uint32_t) sampleInfo.sampleShift;
+    uint32_t yOffset = (uint32_t) sampleInfo.yOffset;
+    uint32_t uvOffset = (uint32_t) sampleInfo.uvOffset;
+    uint32_t rounding = (uint32_t) sampleInfo.rounding;
+    uint32_t valueShift = (uint32_t) sampleInfo.valueShift;
+    void *nv12Args[] = {
         &drv->videoProcYBuffer,
         &drv->videoProcUVBuffer,
         &dstDevice,
@@ -2162,8 +2378,33 @@ static bool convertNV12ToARGBCuda(NVDriver *drv, BackingImage *srcImg, BackingIm
         &yPitch,
         &uvPitch,
         &dstPitch,
-        &order
+        &order,
+        &vToR,
+        &uToG,
+        &vToG,
+        &uToB
     };
+    void *p010Args[] = {
+        &drv->videoProcYBuffer,
+        &drv->videoProcUVBuffer,
+        &dstDevice,
+        &width,
+        &height,
+        &yPitch,
+        &uvPitch,
+        &dstPitch,
+        &order,
+        &vToR,
+        &uToG,
+        &vToG,
+        &uToB,
+        &sampleShift,
+        &yOffset,
+        &uvOffset,
+        &rounding,
+        &valueShift
+    };
+    void **args = is16Bit ? p010Args : nv12Args;
     CUfunction kernel = is16Bit ? drv->p010ToArgbKernel : drv->nv12ToArgbKernel;
     if (CHECK_CUDA_RESULT(drv->cu->cuLaunchKernel(kernel,
             (width + 15) / 16, (height + 15) / 16, 1,
@@ -2196,12 +2437,13 @@ fail:
     return false;
 }
 
-static bool convertNV12ToARGB(NVDriver *drv, BackingImage *srcImg, BackingImage *dstImg, uint32_t width, uint32_t height) {
+static bool convertNV12ToARGB(NVDriver *drv, BackingImage *srcImg, BackingImage *dstImg, uint32_t width, uint32_t height, const ColorMatrix *matrix) {
     const bool is16Bit = srcImg->format == NV_FORMAT_P010 || srcImg->format == NV_FORMAT_P012;
     const char *formatName = is16Bit ? "P010/P012" : "NV12";
+    const VideoProcSampleInfo sampleInfo = videoProcSampleInfoForFormat(srcImg->format);
 
     if (dstImg->externalMapping == NULL || dstImg->externalDevicePtr != 0) {
-        if (convertNV12ToARGBCuda(drv, srcImg, dstImg, width, height, is16Bit)) {
+        if (convertNV12ToARGBCuda(drv, srcImg, dstImg, width, height, is16Bit, matrix)) {
             nvStatsIncrement(drv, NV_STAT_VIDEOPROC_CUDA);
             static bool loggedCudaVideoProc[2] = { false, false };
             const int logIndex = is16Bit ? 1 : 0;
@@ -2282,22 +2524,22 @@ static bool convertNV12ToARGB(NVDriver *drv, BackingImage *srcImg, BackingImage 
             if (is16Bit) {
                 const uint16_t *yPlane16 = (const uint16_t*) yPlane;
                 const uint16_t *uvPlane16 = (const uint16_t*) uvPlane;
-                yy = yPlane16[(size_t) y * width + x] >> 8;
+                yy = yPlane16[(size_t) y * width + x] >> sampleInfo.sampleShift;
                 const size_t uvIndex = (size_t) (y / 2) * width + (x & ~1u);
-                u = uvPlane16[uvIndex] >> 8;
-                v = uvPlane16[uvIndex + 1] >> 8;
+                u = uvPlane16[uvIndex] >> sampleInfo.sampleShift;
+                v = uvPlane16[uvIndex + 1] >> sampleInfo.sampleShift;
             } else {
                 yy = yPlane[(size_t) y * width + x];
                 const size_t uvIndex = (size_t) (y / 2) * width + (x & ~1u);
                 u = uvPlane[uvIndex];
                 v = uvPlane[uvIndex + 1];
             }
-            const int c = yy - 16;
-            const int d = u - 128;
-            const int e = v - 128;
-            const uint8_t r = clampU8((298 * c + 409 * e + 128) >> 8);
-            const uint8_t g = clampU8((298 * c - 100 * d - 208 * e + 128) >> 8);
-            const uint8_t b = clampU8((298 * c + 516 * d + 128) >> 8);
+            const int c = yy > sampleInfo.yOffset ? yy - sampleInfo.yOffset : 0;
+            const int d = u - sampleInfo.uvOffset;
+            const int e = v - sampleInfo.uvOffset;
+            const uint8_t r = clampU8((298 * c + matrix->vToR * e + sampleInfo.rounding) >> sampleInfo.valueShift);
+            const uint8_t g = clampU8((298 * c - matrix->uToG * d - matrix->vToG * e + sampleInfo.rounding) >> sampleInfo.valueShift);
+            const uint8_t b = clampU8((298 * c + matrix->uToB * d + sampleInfo.rounding) >> sampleInfo.valueShift);
             if (dstImg->externalMapping != NULL) {
                 uint8_t *row = (uint8_t*) dstImg->externalMapping + dstImg->offsets[0] + (size_t) y * dstImg->strides[0];
                 writeRgbPixel(row + (size_t) x * 4, (uint32_t) dstImg->fourcc, r, g, b);
@@ -2381,8 +2623,24 @@ static bool copySurfaceBackingImage(NVDriver *drv, NVSurface *src, NVSurface *ds
 
     BackingImage *srcImg = src->backingImage;
     BackingImage *dstImg = dst->backingImage;
+    nvSurfaceCopyColorMetadataFromBackingImage(src, srcImg);
     if (srcImg != NULL && dstImg != NULL && (srcImg->format == NV_FORMAT_NV12 || srcImg->format == NV_FORMAT_P010 || srcImg->format == NV_FORMAT_P012) && dstImg->format == NV_FORMAT_ARGB) {
-        bool ret = convertNV12ToARGB(drv, srcImg, dstImg, srcRegion.width, srcRegion.height);
+        const VAProcColorStandardType colorStandard = effectiveSurfaceColorStandard(src, pipeline);
+        const ColorMatrix *matrix = colorMatrixForStandard(colorStandard, srcRegion.width);
+        const VideoProcSampleInfo sampleInfo = videoProcSampleInfoForFormat(srcImg->format);
+        char srcFourcc[5];
+        char dstFourcc[5];
+        LOG_DEBUG("VideoProc color matrix: src=%s dst=%s size=%ux%u surface_color_standard=%s(%d) decoded_color_standard=%s(%d) decoded_full_range=%d output_color_standard=%s(%d) effective_color_standard=%s(%d) matrix=%s coeffs=%d,%d,%d,%d sample_shift=%d y_offset=%d uv_offset=%d value_shift=%d",
+            fourccString(formatsInfo[srcImg->format].vaFormat.fourcc, srcFourcc),
+            fourccString(formatsInfo[dstImg->format].vaFormat.fourcc, dstFourcc),
+            srcRegion.width, srcRegion.height,
+            nvColorStandardName(pipeline->surface_color_standard), pipeline->surface_color_standard,
+            nvColorStandardName(src->colorStandard), src->colorStandard, src->colorRangeFull,
+            nvColorStandardName(pipeline->output_color_standard), pipeline->output_color_standard,
+            nvColorStandardName(colorStandard), colorStandard,
+            colorMatrixName(matrix), matrix->vToR, matrix->uToG, matrix->vToG, matrix->uToB,
+            sampleInfo.sampleShift, sampleInfo.yOffset, sampleInfo.uvOffset, sampleInfo.valueShift);
+        bool ret = convertNV12ToARGB(drv, srcImg, dstImg, srcRegion.width, srcRegion.height, matrix);
         bool popFailed = CHECK_CUDA_RESULT(cu->cuCtxPopCurrent(NULL));
         if (!ret) {
             return false;
@@ -2430,6 +2688,7 @@ done:
     dst->topFieldFirst = src->topFieldFirst;
     dst->secondField = src->secondField;
     dst->decodeFailed = src->decodeFailed;
+    nvSurfaceCopyColorMetadata(dst, src);
     pthread_cond_signal(&dst->cond);
     pthread_mutex_unlock(&dst->mutex);
 
@@ -2495,6 +2754,7 @@ static VAStatus nvBeginPicture(
     nvCtx->renderTarget = surface;
     nvCtx->displayTarget = surface;
     nvCtx->renderTarget->progressiveFrame = true; //assume we're producing progressive frame unless the codec says otherwise
+    nvSurfaceResetColorMetadata(nvCtx->renderTarget);
     nvCtx->pPicParams.CurrPicIdx = nvCtx->renderTarget->pictureIdx;
     if (nvCtx->codec != NULL && nvCtx->codec->beginPicture != NULL) {
         nvCtx->codec->beginPicture(nvCtx);

@@ -149,6 +149,8 @@ static void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *pi
 
     VADecPictureParameterBufferAV1* buf = (VADecPictureParameterBufferAV1*) buffer->ptr;
     CUVIDAV1PICPARAMS *pps = &picParams->CodecSpecific.av1;
+    VAProcColorStandardType colorStandard = nvColorStandardFromMatrixCoefficients(buf->matrix_coefficients);
+    bool colorRangeFull = buf->seq_info_fields.fields.color_range != 0;
 
     picParams->PicWidthInMbs = (ctx->width + 15)/16;
     picParams->FrameHeightInMbs = (ctx->height + 15)/16;
@@ -357,6 +359,14 @@ static void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *pi
             LOG("AV1 film grain requested without a valid display surface: %u", buf->current_display_picture);
         }
     }
+
+    nvSurfaceSetColorMetadata(ctx->renderTarget, colorStandard, colorRangeFull);
+    if (ctx->displayTarget != ctx->renderTarget) {
+        nvSurfaceSetColorMetadata(ctx->displayTarget, colorStandard, colorRangeFull);
+    }
+    LOG_DEBUG("AV1 color metadata: matrix_coefficients=%u color_standard=%s(%d) full_range=%d render=%p display=%p",
+        buf->matrix_coefficients, nvColorStandardName(colorStandard), colorStandard, colorRangeFull,
+        ctx->renderTarget, ctx->displayTarget);
 
     if (buf->pic_info_fields.bits.uniform_tile_spacing_flag) {
         const uint32_t sbCols = av1_superblock_count(av1_frame_width(buf), pps->use_128x128_superblock);

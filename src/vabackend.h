@@ -10,6 +10,7 @@
 #include <stdbool.h>
 #include <stdatomic.h>
 #include <va/va_drmcommon.h>
+#include <va/va_vpp.h>
 
 #include <pthread.h>
 #include "list.h"
@@ -67,6 +68,8 @@ typedef struct
     int                     topFieldFirst;
     int                     secondField;
     int                     order_hint; //needed for AV1
+    VAProcColorStandardType colorStandard;
+    bool                    colorRangeFull;
     struct _BackingImage    *backingImage;
     int                     resolving;
     int                     fourcc;
@@ -117,6 +120,8 @@ typedef struct _BackingImage {
     //direct backend only
     NVCudaImage cudaImages[3];
     NVFormat    format;
+    VAProcColorStandardType colorStandard;
+    bool        colorRangeFull;
     uint32_t    totalSize;
     CUexternalMemory extMem;
     bool        isSingleBuffer;
@@ -302,6 +307,14 @@ extern const NVFormatInfo formatsInfo[];
 void appendBuffer(AppendableBuffer *ab, const void *buf, uint64_t size);
 int pictureIdxFromSurfaceId(NVDriver *ctx, VASurfaceID surf);
 NVSurface* nvSurfaceFromSurfaceId(NVDriver *drv, VASurfaceID surf);
+const char *nvColorStandardName(VAProcColorStandardType colorStandard);
+VAProcColorStandardType nvColorStandardFromMatrixCoefficients(uint8_t matrixCoefficients);
+void nvSurfaceResetColorMetadata(NVSurface *surface);
+void nvSurfaceSetColorMetadata(NVSurface *surface, VAProcColorStandardType colorStandard, bool colorRangeFull);
+void nvSurfaceCopyColorMetadata(NVSurface *dst, const NVSurface *src);
+void nvSurfaceCopyColorMetadataFromBackingImage(NVSurface *surface, const BackingImage *img);
+void nvBackingImageStoreSurfaceColorMetadata(BackingImage *img, const NVSurface *surface);
+void nvBackingImageCopyColorMetadata(BackingImage *dst, const BackingImage *src);
 bool checkCudaErrors(CUresult err, const char *file, const char *function, const int line);
 void logger(const char *filename, const char *function, int line, const char *msg, ...);
 bool nvdLogDebugEnabled(void);

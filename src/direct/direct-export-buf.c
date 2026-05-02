@@ -486,6 +486,7 @@ static bool pruneDetachedBackingImages(NVDriver *drv) {
 static void direct_attachBackingImageToSurface(NVSurface *surface, BackingImage *img) {
     surface->backingImage = img;
     img->surface = surface;
+    nvBackingImageStoreSurfaceColorMetadata(img, surface);
 }
 
 static void direct_detachBackingImageFromSurface(NVDriver *drv, NVSurface *surface) {
@@ -643,6 +644,7 @@ static bool direct_exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surf
         if (img != NULL && img->externalMapping != NULL) {
             nvStatsIncrement(drv, NV_STAT_EXPORT_HOST_COPIES);
         }
+        nvBackingImageStoreSurfaceColorMetadata(img, surface);
         bool copied = copyFrameToSurface(drv, ptr, surface, pitch);
         if (syncImg != NULL && syncImg->syncInitialized) {
             pthread_mutex_lock(&syncImg->mutex);
@@ -664,6 +666,8 @@ static bool direct_exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surf
 static bool direct_fillExportDescriptor(NVDriver *drv, NVSurface *surface, VADRMPRIMESurfaceDescriptor *desc) {
     const BackingImage *img = surface->backingImage;
     const NVFormatInfo *fmtInfo = &formatsInfo[img->format];
+
+    nvBackingImageStoreSurfaceColorMetadata(surface->backingImage, surface);
 
     desc->fourcc = fmtInfo->fourcc;
     desc->width = surface->width;
