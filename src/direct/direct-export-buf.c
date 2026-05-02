@@ -170,6 +170,18 @@ static void initBackingImageSync(BackingImage *img) {
     img->syncInitialized = true;
 }
 
+static void cacheBackingImageFdStat(BackingImage *img, int index) {
+    if (img == NULL || index < 0 || index >= 4 || img->fds[index] < 0) {
+        return;
+    }
+
+    struct stat s;
+    if (fstat(img->fds[index], &s) == 0) {
+        img->st_dev[index] = s.st_dev;
+        img->st_ino[index] = s.st_ino;
+    }
+}
+
 static BackingImage *direct_allocateBackingImage_single(NVDriver *drv, NVSurface *surface) {
     NVDriverImage driverImages[3] = { 0 };
     BackingImage *backingImage = calloc(1, sizeof(BackingImage));
@@ -273,6 +285,7 @@ static BackingImage *direct_allocateBackingImage_single(NVDriver *drv, NVSurface
     backingImage->height = surface->height;
     backingImage->fourcc = fmtInfo->fourcc;
     backingImage->fds[0] = drmFd;
+    cacheBackingImageFdStat(backingImage, 0);
     for (uint32_t i = 0; i < fmtInfo->numPlanes; i++) {
         backingImage->strides[i] = driverImages[i].pitch;
         backingImage->mods[i] = driverImages[i].mods;
@@ -308,6 +321,9 @@ static BackingImage *direct_allocateBackingImage(NVDriver *drv, NVSurface *surfa
         return NULL;
     }
     initBackingImageSync(backingImage);
+    for (int i = 0; i < 4; i++) {
+        backingImage->fds[i] = -1;
+    }
 
     if (isRgbSurfaceFourcc((uint32_t) surface->fourcc)) {
         backingImage->format = NV_FORMAT_ARGB;
@@ -360,6 +376,7 @@ static BackingImage *direct_allocateBackingImage(NVDriver *drv, NVSurface *surfa
     backingImage->height = surface->height;
     for (uint32_t i = 0; i < fmtInfo->numPlanes; i++) {
         backingImage->fds[i] = driverImages[i].drmFd;
+        cacheBackingImageFdStat(backingImage, (int) i);
         backingImage->strides[i] = driverImages[i].pitch;
         backingImage->mods[i] = driverImages[i].mods;
         backingImage->size[i] = driverImages[i].memorySize;
@@ -411,7 +428,7 @@ static void destroyBackingImage(NVDriver *drv, BackingImage *img) {
     }
 
     for (int i = 0; i < 4; i++) {
-        if (img->fds[i] > 0) {
+        if (img->fds[i] >= 0) {
             close(img->fds[i]);
         }
     }

@@ -281,8 +281,26 @@ static bool exportBackingImage(NVDriver *drv, BackingImage *img) {
     return true;
 }
 
+static void cacheBackingImageFdStat(BackingImage *img, int index) {
+    if (img == NULL || index < 0 || index >= 4 || img->fds[index] < 0) {
+        return;
+    }
+
+    struct stat s;
+    if (fstat(img->fds[index], &s) == 0) {
+        img->st_dev[index] = s.st_dev;
+        img->st_ino[index] = s.st_ino;
+    }
+}
+
 static BackingImage* createBackingImage(NVDriver *drv, uint32_t width, uint32_t height, EGLImage image, CUarray arrays[]) {
     BackingImage* img = (BackingImage*) calloc(1, sizeof(BackingImage));
+    if (img == NULL) {
+        return NULL;
+    }
+    for (int i = 0; i < 4; i++) {
+        img->fds[i] = -1;
+    }
     img->image = image;
     img->arrays[0] = arrays[0];
     img->arrays[1] = arrays[1];
@@ -291,8 +309,16 @@ static BackingImage* createBackingImage(NVDriver *drv, uint32_t width, uint32_t 
 
     if (!exportBackingImage(drv, img)) {
         LOG("Unable to export Backing Image");
+        for (int i = 0; i < 4; i++) {
+            if (img->fds[i] >= 0) {
+                close(img->fds[i]);
+            }
+        }
         free(img);
         return NULL;
+    }
+    for (int i = 0; i < 4; i++) {
+        cacheBackingImageFdStat(img, i);
     }
 
     return img;
@@ -307,7 +333,7 @@ static bool egl_destroyBackingImage(NVDriver *drv, BackingImage *img) {
 
     LOG("Destroying BackingImage: %p", img);
     for (int i = 0; i < 4; i++) {
-        if (img->fds[i] != 0) {
+        if (img->fds[i] >= 0) {
             close(img->fds[i]);
         }
     }
