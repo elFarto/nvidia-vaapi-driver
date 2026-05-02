@@ -351,6 +351,7 @@ static bool egl_destroyBackingImage(NVDriver *drv, BackingImage *img) {
 static void egl_attachBackingImageToSurface(NVSurface *surface, BackingImage *img) {
     surface->backingImage = img;
     img->surface = surface;
+    nvBackingImageStoreSurfaceColorMetadata(img, surface);
 }
 
 static void egl_detachBackingImageFromSurface(NVDriver *drv, NVSurface *surface) {
@@ -590,9 +591,12 @@ static bool egl_exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface
         return false;
     }
 
-    if (ptr != 0 && !copyFrameToSurface(drv, ptr, surface, pitch)) {
-        LOG("Unable to update surface from frame");
-        return false;
+    if (ptr != 0) {
+        nvBackingImageStoreSurfaceColorMetadata(surface->backingImage, surface);
+        if (!copyFrameToSurface(drv, ptr, surface, pitch)) {
+            LOG("Unable to update surface from frame");
+            return false;
+        }
     } else if (ptr == 0) {
         LOG("exporting with null ptr");
     }
@@ -602,6 +606,8 @@ static bool egl_exportCudaPtr(NVDriver *drv, CUdeviceptr ptr, NVSurface *surface
 
 static bool egl_fillExportDescriptor(NVDriver *drv, NVSurface *surface, VADRMPRIMESurfaceDescriptor *desc) {
     BackingImage *img = surface->backingImage;
+
+    nvBackingImageStoreSurfaceColorMetadata(img, surface);
 
     int bpp = img->fourcc == DRM_FORMAT_NV12 ? 1 : 2;
 
