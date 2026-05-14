@@ -30,5 +30,7 @@ jobs:
       run: meson setup ./builddir --prefix=/usr -D werror=true
     - name: 'Build'
       run: meson compile -C ./builddir
+    - name: 'Test'
+      run: meson test -C ./builddir --print-errorlogs --no-rebuild -v
     - name: 'Install'
       run: sudo meson install -C ./builddir

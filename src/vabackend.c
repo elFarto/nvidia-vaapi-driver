@@ -117,6 +117,113 @@ static bool nvEnableExperimentalDirectEncodeNv12ChromaOffsetIn(void)
     return isTruthyEnv(getenv("NVD_EXPERIMENTAL_DIRECT_ENCODE_NV12_CHROMA_OFFSET_IN"));
 }
 
+static long long nvParseSignedEnvOrDefault(const char *name, long long fallback)
+{
+    const char *value = getenv(name);
+    char *end = NULL;
+    long long parsed = 0;
+
+    if (value == NULL || value[0] == '\0') {
+        return fallback;
+    }
+
+    errno = 0;
+    parsed = strtoll(value, &end, 0);
+    if (errno != 0 || end == value || (end != NULL && *end != '\0')) {
+        return fallback;
+    }
+    return parsed;
+}
+
+static long long nvExperimentalDirectEncodeNv12ChromaOffsetInDeltaBytes(void)
+{
+    return nvParseSignedEnvOrDefault(
+        "NVD_EXPERIMENTAL_DIRECT_ENCODE_NV12_CHROMA_OFFSET_IN_DELTA_BYTES",
+        0
+    );
+}
+
+static long long nvExperimentalDirectEncodeNv12ChromaOffsetInDeltaPitches(void)
+{
+    return nvParseSignedEnvOrDefault(
+        "NVD_EXPERIMENTAL_DIRECT_ENCODE_NV12_CHROMA_OFFSET_IN_DELTA_PITCHES",
+        0
+    );
+}
+
+static long long nvExperimentalDirectEncodeNv12RegisterWidthDeltaPixels(void)
+{
+    return nvParseSignedEnvOrDefault(
+        "NVD_EXPERIMENTAL_DIRECT_ENCODE_NV12_REGISTER_WIDTH_DELTA_PIXELS",
+        0
+    );
+}
+
+static uint32_t nvResolveExperimentalDirectEncodeNv12ChromaOffsetIn(
+        const char *pathName,
+        uint32_t baseOffset,
+        uint32_t pitch)
+{
+    const long long deltaPitches =
+        nvExperimentalDirectEncodeNv12ChromaOffsetInDeltaPitches();
+    const long long deltaBytes =
+        nvExperimentalDirectEncodeNv12ChromaOffsetInDeltaBytes();
+    long long resolved =
+        (long long) baseOffset +
+        (deltaPitches * (long long) pitch) +
+        deltaBytes;
+
+    if (resolved < 0) {
+        resolved = 0;
+    } else if (resolved > (long long) UINT32_MAX) {
+        resolved = (long long) UINT32_MAX;
+    }
+
+    LOG(
+        "%s applying chromaOffsetIn[0]=%u base=%u pitch=%u delta_pitches=%lld delta_bytes=%lld",
+        pathName,
+        (uint32_t) resolved,
+        baseOffset,
+        pitch,
+        deltaPitches,
+        deltaBytes
+    );
+    return (uint32_t) resolved;
+}
+
+static uint32_t nvResolveExperimentalDirectEncodeNv12RegisterWidth(
+        const char *pathName,
+        uint32_t baseWidth)
+{
+    long long resolved =
+        (long long) baseWidth +
+        nvExperimentalDirectEncodeNv12RegisterWidthDeltaPixels();
+
+    if (resolved < 2) {
+        resolved = 2;
+    } else if (resolved > (long long) UINT32_MAX) {
+        resolved = (long long) UINT32_MAX;
+    }
+
+    // NV12 width should stay even.
+    if ((resolved & 1ll) != 0) {
+        if (resolved > 2) {
+            resolved -= 1;
+        } else {
+            resolved += 1;
+        }
+    }
+
+    LOG(
+        "%s applying register width=%u base=%u delta_pixels=%lld",
+        pathName,
+        (uint32_t) resolved,
+        baseWidth,
+        nvExperimentalDirectEncodeNv12RegisterWidthDeltaPixels()
+    );
+    return (uint32_t) resolved;
+}
+
 static bool nvEnableExperimentalDirectEncodeCudaArrayTightRepackNv12(void)
 {
     return isTruthyEnv(getenv("NVD_EXPERIMENTAL_DIRECT_ENCODE_CUDAARRAY_NV12_TIGHT_REPACK"));
@@ -2938,7 +3045,11 @@ static bool tryRegisterDirectEncodeInputCudaArrayNv12(
         negotiatedApiVersion
     );
     registerParams.resourceType = NV_ENC_INPUT_RESOURCE_TYPE_CUDAARRAY;
-    registerParams.width = surface->width;
+    registerParams.width =
+        nvResolveExperimentalDirectEncodeNv12RegisterWidth(
+            "direct encode cudaarray",
+            surface->width
+        );
     registerParams.height = surface->height;
     registerParams.pitch = directPitch;
     registerParams.resourceToRegister = (void *) directArray;
@@ -2949,13 +3060,14 @@ static bool tryRegisterDirectEncodeInputCudaArrayNv12(
     if (nvEnableExperimentalDirectEncodeNv12ChromaOffsetIn() &&
         strcmp(directSource, "tight-repack-array") != 0 &&
         backingImage->offsets[1] > 0) {
-        registerParams.chromaOffsetIn[0] = (uint32_t) backingImage->offsets[1];
+        registerParams.chromaOffsetIn[0] = 
+            nvResolveExperimentalDirectEncodeNv12ChromaOffsetIn(
+                "direct encode cudaarray",
+                (uint32_t) backingImage->offsets[1],
+                registerParams.pitch
+            );
         registerParams.chromaOffsetIn[1] = 0;
-        LOG(
-            "direct encode cudaarray applying chromaOffsetIn[0]=%u source=%s",
-            registerParams.chromaOffsetIn[0],
-            directSource
-        );
+        LOG("direct encode cudaarray chromaOffset source=%s", directSource);
     }
 #endif
 
@@ -3488,7 +3600,11 @@ static bool tryRegisterDirectEncodeInputCudaPtrNv12(
         negotiatedApiVersion
     );
     registerParams.resourceType = NV_ENC_INPUT_RESOURCE_TYPE_CUDADEVICEPTR;
-    registerParams.width = surface->width;
+    registerParams.width =
+        nvResolveExperimentalDirectEncodeNv12RegisterWidth(
+            "direct encode cudaptr",
+            surface->width
+        );
     registerParams.height = surface->height;
     registerParams.pitch = directPitch;
     registerParams.resourceToRegister = (void *) directPtr;
@@ -3498,13 +3614,14 @@ static bool tryRegisterDirectEncodeInputCudaPtrNv12(
     if (nvEnableExperimentalDirectEncodeNv12ChromaOffsetIn() &&
         strcmp(directSource, "whole-frame-buffer") == 0 &&
         backingImage->offsets[1] > 0) {
-        registerParams.chromaOffsetIn[0] = (uint32_t) backingImage->offsets[1];
+        registerParams.chromaOffsetIn[0] =
+            nvResolveExperimentalDirectEncodeNv12ChromaOffsetIn(
+                "direct encode cudaptr",
+                (uint32_t) backingImage->offsets[1],
+                registerParams.pitch
+            );
         registerParams.chromaOffsetIn[1] = 0;
-        LOG(
-            "direct encode cudaptr applying chromaOffsetIn[0]=%u source=%s",
-            registerParams.chromaOffsetIn[0],
-            directSource
-        );
+        LOG("direct encode cudaptr chromaOffset source=%s", directSource);
     }
 #endif
 

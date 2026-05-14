@@ -35,6 +35,132 @@ static bool directEnableExperimentalWholeFrameCudaBufferNv12(void) {
     return isTruthyEnv(getenv("NVD_EXPERIMENTAL_DIRECT_ENCODE_CUDAPTR_NV12"));
 }
 
+static const char *directExperimentalWholeFrameCudaArrayRowsMode(void) {
+    const char *value =
+        getenv("NVD_EXPERIMENTAL_DIRECT_ENCODE_CUDAARRAY_NV12_WHOLE_FRAME_ROWS_MODE");
+    if (value == NULL || value[0] == '\0') {
+        return "tight";
+    }
+    return value;
+}
+
+static uint32_t directResolveWholeFrameCudaArrayRows(const BackingImage *img) {
+    if (img == NULL || img->strides[0] <= 0) {
+        return 0;
+    }
+
+    const uint32_t chromaRows = (img->height + 1u) / 2u;
+    const uint32_t tightRows = img->height + chromaRows;
+    const char *mode = directExperimentalWholeFrameCudaArrayRowsMode();
+
+    if (strcmp(mode, "offset1") == 0 && img->offsets[1] > 0) {
+        const uint32_t pitch = (uint32_t) img->strides[0];
+        const uint32_t lumaRowsToChroma =
+            ((uint32_t) img->offsets[1] + pitch - 1u) / pitch;
+        const uint32_t rows = lumaRowsToChroma + chromaRows;
+        LOG(
+            "direct encode whole-frame rows mode=offset1 tight_rows=%u resolved_rows=%u "
+            "height=%u chroma_rows=%u offset1=%d pitch=%u",
+            tightRows,
+            rows,
+            img->height,
+            chromaRows,
+            img->offsets[1],
+            pitch
+        );
+        return rows;
+    }
+
+    if (strcmp(mode, "tight") != 0) {
+        LOG(
+            "direct encode whole-frame rows unknown mode=%s using tight_rows=%u",
+            mode,
+            tightRows
+        );
+    }
+    return tightRows;
+}
+
+static const char *directExperimentalWholeFrameCudaArrayWidthMode(void) {
+    const char *value =
+        getenv("NVD_EXPERIMENTAL_DIRECT_ENCODE_CUDAARRAY_NV12_WHOLE_FRAME_WIDTH_MODE");
+    if (value == NULL || value[0] == '\0') {
+        return "stride";
+    }
+    return value;
+}
+
+static const char *directExperimentalWholeFrameCudaArrayOffsetMode(void) {
+    const char *value =
+        getenv("NVD_EXPERIMENTAL_DIRECT_ENCODE_CUDAARRAY_NV12_WHOLE_FRAME_OFFSET_MODE");
+    if (value == NULL || value[0] == '\0') {
+        return "zero";
+    }
+    return value;
+}
+
+static uint32_t directResolveWholeFrameCudaArrayWidth(const BackingImage *img) {
+    if (img == NULL || img->strides[0] <= 0) {
+        return 0;
+    }
+
+    const uint32_t strideWidth = (uint32_t) img->strides[0];
+    const char *mode = directExperimentalWholeFrameCudaArrayWidthMode();
+
+    if (strcmp(mode, "visible") == 0) {
+        if (img->width > 0 && (uint32_t) img->width <= strideWidth) {
+            LOG(
+                "direct encode whole-frame width mode=visible stride_width=%u resolved_width=%u",
+                strideWidth,
+                (uint32_t) img->width
+            );
+            return (uint32_t) img->width;
+        }
+        LOG(
+            "direct encode whole-frame width mode=visible invalid visible_width=%d stride_width=%u; using stride_width",
+            img->width,
+            strideWidth
+        );
+        return strideWidth;
+    }
+
+    if (strcmp(mode, "stride") != 0) {
+        LOG(
+            "direct encode whole-frame width unknown mode=%s using stride_width=%u",
+            mode,
+            strideWidth
+        );
+    }
+    return strideWidth;
+}
+
+static uint32_t directResolveWholeFrameCudaArrayOffset(const BackingImage *img) {
+    if (img == NULL || img->strides[0] <= 0) {
+        return 0;
+    }
+
+    const char *mode = directExperimentalWholeFrameCudaArrayOffsetMode();
+    if (strcmp(mode, "chroma_remainder") == 0) {
+        const uint32_t pitch = (uint32_t) img->strides[0];
+        const uint32_t remainder = ((uint32_t) img->offsets[1]) % pitch;
+        LOG(
+            "direct encode whole-frame offset mode=chroma_remainder offset1=%d pitch=%u resolved_offset=%u",
+            img->offsets[1],
+            pitch,
+            remainder
+        );
+        return remainder;
+    }
+
+    if (strcmp(mode, "zero") != 0) {
+        LOG(
+            "direct encode whole-frame offset unknown mode=%s using offset=0",
+            mode
+        );
+    }
+    return 0;
+}
+
 static void directCloseImportedPlaneFd(int fd, const char *reason) {
     if (fd < 0) {
         return;
@@ -1143,8 +1269,9 @@ bool directEnsureWholeFrameNv12CudaArray(NVDriver *drv, BackingImage *img) {
         return false;
     }
 
-    const uint32_t chromaRows = (img->height + 1u) / 2u;
-    const uint32_t wholeFrameRows = img->height + chromaRows;
+    const uint32_t wholeFrameRows = directResolveWholeFrameCudaArrayRows(img);
+    const uint32_t wholeFrameWidth = directResolveWholeFrameCudaArrayWidth(img);
+    const uint32_t wholeFrameOffset = directResolveWholeFrameCudaArrayOffset(img);
     int importFd = convertDmabufFdToNvFd(
         img->fds[0],
         drv->driverContext.drmFd,
@@ -1164,11 +1291,11 @@ bool directEnsureWholeFrameNv12CudaArray(NVDriver *drv, BackingImage *img) {
         .nvFd2 = importFd,
         .drmFd = img->fds[0],
         .useDmaBufHandle = false,
-        .width = (uint32_t) img->strides[0],
+        .width = wholeFrameWidth,
         .height = wholeFrameRows,
         .mods = img->mods[0],
         .memorySize = img->size[0],
-        .offset = 0,
+        .offset = wholeFrameOffset,
         .pitch = (uint32_t) img->strides[0],
         .fourcc = DRM_FORMAT_R8,
     };
@@ -1190,9 +1317,11 @@ bool directEnsureWholeFrameNv12CudaArray(NVDriver *drv, BackingImage *img) {
             img,
             "direct_encode_whole_frame_import_rollback");
         LOG(
-            "direct encode whole-frame reject reason=import_failed stride=%d rows=%u size0=%u modifier0=0x%llx modifier1=0x%llx offset1=%d",
+            "direct encode whole-frame reject reason=import_failed width=%u stride=%d rows=%u import_offset=%u size0=%u modifier0=0x%llx modifier1=0x%llx offset1=%d",
+            wholeFrameWidth,
             img->strides[0],
             wholeFrameRows,
+            wholeFrameOffset,
             img->size[0],
             (unsigned long long) img->mods[0],
             (unsigned long long) img->mods[1],
@@ -1204,10 +1333,12 @@ bool directEnsureWholeFrameNv12CudaArray(NVDriver *drv, BackingImage *img) {
     img->directEncodeWholeFramePitch = (uint32_t) img->strides[0];
     img->directEncodeWholeFrameRows = wholeFrameRows;
     LOG(
-        "direct encode whole-frame ready array=%p pitch=%u rows=%u fd0=%d fd1=%d modifier0=0x%llx modifier1=0x%llx offset1=%d",
+        "direct encode whole-frame ready array=%p width=%u pitch=%u rows=%u import_offset=%u fd0=%d fd1=%d modifier0=0x%llx modifier1=0x%llx offset1=%d",
         (void *) img->directEncodeWholeFrameArray,
+        wholeFrameWidth,
         img->directEncodeWholeFramePitch,
         img->directEncodeWholeFrameRows,
+        wholeFrameOffset,
         img->fds[0],
         img->fds[1],
         (unsigned long long) img->mods[0],
