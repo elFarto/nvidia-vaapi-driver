@@ -711,6 +711,10 @@ static void directReleaseWholeFrameNv12CudaArray(
         CHECK_CUDA_RESULT(drv->cu->cuArrayDestroy(img->directEncodeWholeFrameArray));
         img->directEncodeWholeFrameArray = NULL;
     }
+    if (img->directEncodeTightCudaArray != NULL) {
+        CHECK_CUDA_RESULT(drv->cu->cuArrayDestroy(img->directEncodeTightCudaArray));
+        img->directEncodeTightCudaArray = NULL;
+    }
     img->directEncodeWholeFrameCudaImage.mappedBuffer = 0;
     img->directEncodeWholeFrameCudaImage.mappedBufferSize = 0;
 
@@ -733,6 +737,8 @@ static void directReleaseWholeFrameNv12CudaArray(
 
     img->directEncodeWholeFramePitch = 0;
     img->directEncodeWholeFrameRows = 0;
+    img->directEncodeTightCudaArrayPitch = 0;
+    img->directEncodeTightCudaArrayRows = 0;
 
     if (img->directEncodeTightCudaBuffer != 0) {
         CHECK_CUDA_RESULT(drv->cu->cuMemFree(img->directEncodeTightCudaBuffer));

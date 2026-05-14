@@ -33,6 +33,12 @@
 
 #include <time.h>
 
+#ifndef CUDA_ARRAY3D_SURFACE_LDST
+// nvEncodeAPI.h documents this flag for CUDAARRAY input, but the slim
+// ffnvcodec dynlink headers used here do not always define it.
+#define CUDA_ARRAY3D_SURFACE_LDST 0x02u
+#endif
+
 #ifndef VA_FOURCC_NV16
 #define VA_FOURCC_NV16 0x3631564e
 #endif
@@ -106,6 +112,16 @@ static bool nvEnableExperimentalDirectEncodeCudaArrayNv12(void)
     return isTruthyEnv(getenv("NVD_EXPERIMENTAL_DIRECT_ENCODE_CUDAARRAY_NV12"));
 }
 
+static bool nvEnableExperimentalDirectEncodeNv12ChromaOffsetIn(void)
+{
+    return isTruthyEnv(getenv("NVD_EXPERIMENTAL_DIRECT_ENCODE_NV12_CHROMA_OFFSET_IN"));
+}
+
+static bool nvEnableExperimentalDirectEncodeCudaArrayTightRepackNv12(void)
+{
+    return isTruthyEnv(getenv("NVD_EXPERIMENTAL_DIRECT_ENCODE_CUDAARRAY_NV12_TIGHT_REPACK"));
+}
+
 static bool nvEnableExperimentalDirectEncodeCudaPtrNv12(void)
 {
     return isTruthyEnv(getenv("NVD_EXPERIMENTAL_DIRECT_ENCODE_CUDAPTR_NV12"));
@@ -142,6 +158,26 @@ static NvDirectEncodeTightRepackSourceMode nvDirectEncodeTightRepackSourceMode(v
     }
     return NV_DIRECT_ENCODE_TIGHT_REPACK_SOURCE_AUTO;
 }
+
+static NvDirectEncodeTightRepackSourceMode nvDirectEncodeCudaArrayTightRepackSourceMode(void)
+{
+    const char *value =
+        getenv("NVD_EXPERIMENTAL_DIRECT_ENCODE_CUDAARRAY_NV12_TIGHT_REPACK_SOURCE");
+    if (value == NULL || value[0] == '\0' || strcmp(value, "auto") == 0) {
+        return NV_DIRECT_ENCODE_TIGHT_REPACK_SOURCE_AUTO;
+    }
+    if (strcmp(value, "whole-frame") == 0 || strcmp(value, "whole_frame") == 0) {
+        return NV_DIRECT_ENCODE_TIGHT_REPACK_SOURCE_WHOLE_FRAME;
+    }
+    if (strcmp(value, "per-plane") == 0 || strcmp(value, "per_plane") == 0) {
+        return NV_DIRECT_ENCODE_TIGHT_REPACK_SOURCE_PER_PLANE;
+    }
+    return NV_DIRECT_ENCODE_TIGHT_REPACK_SOURCE_AUTO;
+}
+
+static bool ensureDirectEncodeTightCudaArrayNv12(
+        NVContext *nvCtx,
+        NVSurface *surface);
 
 static bool nvAllowImportedGpuCopyDirectEncodeCudaArrayNv12(void)
 {
@@ -2839,7 +2875,20 @@ static bool tryRegisterDirectEncodeInputCudaArrayNv12(
     //     return false;
     // }
 
-    if (backingImage->directEncodeWholeFrameArray != NULL) {
+    if (nvEnableExperimentalDirectEncodeCudaArrayTightRepackNv12()) {
+        if (!ensureDirectEncodeTightCudaArrayNv12(nvCtx, surface)) {
+            LOG(
+                "direct encode cudaarray reject reason=tight_repack_unavailable array=%p pitch=%u rows=%u",
+                (void *) backingImage->directEncodeTightCudaArray,
+                backingImage->directEncodeTightCudaArrayPitch,
+                backingImage->directEncodeTightCudaArrayRows
+            );
+            return false;
+        }
+        directArray = backingImage->directEncodeTightCudaArray;
+        directPitch = backingImage->directEncodeTightCudaArrayPitch;
+        directSource = "tight-repack-array";
+    } else if (backingImage->directEncodeWholeFrameArray != NULL) {
         directArray = backingImage->directEncodeWholeFrameArray;
         directPitch = backingImage->directEncodeWholeFramePitch;
         directSource = "whole-frame-cached";
@@ -2896,6 +2945,19 @@ static bool tryRegisterDirectEncodeInputCudaArrayNv12(
     registerParams.bufferFormat = NV_ENC_BUFFER_FORMAT_NV12;
     registerParams.bufferUsage = NV_ENC_INPUT_IMAGE;
     registerParams.subResourceIndex = 0;
+#if NVENCAPI_MAJOR_VERSION >= 13
+    if (nvEnableExperimentalDirectEncodeNv12ChromaOffsetIn() &&
+        strcmp(directSource, "tight-repack-array") != 0 &&
+        backingImage->offsets[1] > 0) {
+        registerParams.chromaOffsetIn[0] = (uint32_t) backingImage->offsets[1];
+        registerParams.chromaOffsetIn[1] = 0;
+        LOG(
+            "direct encode cudaarray applying chromaOffsetIn[0]=%u source=%s",
+            registerParams.chromaOffsetIn[0],
+            directSource
+        );
+    }
+#endif
 
     NVENCSTATUS status = nvCtx->encodeApi.nvEncRegisterResource(
         nvCtx->encoder,
@@ -2930,6 +2992,189 @@ static bool tryRegisterDirectEncodeInputCudaArrayNv12(
         *inputPitch,
         (unsigned long long) backingImage->mods[0],
         (unsigned long long) backingImage->mods[1]
+    );
+    return true;
+}
+
+static bool ensureDirectEncodeTightCudaArrayNv12(
+        NVContext *nvCtx,
+        NVSurface *surface)
+{
+    NVDriver *drv = nvCtx != NULL ? nvCtx->drv : NULL;
+    CudaFunctions *cu = drv != NULL ? drv->cu : NULL;
+    BackingImage *backingImage = surface != NULL ? surface->backingImage : NULL;
+    const NvDirectEncodeTightRepackSourceMode requestedSourceMode =
+        nvDirectEncodeCudaArrayTightRepackSourceMode();
+    const uint32_t chromaRows = surface != NULL ? ((surface->height + 1u) / 2u) : 0u;
+    const uint32_t totalRows = surface != NULL ? (surface->height + chromaRows) : 0u;
+    const size_t copyWidthBytes = surface != NULL ? (size_t) surface->width : 0u;
+    bool wholeFrameMappedBufferReady = false;
+    bool plane0UsesMappedBuffer = false;
+    bool plane1UsesMappedBuffer = false;
+    bool useWholeFrameSource = false;
+    const char *sourceModeName = "auto";
+    CUDA_ARRAY3D_DESCRIPTOR arrayDesc = {0};
+    const size_t chromaOffsetRows = surface != NULL ? (size_t) surface->height : 0u;
+
+    if (drv == NULL || cu == NULL || surface == NULL || backingImage == NULL) {
+        LOG("direct encode cudaarray tight reject reason=missing_surface_backing");
+        return false;
+    }
+    if (surface->format != cudaVideoSurfaceFormat_NV12 ||
+        backingImage->format != NV_FORMAT_NV12) {
+        LOG(
+            "direct encode cudaarray tight reject reason=format_not_nv12 surface_format=%d backing_format=%d",
+            surface->format,
+            backingImage->format
+        );
+        return false;
+    }
+
+    if (directEnsureWholeFrameNv12CudaBuffer(drv, backingImage)) {
+        wholeFrameMappedBufferReady =
+            backingImage->directEncodeWholeFrameCudaImage.mappedBuffer != 0 &&
+            backingImage->directEncodeWholeFramePitch == (uint32_t) backingImage->strides[0];
+    }
+    if (copyWidthBytes == 0u || surface->height == 0u || totalRows == 0u) {
+        LOG(
+            "direct encode cudaarray tight reject reason=invalid_size width=%u height=%u rows=%u",
+            surface->width,
+            surface->height,
+            totalRows
+        );
+        return false;
+    }
+
+    plane0UsesMappedBuffer =
+        backingImage->arrays[0] == NULL &&
+        backingImage->cudaImages[0].mappedBuffer != 0;
+    plane1UsesMappedBuffer =
+        backingImage->arrays[1] == NULL &&
+        backingImage->cudaImages[1].mappedBuffer != 0;
+
+    const bool plane0ViewReady =
+        plane0UsesMappedBuffer || backingImage->arrays[0] != NULL;
+    const bool plane1ViewReady =
+        plane1UsesMappedBuffer || backingImage->arrays[1] != NULL;
+
+    switch (requestedSourceMode) {
+    case NV_DIRECT_ENCODE_TIGHT_REPACK_SOURCE_WHOLE_FRAME:
+        useWholeFrameSource = true;
+        sourceModeName = "whole-frame-buffer";
+        break;
+    case NV_DIRECT_ENCODE_TIGHT_REPACK_SOURCE_PER_PLANE:
+        useWholeFrameSource = false;
+        sourceModeName = "per-plane-view";
+        break;
+    case NV_DIRECT_ENCODE_TIGHT_REPACK_SOURCE_AUTO:
+    default:
+        useWholeFrameSource = wholeFrameMappedBufferReady;
+        sourceModeName = useWholeFrameSource ? "whole-frame-buffer" : "per-plane-view";
+        break;
+    }
+
+    if (useWholeFrameSource && !wholeFrameMappedBufferReady) {
+        LOG(
+            "direct encode cudaarray tight reject reason=missing_requested_whole_frame_source requested_source=%s",
+            sourceModeName
+        );
+        return false;
+    }
+    if (!useWholeFrameSource && !plane0ViewReady) {
+        LOG("direct encode cudaarray tight reject reason=missing_plane0_view");
+        return false;
+    }
+    if (!useWholeFrameSource && !plane1ViewReady) {
+        LOG("direct encode cudaarray tight reject reason=missing_plane1_view");
+        return false;
+    }
+
+    if (backingImage->directEncodeTightCudaArray != NULL &&
+        (backingImage->directEncodeTightCudaArrayPitch != (uint32_t) copyWidthBytes ||
+         backingImage->directEncodeTightCudaArrayRows != totalRows)) {
+        CHECK_CUDA_RESULT(cu->cuArrayDestroy(backingImage->directEncodeTightCudaArray));
+        backingImage->directEncodeTightCudaArray = NULL;
+        backingImage->directEncodeTightCudaArrayPitch = 0;
+        backingImage->directEncodeTightCudaArrayRows = 0;
+    }
+
+    if (backingImage->directEncodeTightCudaArray == NULL) {
+        arrayDesc.Width = copyWidthBytes;
+        arrayDesc.Height = totalRows;
+        arrayDesc.Depth = 0;
+        arrayDesc.Format = CU_AD_FORMAT_UNSIGNED_INT8;
+        arrayDesc.NumChannels = 1;
+        arrayDesc.Flags = CUDA_ARRAY3D_SURFACE_LDST;
+        if (CHECK_CUDA_RESULT(cu->cuArray3DCreate(&backingImage->directEncodeTightCudaArray, &arrayDesc))) {
+            LOG(
+                "direct encode cudaarray tight reject reason=array_alloc_failed widthBytes=%zu rows=%u",
+                copyWidthBytes,
+                totalRows
+            );
+            return false;
+        }
+        backingImage->directEncodeTightCudaArrayPitch = (uint32_t) copyWidthBytes;
+        backingImage->directEncodeTightCudaArrayRows = totalRows;
+    }
+
+    CUDA_MEMCPY2D lumaCopy = {
+        .dstMemoryType = CU_MEMORYTYPE_ARRAY,
+        .dstArray = backingImage->directEncodeTightCudaArray,
+        .dstY = 0,
+        .WidthInBytes = copyWidthBytes,
+        .Height = surface->height,
+    };
+    if (useWholeFrameSource) {
+        lumaCopy.srcMemoryType = CU_MEMORYTYPE_DEVICE;
+        lumaCopy.srcDevice = backingImage->directEncodeWholeFrameCudaImage.mappedBuffer;
+        lumaCopy.srcPitch = (size_t) backingImage->directEncodeWholeFramePitch;
+    } else if (plane0UsesMappedBuffer) {
+        lumaCopy.srcMemoryType = CU_MEMORYTYPE_DEVICE;
+        lumaCopy.srcDevice =
+            backingImage->cudaImages[0].mappedBuffer +
+            (CUdeviceptr)(size_t) backingImage->offsets[0];
+        lumaCopy.srcPitch = (size_t) backingImage->strides[0];
+    } else {
+        lumaCopy.srcMemoryType = CU_MEMORYTYPE_ARRAY;
+        lumaCopy.srcArray = backingImage->arrays[0];
+    }
+    CHECK_CUDA_RESULT_RETURN(cu->cuMemcpy2D(&lumaCopy), false);
+
+    CUDA_MEMCPY2D chromaCopy = {
+        .dstMemoryType = CU_MEMORYTYPE_ARRAY,
+        .dstArray = backingImage->directEncodeTightCudaArray,
+        .dstY = chromaOffsetRows,
+        .WidthInBytes = copyWidthBytes,
+        .Height = chromaRows,
+    };
+    if (useWholeFrameSource) {
+        chromaCopy.srcMemoryType = CU_MEMORYTYPE_DEVICE;
+        chromaCopy.srcDevice =
+            backingImage->directEncodeWholeFrameCudaImage.mappedBuffer +
+            (CUdeviceptr)(size_t) backingImage->offsets[1];
+        chromaCopy.srcPitch = (size_t) backingImage->directEncodeWholeFramePitch;
+    } else if (plane1UsesMappedBuffer) {
+        chromaCopy.srcMemoryType = CU_MEMORYTYPE_DEVICE;
+        chromaCopy.srcDevice =
+            backingImage->cudaImages[1].mappedBuffer +
+            (CUdeviceptr)(size_t) backingImage->offsets[1];
+        chromaCopy.srcPitch = (size_t) backingImage->strides[1];
+    } else {
+        chromaCopy.srcMemoryType = CU_MEMORYTYPE_ARRAY;
+        chromaCopy.srcArray = backingImage->arrays[1];
+    }
+    CHECK_CUDA_RESULT_RETURN(cu->cuMemcpy2D(&chromaCopy), false);
+
+    LOG(
+        "direct encode cudaarray tight array ready array=%p pitch=%u rows=%u width=%u height=%u source_offset1=%d tight_offset1=%zu source_mode=%s",
+        (void *) backingImage->directEncodeTightCudaArray,
+        backingImage->directEncodeTightCudaArrayPitch,
+        backingImage->directEncodeTightCudaArrayRows,
+        surface->width,
+        surface->height,
+        backingImage->offsets[1],
+        chromaOffsetRows * copyWidthBytes,
+        sourceModeName
     );
     return true;
 }
@@ -3249,6 +3494,19 @@ static bool tryRegisterDirectEncodeInputCudaPtrNv12(
     registerParams.resourceToRegister = (void *) directPtr;
     registerParams.bufferFormat = NV_ENC_BUFFER_FORMAT_NV12;
     registerParams.bufferUsage = NV_ENC_INPUT_IMAGE;
+#if NVENCAPI_MAJOR_VERSION >= 13
+    if (nvEnableExperimentalDirectEncodeNv12ChromaOffsetIn() &&
+        strcmp(directSource, "whole-frame-buffer") == 0 &&
+        backingImage->offsets[1] > 0) {
+        registerParams.chromaOffsetIn[0] = (uint32_t) backingImage->offsets[1];
+        registerParams.chromaOffsetIn[1] = 0;
+        LOG(
+            "direct encode cudaptr applying chromaOffsetIn[0]=%u source=%s",
+            registerParams.chromaOffsetIn[0],
+            directSource
+        );
+    }
+#endif
 
     NVENCSTATUS status = nvCtx->encodeApi.nvEncRegisterResource(
         nvCtx->encoder,

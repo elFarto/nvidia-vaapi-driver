@@ -124,6 +124,9 @@ typedef struct _BackingImage {
     CUarray     directEncodeWholeFrameArray;
     uint32_t    directEncodeWholeFramePitch;
     uint32_t    directEncodeWholeFrameRows;
+    CUarray     directEncodeTightCudaArray;
+    uint32_t    directEncodeTightCudaArrayPitch;
+    uint32_t    directEncodeTightCudaArrayRows;
     CUdeviceptr directEncodeTightCudaBuffer;
     uint64_t    directEncodeTightCudaBufferSize;
     uint32_t    directEncodeTightCudaBufferPitch;
