@@ -182,6 +182,91 @@ static void cacheBackingImageFdStat(BackingImage *img, int index) {
     }
 }
 
+static uint64_t backingImageMemorySize(const BackingImage *img) {
+    if (img == NULL) {
+        return 0;
+    }
+    if (img->totalSize != 0) {
+        return img->totalSize;
+    }
+
+    const NVFormatInfo *fmtInfo = &formatsInfo[img->format];
+    uint64_t size = 0;
+    for (uint32_t i = 0; i < fmtInfo->numPlanes; i++) {
+        size += img->size[i];
+    }
+    return size;
+}
+
+static bool backingImageCanPrune(const BackingImage *img) {
+    return img != NULL &&
+           img->surface == NULL &&
+           atomic_load(&img->borrowCount) == 0;
+}
+
+static bool detachedBackingImagesOverLimit(uint64_t bytes, uint32_t count, const NVDriver *drv) {
+    if (count == 0) {
+        return false;
+    }
+    if (drv->maxDetachedBackingImages == 0 || drv->maxDetachedBackingImageBytes == 0) {
+        return true;
+    }
+    return count > drv->maxDetachedBackingImages ||
+           bytes > drv->maxDetachedBackingImageBytes;
+}
+
+static bool pruneOldestDetachedBackingImageLocked(NVDriver *drv, uint64_t *bytes, uint32_t *count) {
+    uint32_t pruneIndex = UINT32_MAX;
+    uint64_t oldestSerial = UINT64_MAX;
+
+    ARRAY_FOR_EACH(BackingImage*, img, &drv->images)
+        if (backingImageCanPrune(img) && img->detachedSerial < oldestSerial) {
+            pruneIndex = img_idx;
+            oldestSerial = img->detachedSerial;
+        }
+    END_FOR_EACH
+
+    if (pruneIndex == UINT32_MAX) {
+        return false;
+    }
+
+    BackingImage *img = get_element_at(&drv->images, pruneIndex);
+    uint64_t imageBytes = backingImageMemorySize(img);
+    destroyBackingImage(drv, img);
+    remove_element_at(&drv->images, pruneIndex);
+    if (*bytes >= imageBytes) {
+        *bytes -= imageBytes;
+    } else {
+        *bytes = 0;
+    }
+    if (*count > 0) {
+        (*count)--;
+    }
+    return true;
+}
+
+static void pruneDetachedBackingImagesToLimits(NVDriver *drv) {
+    uint64_t bytes = 0;
+    uint32_t count = 0;
+
+    pthread_mutex_lock(&drv->imagesMutex);
+
+    ARRAY_FOR_EACH(BackingImage*, img, &drv->images)
+        if (backingImageCanPrune(img)) {
+            bytes += backingImageMemorySize(img);
+            count++;
+        }
+    END_FOR_EACH
+
+    while (detachedBackingImagesOverLimit(bytes, count, drv)) {
+        if (!pruneOldestDetachedBackingImageLocked(drv, &bytes, &count)) {
+            break;
+        }
+    }
+
+    pthread_mutex_unlock(&drv->imagesMutex);
+}
+
 static BackingImage *direct_allocateBackingImage_single(NVDriver *drv, NVSurface *surface) {
     NVDriverImage driverImages[3] = { 0 };
     BackingImage *backingImage = calloc(1, sizeof(BackingImage));
@@ -486,6 +571,7 @@ static bool pruneDetachedBackingImages(NVDriver *drv) {
 static void direct_attachBackingImageToSurface(NVSurface *surface, BackingImage *img) {
     surface->backingImage = img;
     img->surface = surface;
+    img->detachedSerial = 0;
     nvBackingImageStoreSurfaceColorMetadata(img, surface);
 }
 
@@ -501,7 +587,9 @@ static void direct_detachBackingImageFromSurface(NVDriver *drv, NVSurface *surfa
     }
 
     surface->backingImage->surface = NULL;
+    surface->backingImage->detachedSerial = ++drv->detachedBackingImageSerial;
     surface->backingImage = NULL;
+    pruneDetachedBackingImagesToLimits(drv);
 }
 
 static void direct_destroyAllBackingImage(NVDriver *drv) {

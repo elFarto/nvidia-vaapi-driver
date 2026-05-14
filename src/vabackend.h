@@ -137,6 +137,7 @@ typedef struct _BackingImage {
     uint32_t    externalMappingSize;
     CUdeviceptr externalDevicePtr;
     uint32_t    externalDeviceSize;
+    uint64_t    detachedSerial;
 } BackingImage;
 
 struct _NVDriver;
@@ -219,6 +220,9 @@ typedef struct _NVDriver
     bool                    statsEnabled;
     uint64_t                statsLogInterval;
     atomic_uint_fast64_t    stats[NV_STAT_COUNT];
+    uint64_t                maxDetachedBackingImageBytes;
+    uint32_t                maxDetachedBackingImages;
+    uint64_t                detachedBackingImageSerial;
 } NVDriver;
 
 struct _NVCodec;

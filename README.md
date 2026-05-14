@@ -105,6 +105,8 @@ Environment variables used to control the behavior of this library.
 | `NVD_LOG` | Used to control logging. `1` to log to stdout, anything else to append to the given file. |
 | `NVD_MAX_INSTANCES` | Controls the maximum concurrent instances of the driver will be allowed per-process. This option is only really useful for older GPUs with not much VRAM, especially with Firefox on video heavy websites. |
 | `NVD_BACKEND` | Controls which backend this library uses. Either `egl`, or `direct` (default). See [direct backend](#direct-backend) for more details. |
+| `NVD_MAX_DETACHED_BACKING_IMAGE_BYTES` | Upper bound (in bytes) on the size of the detached backing-image cache used by the direct backend to recycle decode surfaces across stream switches. Lower this on low-VRAM GPUs to reduce memory usage at the cost of more re-allocation when streams change. Set to `0` to disable detached caching. Default: `134217728` (128 MiB). |
+| `NVD_MAX_DETACHED_BACKING_IMAGES` | Upper bound on the number of cached detached backing images. Set to `0` to disable detached caching. Default: `16`. |
 
 ## Firefox
 
