@@ -8,6 +8,7 @@ This is an VA-API implementation that uses NVDEC as a backend. This implementati
 - [Table of contents](#table-of-contents)
 - [Codec Support](#codec-support)
 - [Installation](#installation)
+  - [Quick install from this fork](#quick-install-from-this-fork)
   - [Packaging status](#packaging-status)
   - [Building](#building)
   - [Removal](#removal)
@@ -52,6 +53,24 @@ To install and use `nvidia-vaapi-driver`, follow the steps in installation and c
 **Requirements**
 
 * NVIDIA driver series 470 or 500+
+
+## Quick install from this fork
+
+This fork's `main` branch is intended to match the locally tested AoTofu driver build. If the repository is private, clone it with a GitHub account that has access:
+
+```sh
+git clone git@github.com:AoTofu/nvidia-vaapi-driver.git
+cd nvidia-vaapi-driver
+./install.sh --deps --clean
+```
+
+The installer builds the driver, backs up any existing `nvidia_drv_video.so`, installs the new driver into libva's driver directory, and runs a `vainfo` smoke test when possible. To skip dependency installation:
+
+```sh
+./install.sh --clean
+```
+
+The installer prints a rollback command if it replaced an existing driver.
 
 ## Packaging status
 
@@ -140,7 +159,18 @@ If you're using the Snap version of Firefox, it will be unable to access the hos
 
 ## Chrome
 
-Chrome is currently unsupported, and will not function.
+This fork includes the Chromium-compatible single-buffer export path. For Chrome / Chromium based browsers, set `LIBVA_DRIVER_NAME=nvidia` and start the browser with flags similar to:
+
+```sh
+LIBVA_DRIVER_NAME=nvidia google-chrome \
+  --enable-features=AcceleratedVideoDecodeLinuxGL,VaapiOnNvidiaGPUs \
+  --ignore-gpu-blocklist \
+  --use-gl=angle --use-angle=gl
+```
+
+On Wayland, also try `--ozone-platform=wayland` or `--ozone-platform-hint=auto`.
+
+`NVD_DESCRIPTOR_MODE` defaults to Chromium-compatible `single` mode in this branch. Use `NVD_DESCRIPTOR_MODE=multi` only when testing traditional per-plane export behavior.
 
 ## MPV
 
