@@ -665,7 +665,7 @@ static bool copyFrameToSurface(NVDriver *drv, CUdeviceptr ptr, NVSurface *surfac
     //notify anyone waiting for us to be resolved
     pthread_mutex_lock(&surface->mutex);
     surface->resolving = 0;
-    pthread_cond_signal(&surface->cond);
+    pthread_cond_broadcast(&surface->cond);
     pthread_mutex_unlock(&surface->mutex);
 
     return true;
@@ -710,7 +710,7 @@ static BackingImage *resolveSyncImage(BackingImage *img) {
 static void finishSurfaceResolve(NVSurface *surface) {
     pthread_mutex_lock(&surface->mutex);
     surface->resolving = 0;
-    pthread_cond_signal(&surface->cond);
+    pthread_cond_broadcast(&surface->cond);
     pthread_mutex_unlock(&surface->mutex);
 }
 

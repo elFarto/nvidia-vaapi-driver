@@ -615,7 +615,8 @@ int pictureIdxFromSurfaceId(NVDriver *drv, VASurfaceID surfId) {
     return -1;
 }
 
-static void setSurfaceBackingImageResolving(NVSurface *surface, bool resolving);
+static void setSurfaceResolving(NVSurface *surface, bool resolving);
+static void waitSurfaceResolved(NVSurface *surface);
 
 static cudaVideoCodec vaToCuCodec(VAProfile profile) {
     for (const NVCodec *c = __start_nvd_codecs; c < __stop_nvd_codecs; c++) {
@@ -683,11 +684,7 @@ static void* resolveSurfaces(void *param) {
 
         //LOG("Mapping surface %d", surface->pictureIdx);
         if (surface->decodeFailed || CHECK_CUDA_RESULT(cv->cuvidMapVideoFrame(ctx->decoder, surface->pictureIdx, &deviceMemory, &pitch, &procParams))) {
-            setSurfaceBackingImageResolving(surface, false);
-            pthread_mutex_lock(&surface->mutex);
-            surface->resolving = 0;
-            pthread_cond_signal(&surface->cond);
-            pthread_mutex_unlock(&surface->mutex);
+            setSurfaceResolving(surface, false);
             continue;
         }
         //LOG("Mapped surface %d to %p (%d)", surface->pictureIdx, (void*)deviceMemory, pitch);
@@ -1505,6 +1502,44 @@ static void setSurfaceBackingImageResolving(NVSurface *surface, bool resolving) 
     img->resolving = resolving;
     if (!resolving) {
         pthread_cond_broadcast(&img->cond);
+    }
+    pthread_mutex_unlock(&img->mutex);
+}
+
+static void setSurfaceResolving(NVSurface *surface, bool resolving) {
+    if (surface == NULL) {
+        return;
+    }
+
+    setSurfaceBackingImageResolving(surface, resolving);
+
+    pthread_mutex_lock(&surface->mutex);
+    surface->resolving = resolving ? 1 : 0;
+    if (!resolving) {
+        pthread_cond_broadcast(&surface->cond);
+    }
+    pthread_mutex_unlock(&surface->mutex);
+}
+
+static void waitSurfaceResolved(NVSurface *surface) {
+    if (surface == NULL) {
+        return;
+    }
+
+    pthread_mutex_lock(&surface->mutex);
+    while (surface->resolving) {
+        pthread_cond_wait(&surface->cond, &surface->mutex);
+    }
+    pthread_mutex_unlock(&surface->mutex);
+
+    BackingImage *img = surfaceSyncBackingImage(surface);
+    if (img == NULL || !img->syncInitialized) {
+        return;
+    }
+
+    pthread_mutex_lock(&img->mutex);
+    while (img->resolving) {
+        pthread_cond_wait(&img->cond, &img->mutex);
     }
     pthread_mutex_unlock(&img->mutex);
 }
@@ -2730,20 +2765,7 @@ static bool copySurfaceBackingImage(NVDriver *drv, NVSurface *src, NVSurface *ds
         return false;
     }
 
-    pthread_mutex_lock(&src->mutex);
-    if (src->resolving) {
-        pthread_cond_wait(&src->cond, &src->mutex);
-    }
-    pthread_mutex_unlock(&src->mutex);
-    if (src->backingImage != NULL && src->backingImage->borrowedBackingImage != NULL &&
-        src->backingImage->borrowedBackingImage->syncInitialized) {
-        BackingImage *borrowed = src->backingImage->borrowedBackingImage;
-        pthread_mutex_lock(&borrowed->mutex);
-        while (borrowed->resolving) {
-            pthread_cond_wait(&borrowed->cond, &borrowed->mutex);
-        }
-        pthread_mutex_unlock(&borrowed->mutex);
-    }
+    waitSurfaceResolved(src);
 
     CHECK_CUDA_RESULT_RETURN(cu->cuCtxPushCurrent(drv->cudaContext), false);
     bool realised = drv->backend->realiseSurface(drv, src) && drv->backend->realiseSurface(drv, dst);
@@ -2849,9 +2871,7 @@ static VAStatus nvBeginPicture(
     }
 
     if (nvCtx->entrypoint == VAEntrypointVideoProc) {
-        pthread_mutex_lock(&surface->mutex);
-        surface->resolving = 1;
-        pthread_mutex_unlock(&surface->mutex);
+        setSurfaceResolving(surface, true);
         nvCtx->renderTarget = surface;
         return VA_STATUS_SUCCESS;
     }
@@ -2878,12 +2898,7 @@ static VAStatus nvBeginPicture(
         surface->pictureIdx = nvCtx->currentPictureId++;
     }
 
-    //I don't know if we actually need to lock here, nothing should be waiting
-    //until after this function returns...
-    setSurfaceBackingImageResolving(surface, true);
-    pthread_mutex_lock(&surface->mutex);
-    surface->resolving = 1;
-    pthread_mutex_unlock(&surface->mutex);
+    setSurfaceResolving(surface, true);
 
     memset(&nvCtx->pPicParams, 0, sizeof(CUVIDPICPARAMS));
     nvCtx->renderTarget = surface;
@@ -2987,6 +3002,10 @@ static VAStatus nvEndPicture(
     //LOG("Decoded frame successfully to idx: %d (%p)", picParams->CurrPicIdx, nvCtx->renderTarget);
 
     NVSurface *surface = nvCtx->displayTarget != NULL ? nvCtx->displayTarget : nvCtx->renderTarget;
+    if (surface != nvCtx->renderTarget) {
+        setSurfaceResolving(surface, true);
+        setSurfaceResolving(nvCtx->renderTarget, false);
+    }
 
     surface->context = nvCtx;
     surface->topFieldFirst = !picParams->bottom_field_flag;
@@ -3021,13 +3040,7 @@ static VAStatus nvSyncSurface(
 
     //LOG("Syncing on surface: %d (%p)", surface->pictureIdx, surface);
 
-    //wait for resolve to occur before synchronising
-    pthread_mutex_lock(&surface->mutex);
-    if (surface->resolving) {
-        //LOG("Surface %d not resolved, waiting", surface->pictureIdx);
-        pthread_cond_wait(&surface->cond, &surface->mutex);
-    }
-    pthread_mutex_unlock(&surface->mutex);
+    waitSurfaceResolved(surface);
 
     //LOG("Surface %d resolved (%p)", surface->pictureIdx, surface);
 
@@ -3782,6 +3795,8 @@ static VAStatus nvExportSurfaceHandle(
     }
 
     //LOG("Exporting surface: %d (%p)", surface->pictureIdx, surface);
+
+    waitSurfaceResolved(surface);
 
     CHECK_CUDA_RESULT_RETURN(cu->cuCtxPushCurrent(drv->cudaContext), VA_STATUS_ERROR_OPERATION_FAILED);
 
