@@ -182,6 +182,101 @@ static void cacheBackingImageFdStat(BackingImage *img, int index) {
     }
 }
 
+static void fillBackingImageClearRows(uint8_t *rows, size_t widthInBytes, uint32_t rowsCount, NVFormat format, uint32_t plane) {
+    if (format == NV_FORMAT_ARGB) {
+        for (uint32_t y = 0; y < rowsCount; y++) {
+            uint8_t *row = rows + (size_t) y * widthInBytes;
+            for (size_t x = 0; x + 3 < widthInBytes; x += 4) {
+                row[x] = 0;
+                row[x + 1] = 0;
+                row[x + 2] = 0;
+                row[x + 3] = 0xff;
+            }
+        }
+        return;
+    }
+
+    if (formatsInfo[format].bppc == 1) {
+        memset(rows, plane == 0 ? 16 : 128, widthInBytes * rowsCount);
+        return;
+    }
+
+    const uint16_t value = plane == 0 ? 0x1000 : 0x8000;
+    uint16_t *samples = (uint16_t*) rows;
+    const size_t sampleCount = widthInBytes * rowsCount / sizeof(uint16_t);
+    for (size_t i = 0; i < sampleCount; i++) {
+        samples[i] = value;
+    }
+}
+
+static bool clearBackingImagePlane(NVDriver *drv, BackingImage *img, uint32_t plane) {
+    const NVFormatInfo *fmtInfo = &formatsInfo[img->format];
+    const NVFormatPlane *p = &fmtInfo->plane[plane];
+    const uint32_t width = img->width >> p->ss.x;
+    const uint32_t height = img->height >> p->ss.y;
+    const size_t widthInBytes = (size_t) width * fmtInfo->bppc * p->channelCount;
+    if (widthInBytes == 0 || height == 0) {
+        return true;
+    }
+
+    const size_t maxChunkBytes = 8 * 1024 * 1024;
+    uint32_t chunkRows = (uint32_t) (maxChunkBytes / widthInBytes);
+    if (chunkRows == 0) {
+        chunkRows = 1;
+    }
+    if (chunkRows > height) {
+        chunkRows = height;
+    }
+
+    uint8_t *rows = NULL;
+    while (chunkRows > 0) {
+        rows = malloc(widthInBytes * chunkRows);
+        if (rows != NULL) {
+            break;
+        }
+        chunkRows /= 2;
+    }
+    if (rows == NULL) {
+        LOG("Unable to allocate staging memory to clear BackingImage plane");
+        return false;
+    }
+
+    fillBackingImageClearRows(rows, widthInBytes, chunkRows, img->format, plane);
+
+    bool failed = false;
+    for (uint32_t y = 0; y < height; y += chunkRows) {
+        const uint32_t remainingRows = height - y;
+        const uint32_t rowsToCopy = chunkRows < remainingRows ? chunkRows : remainingRows;
+        CUDA_MEMCPY2D cpy = {
+            .srcMemoryType = CU_MEMORYTYPE_HOST,
+            .srcHost = rows,
+            .srcPitch = widthInBytes,
+            .dstMemoryType = CU_MEMORYTYPE_ARRAY,
+            .dstArray = img->arrays[plane],
+            .dstY = y,
+            .WidthInBytes = widthInBytes,
+            .Height = rowsToCopy
+        };
+        if (CHECK_CUDA_RESULT(drv->cu->cuMemcpy2D(&cpy))) {
+            failed = true;
+            break;
+        }
+    }
+
+    free(rows);
+    return !failed;
+}
+
+static bool clearBackingImage(NVDriver *drv, BackingImage *img) {
+    const NVFormatInfo *fmtInfo = &formatsInfo[img->format];
+    for (uint32_t i = 0; i < fmtInfo->numPlanes; i++) {
+        if (!clearBackingImagePlane(drv, img, i)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static uint64_t backingImageMemorySize(const BackingImage *img) {
     if (img == NULL) {
         return 0;
@@ -370,12 +465,16 @@ static BackingImage *direct_allocateBackingImage_single(NVDriver *drv, NVSurface
     backingImage->height = surface->height;
     backingImage->fourcc = fmtInfo->fourcc;
     backingImage->fds[0] = drmFd;
+    drmFd = -1;
     cacheBackingImageFdStat(backingImage, 0);
     for (uint32_t i = 0; i < fmtInfo->numPlanes; i++) {
         backingImage->strides[i] = driverImages[i].pitch;
         backingImage->mods[i] = driverImages[i].mods;
         backingImage->offsets[i] = driverImages[i].offset;
         backingImage->size[i] = driverImages[i].memorySize;
+    }
+    if (!clearBackingImage(drv, backingImage)) {
+        goto fail;
     }
 
     return backingImage;
