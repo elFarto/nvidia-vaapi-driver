@@ -221,23 +221,31 @@ static void copyHEVCPicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *p
 //        ppc->cr_qp_offset_list[i] = buf->cr_qp_offset_list[i];
 //    }
 
-    //double check this
-    VAPictureHEVC *pic = &buf->CurrPic;
     for (int i = 0; i < 16; i++) {
-        ppc->RefPicIdx[i]      = pictureIdxFromSurfaceId(ctx->drv, pic[i].picture_id);
-        ppc->PicOrderCntVal[i] = pic[i].pic_order_cnt;
-        ppc->IsLongTerm[i]     = i != 0 && (pic[i].flags & VA_PICTURE_HEVC_LONG_TERM_REFERENCE) != 0;
+        ppc->RefPicIdx[i] = -1;
+        ppc->PicOrderCntVal[i] = 0;
+        ppc->IsLongTerm[i] = 0;
+    }
 
-        if (i != 0 && ppc->RefPicIdx[i] != -1) {
-            ppc->NumPocTotalCurr++;
+    for (int i = 0; i < 15; i++) {
+        const VAPictureHEVC *pic = &buf->ReferenceFrames[i];
+        ppc->RefPicIdx[i] = pictureIdxFromSurfaceId(ctx->drv, pic->picture_id);
+        ppc->PicOrderCntVal[i] = pic->pic_order_cnt;
+        ppc->IsLongTerm[i] = (pic->flags & VA_PICTURE_HEVC_LONG_TERM_REFERENCE) != 0;
+
+        if (ppc->RefPicIdx[i] == -1) {
+            continue;
         }
 
-        if (pic[i].flags & VA_PICTURE_HEVC_RPS_ST_CURR_BEFORE) {
+        if (pic->flags & VA_PICTURE_HEVC_RPS_ST_CURR_BEFORE) {
             ppc->RefPicSetStCurrBefore[ppc->NumPocStCurrBefore++] = i;
-        } else if (pic[i].flags & VA_PICTURE_HEVC_RPS_ST_CURR_AFTER) {
+            ppc->NumPocTotalCurr++;
+        } else if (pic->flags & VA_PICTURE_HEVC_RPS_ST_CURR_AFTER) {
             ppc->RefPicSetStCurrAfter[ppc->NumPocStCurrAfter++] = i;
-        } else if (pic[i].flags & VA_PICTURE_HEVC_RPS_LT_CURR) {
+            ppc->NumPocTotalCurr++;
+        } else if (pic->flags & VA_PICTURE_HEVC_RPS_LT_CURR) {
             ppc->RefPicSetLtCurr[ppc->NumPocLtCurr++] = i;
+            ppc->NumPocTotalCurr++;
         }
     }
 

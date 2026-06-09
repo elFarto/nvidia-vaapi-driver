@@ -284,6 +284,8 @@ typedef struct _NVContext
     uint32_t            encodePackedHeaderType;
     uint32_t            encodePackedHeaderBitLength;
     bool                encodePackedHeaderHasEmulationBytes;
+    bool                encodePackedHeaderHasSequence;
+    bool                encodePackedHeaderHasPicture;
     bool                vppPipelineSet;
     bool                vppSurfaceRegionSet;
     bool                vppOutputRegionSet;

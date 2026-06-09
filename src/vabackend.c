@@ -47,6 +47,8 @@
 #define VA_FOURCC_P210 0x30313250
 #endif
 
+#define VA_ENC_PACKED_HEADER_MISC_MASK_VALUE 0x80000000u
+
 #ifndef __has_builtin
 #define __has_builtin(x) 0
 #endif
@@ -85,6 +87,7 @@ static pid_t nv_gettid(void)
 #endif
 }
 
+static bool isH264EncodeProfile(VAProfile profile);
 static bool isHEVCEncodeProfile(VAProfile profile);
 
 static unsigned long long nv_getmonotonic_us(void)
@@ -105,6 +108,53 @@ static bool nvRequireDrmPrime2ForExternalImport(void)
 static bool nvAssumeLinearForDrmPrimeImport(void)
 {
     return isTruthyEnv(getenv("NVD_DRM_PRIME_ASSUME_LINEAR"));
+}
+
+static bool nvDisableClientPackedHeaders(void)
+{
+    const char *enable = getenv("NVD_ENABLE_CLIENT_PACKED_HEADERS");
+    if (isTruthyEnv(enable)) {
+        return false;
+    }
+
+    /*
+     * VA-API clients can provide codec packed headers, but NVENC still encodes
+     * the slice stream from its own session config.  Mixing client SPS/PPS with
+     * NVENC slices is fragile, so prefer NVENC-generated codec headers unless a
+     * caller explicitly opts into the compatibility path.
+     */
+    return true;
+}
+
+static const char *nvClientPackedHeadersPolicy(void)
+{
+    if (isTruthyEnv(getenv("NVD_ENABLE_CLIENT_PACKED_HEADERS"))) {
+        return "client-enabled";
+    }
+    if (isTruthyEnv(getenv("NVD_DISABLE_CLIENT_PACKED_HEADERS"))) {
+        return "nvenc-forced";
+    }
+    return "nvenc-default";
+}
+
+static int nvDefaultDecodeSurfaceCount(void)
+{
+    const char *env = getenv("NVD_DECODE_SURFACE_COUNT");
+    if (env != NULL && env[0] != '\0') {
+        char *end = NULL;
+        long value = strtol(env, &end, 10);
+        if (end != env && value > 0 && value <= 32) {
+            return (int) value;
+        }
+    }
+
+    /*
+     * Chromium may create a VA decode context before it has the final render
+     * target list, then grow its frame pool afterwards.  Recent WebCodecs paths
+     * commonly allocate 17 frames, so a 16-surface default makes the 17th
+     * vaBeginPicture fail with VA_STATUS_ERROR_MAX_NUM_EXCEEDED.
+     */
+    return 32;
 }
 
 static bool nvEnableExperimentalDirectEncodeCudaArrayNv12(void)
@@ -1438,10 +1488,13 @@ void appendBuffer(AppendableBuffer *ab, const void *buf, uint64_t size) {
   ab->size += size;
 }
 
-static void appendHevcPackedHeaderBuffer(
+static size_t findAnnexBStartCode(const uint8_t *buf, size_t size, size_t pos, size_t *prefixBytes);
+
+static void appendCodecPackedHeaderNal(
     AppendableBuffer *ab,
     const uint8_t *buf,
     uint64_t size,
+    size_t nalHeaderBytes,
     bool hasEmulationBytes
 ) {
     if (size == 0 || buf == NULL) {
@@ -1471,16 +1524,18 @@ static void appendHevcPackedHeaderBuffer(
         appendBuffer(ab, buf, prefixBytes);
     }
 
-    const size_t nalHeaderBytes =
-        size > prefixBytes ? ((size - prefixBytes) >= 2 ? 2 : (size - prefixBytes))
-                           : 0;
-    if (nalHeaderBytes > 0) {
-        appendBuffer(ab, buf + prefixBytes, nalHeaderBytes);
+    const size_t availableNalHeaderBytes = size > prefixBytes
+        ? size - prefixBytes
+        : 0;
+    const size_t copiedNalHeaderBytes =
+        availableNalHeaderBytes < nalHeaderBytes ? availableNalHeaderBytes : nalHeaderBytes;
+    if (copiedNalHeaderBytes > 0) {
+        appendBuffer(ab, buf + prefixBytes, copiedNalHeaderBytes);
     }
 
     unsigned consecutiveZeros = 0;
     static const uint8_t kEmulationPreventionByte = 0x03;
-    for (size_t i = prefixBytes + nalHeaderBytes; i < size; ++i) {
+    for (size_t i = prefixBytes + copiedNalHeaderBytes; i < size; ++i) {
         const uint8_t byte = buf[i];
         if (consecutiveZeros >= 2 && byte <= 0x03) {
             appendBuffer(ab, &kEmulationPreventionByte, 1);
@@ -1488,6 +1543,148 @@ static void appendHevcPackedHeaderBuffer(
         }
         appendBuffer(ab, &byte, 1);
         consecutiveZeros = (byte == 0x00) ? (consecutiveZeros + 1) : 0;
+    }
+}
+
+static void appendCodecPackedHeaderBuffer(
+    AppendableBuffer *ab,
+    const uint8_t *buf,
+    uint64_t size,
+    size_t nalHeaderBytes,
+    bool hasEmulationBytes
+) {
+    if (size == 0 || buf == NULL) {
+        return;
+    }
+
+    if (hasEmulationBytes) {
+        appendBuffer(ab, buf, size);
+        return;
+    }
+
+    size_t prefixBytes = 0;
+    size_t start = findAnnexBStartCode(buf, size, 0, &prefixBytes);
+    if (start == size) {
+        appendCodecPackedHeaderNal(ab, buf, size, nalHeaderBytes, false);
+        return;
+    }
+
+    if (start > 0) {
+        appendCodecPackedHeaderNal(ab, buf, start, nalHeaderBytes, false);
+    }
+
+    while (start < size) {
+        const size_t nalStart = start + prefixBytes;
+        size_t nextPrefixBytes = 0;
+        const size_t nextStart = findAnnexBStartCode(buf, size, nalStart, &nextPrefixBytes);
+        const size_t nalEnd = nextStart < size ? nextStart : size;
+        if (start < nalEnd) {
+            appendCodecPackedHeaderNal(
+                ab,
+                buf + start,
+                nalEnd - start,
+                nalHeaderBytes,
+                false
+            );
+        }
+        start = nextStart;
+        prefixBytes = nextPrefixBytes;
+    }
+}
+
+static void appendHevcPackedHeaderBuffer(
+    AppendableBuffer *ab,
+    const uint8_t *buf,
+    uint64_t size,
+    bool hasEmulationBytes
+) {
+    appendCodecPackedHeaderBuffer(ab, buf, size, 2, hasEmulationBytes);
+}
+
+static void appendH264PackedHeaderBuffer(
+    AppendableBuffer *ab,
+    const uint8_t *buf,
+    uint64_t size,
+    bool hasEmulationBytes
+) {
+    appendCodecPackedHeaderBuffer(ab, buf, size, 1, hasEmulationBytes);
+}
+
+static size_t findAnnexBStartCode(const uint8_t *buf, size_t size, size_t pos, size_t *prefixBytes) {
+    for (size_t i = pos; i + 3 <= size; ++i) {
+        if (buf[i] == 0x00 && buf[i + 1] == 0x00 && buf[i + 2] == 0x01) {
+            *prefixBytes = 3;
+            return i;
+        }
+        if (i + 4 <= size &&
+            buf[i] == 0x00 &&
+            buf[i + 1] == 0x00 &&
+            buf[i + 2] == 0x00 &&
+            buf[i + 3] == 0x01) {
+            *prefixBytes = 4;
+            return i;
+        }
+    }
+
+    return size;
+}
+
+static void notePackedHeaderNalType(NVContext *nvCtx, const uint8_t *nal, size_t size) {
+    if (size == 0) {
+        return;
+    }
+
+    if (isH264EncodeProfile(nvCtx->profile)) {
+        const uint8_t nalType = nal[0] & 0x1f;
+        if (nalType == 7) {
+            nvCtx->encodePackedHeaderHasSequence = true;
+        } else if (nalType == 8) {
+            nvCtx->encodePackedHeaderHasPicture = true;
+        }
+    } else if (isHEVCEncodeProfile(nvCtx->profile) && size >= 2) {
+        const uint8_t nalType = (nal[0] >> 1) & 0x3f;
+        if (nalType == 32 || nalType == 33) {
+            nvCtx->encodePackedHeaderHasSequence = true;
+        } else if (nalType == 34) {
+            nvCtx->encodePackedHeaderHasPicture = true;
+        }
+    }
+}
+
+static void notePackedHeaderContents(
+    NVContext *nvCtx,
+    uint32_t headerType,
+    const uint8_t *buf,
+    size_t size
+) {
+    const bool hadSequence = nvCtx->encodePackedHeaderHasSequence;
+    const bool hadPicture = nvCtx->encodePackedHeaderHasPicture;
+    size_t prefixBytes = 0;
+    size_t start = findAnnexBStartCode(buf, size, 0, &prefixBytes);
+
+    if (start == size) {
+        notePackedHeaderNalType(nvCtx, buf, size);
+    } else {
+        while (start < size) {
+            const size_t nalStart = start + prefixBytes;
+            size_t nextPrefixBytes = 0;
+            const size_t nextStart = findAnnexBStartCode(buf, size, nalStart, &nextPrefixBytes);
+            const size_t nalEnd = nextStart < size ? nextStart : size;
+            if (nalStart < nalEnd) {
+                notePackedHeaderNalType(nvCtx, buf + nalStart, nalEnd - nalStart);
+            }
+            start = nextStart;
+            prefixBytes = nextPrefixBytes;
+        }
+    }
+
+    if (nvCtx->encodePackedHeaderHasSequence == hadSequence &&
+        nvCtx->encodePackedHeaderHasPicture == hadPicture) {
+        if (headerType == VAEncPackedHeaderSequence) {
+            nvCtx->encodePackedHeaderHasSequence = true;
+        } else if (headerType == VAEncPackedHeaderPicture) {
+            nvCtx->encodePackedHeaderHasPicture = true;
+        }
     }
 }
 
@@ -2072,7 +2269,7 @@ static uint32_t encodeProfileToPackedHeaderMask(VAProfile profile) {
         return VA_ENC_PACKED_HEADER_SEQUENCE |
                VA_ENC_PACKED_HEADER_PICTURE |
                VA_ENC_PACKED_HEADER_SLICE |
-               VA_ENC_PACKED_HEADER_MISC;
+               VA_ENC_PACKED_HEADER_RAW_DATA;
     }
     return VA_ENC_PACKED_HEADER_NONE;
 }
@@ -3681,6 +3878,8 @@ static bool destroyEncodeSession(NVContext *nvCtx) {
     nvCtx->encodePackedHeaderType = 0;
     nvCtx->encodePackedHeaderBitLength = 0;
     nvCtx->encodePackedHeaderHasEmulationBytes = false;
+    nvCtx->encodePackedHeaderHasSequence = false;
+    nvCtx->encodePackedHeaderHasPicture = false;
 
     if (nvCtx->encoder != NULL) {
         bool destroyPushed = false;
@@ -6193,8 +6392,8 @@ static VAStatus nvCreateContext(
         cfg->bitDepth = surface->bitDepth;
     }
 
-     // Setting to maximun value if num_render_targets == 0 to prevent picture index overflow as additional surfaces can be created after calling nvCreateContext
-    int surfaceCount = num_render_targets > 0 ? num_render_targets : 32;
+    // Pick a bounded default when the client creates decode surfaces after the context.
+    int surfaceCount = num_render_targets > 0 ? num_render_targets : nvDefaultDecodeSurfaceCount();
 
     if (surfaceCount > 32) {
         LOG("Application requested %d surface(s), limiting to 32. This may cause issues.", surfaceCount);
@@ -6498,6 +6697,8 @@ static VAStatus nvBeginPicture(
         nvCtx->encodePackedHeaderType = 0;
         nvCtx->encodePackedHeaderBitLength = 0;
         nvCtx->encodePackedHeaderHasEmulationBytes = false;
+        nvCtx->encodePackedHeaderHasSequence = false;
+        nvCtx->encodePackedHeaderHasPicture = false;
         LOG(
             "encode context=%u surface=%u size=%ux%u format=%d backing=%p",
             context,
@@ -6825,24 +7026,37 @@ static VAStatus nvRenderPicture(
                        buf->size >= sizeof(VAEncPackedHeaderParameterBuffer)) {
                 VAEncPackedHeaderParameterBuffer *packed =
                     (VAEncPackedHeaderParameterBuffer *) buf->ptr;
-                if (isHEVCEncodeProfile(nvCtx->profile)) {
+                if (!nvDisableClientPackedHeaders() &&
+                    (isH264EncodeProfile(nvCtx->profile) ||
+                     isHEVCEncodeProfile(nvCtx->profile))) {
                     nvCtx->encodePackedHeaderType = packed->type;
                     nvCtx->encodePackedHeaderBitLength = packed->bit_length;
                     nvCtx->encodePackedHeaderHasEmulationBytes =
                         packed->has_emulation_bytes != 0;
                 }
                 LOG(
-                    "packed header param: type=%u bits=%u has_emulation=%u",
+                    "packed header param: type=%u bits=%u has_emulation=%u policy=%s",
                     packed->type,
                     packed->bit_length,
-                    packed->has_emulation_bytes
+                    packed->has_emulation_bytes,
+                    nvClientPackedHeadersPolicy()
                 );
             } else if (buf->bufferType == VAEncPackedHeaderDataBufferType) {
                 size_t appendedBytes = 0;
-                if (isHEVCEncodeProfile(nvCtx->profile) &&
+                const bool supportsPackedHeader =
+                    !nvDisableClientPackedHeaders() &&
+                    (isH264EncodeProfile(nvCtx->profile) ||
+                     isHEVCEncodeProfile(nvCtx->profile));
+                const bool isDeprecatedMiscHeader =
+                    (nvCtx->encodePackedHeaderType & VA_ENC_PACKED_HEADER_MISC_MASK_VALUE) ==
+                    VA_ENC_PACKED_HEADER_MISC_MASK_VALUE;
+                const bool shouldAppendPackedHeader =
+                    supportsPackedHeader &&
                     (nvCtx->encodePackedHeaderType == VAEncPackedHeaderSequence ||
                      nvCtx->encodePackedHeaderType == VAEncPackedHeaderPicture ||
-                     nvCtx->encodePackedHeaderType == VAEncPackedHeaderRawData)) {
+                     nvCtx->encodePackedHeaderType == VAEncPackedHeaderRawData ||
+                     isDeprecatedMiscHeader);
+                if (shouldAppendPackedHeader) {
                     size_t packedBytes = buf->size;
                     if (nvCtx->encodePackedHeaderBitLength != 0) {
                         const size_t announcedBytes =
@@ -6853,22 +7067,47 @@ static VAStatus nvRenderPicture(
                     }
                     if (packedBytes > 0) {
                         const uint64_t beforeSize = nvCtx->encodePackedHeaders.size;
-                        appendHevcPackedHeaderBuffer(
-                            &nvCtx->encodePackedHeaders,
+                        notePackedHeaderContents(
+                            nvCtx,
+                            nvCtx->encodePackedHeaderType,
                             (const uint8_t *) buf->ptr,
-                            packedBytes,
-                            nvCtx->encodePackedHeaderHasEmulationBytes
+                            packedBytes
                         );
+                        if (isHEVCEncodeProfile(nvCtx->profile)) {
+                            appendHevcPackedHeaderBuffer(
+                                &nvCtx->encodePackedHeaders,
+                                (const uint8_t *) buf->ptr,
+                                packedBytes,
+                                nvCtx->encodePackedHeaderHasEmulationBytes
+                            );
+                        } else {
+                            appendH264PackedHeaderBuffer(
+                                &nvCtx->encodePackedHeaders,
+                                (const uint8_t *) buf->ptr,
+                                packedBytes,
+                                nvCtx->encodePackedHeaderHasEmulationBytes
+                            );
+                        }
                         appendedBytes = nvCtx->encodePackedHeaders.size - beforeSize;
                     }
+                } else if (nvCtx->encodePackedHeaderType == VAEncPackedHeaderSlice) {
+                    LOG("packed slice header ignored because NVENC generates slice headers");
+                } else if (nvDisableClientPackedHeaders()) {
+                    LOG(
+                        "packed header ignored because client packed headers are disabled policy=%s",
+                        nvClientPackedHeadersPolicy()
+                    );
                 }
                 LOG(
-                    "packed header data: bytes=%zu appended=%zu type=%u has_emulation=%u total=%llu",
+                    "packed header data: bytes=%zu appended=%zu type=%u has_emulation=%u total=%llu hasSequence=%u hasPicture=%u policy=%s",
                     buf->size,
                     appendedBytes,
                     nvCtx->encodePackedHeaderType,
                     nvCtx->encodePackedHeaderHasEmulationBytes ? 1 : 0,
-                    (unsigned long long) nvCtx->encodePackedHeaders.size
+                    (unsigned long long) nvCtx->encodePackedHeaders.size,
+                    nvCtx->encodePackedHeaderHasSequence ? 1 : 0,
+                    nvCtx->encodePackedHeaderHasPicture ? 1 : 0,
+                    nvClientPackedHeadersPolicy()
                 );
                 nvCtx->encodePackedHeaderType = 0;
                 nvCtx->encodePackedHeaderBitLength = 0;
@@ -7017,7 +7256,41 @@ static VAStatus nvEncodeEndPicture(VADriverContextP ctx, NVContext *nvCtx) {
         CHECK_CUDA_RESULT_RETURN(cu->cuCtxPopCurrent(NULL), VA_STATUS_ERROR_OPERATION_FAILED);
         return VA_STATUS_ERROR_ALLOCATION_FAILED;
     }
-    LOG("surface realized: size=%ux%u format=%d backing=%p", surface->width, surface->height, surface->format, (void *) surface->backingImage);
+    BackingImage *backingImage = surface->backingImage;
+    if (backingImage != NULL) {
+        LOG(
+            "surface realized: size=%ux%u format=%d backing=%p backingSize=%ux%u backingFmt=%d importedGpuCopy=%d "
+            "stride={%d,%d,%d} offset={%d,%d,%d} size={%u,%u,%u} mod={0x%llx,0x%llx,0x%llx}",
+            surface->width,
+            surface->height,
+            surface->format,
+            (void *) backingImage,
+            backingImage->width,
+            backingImage->height,
+            backingImage->format,
+            backingImage->importedGpuCopy ? 1 : 0,
+            backingImage->strides[0],
+            backingImage->strides[1],
+            backingImage->strides[2],
+            backingImage->offsets[0],
+            backingImage->offsets[1],
+            backingImage->offsets[2],
+            backingImage->size[0],
+            backingImage->size[1],
+            backingImage->size[2],
+            (unsigned long long) backingImage->mods[0],
+            (unsigned long long) backingImage->mods[1],
+            (unsigned long long) backingImage->mods[2]
+        );
+    } else {
+        LOG(
+            "surface realized: size=%ux%u format=%d backing=%p",
+            surface->width,
+            surface->height,
+            surface->format,
+            (void *) surface->backingImage
+        );
+    }
     if (!nvCtx->encodeSessionInitialized &&
         (nvCtx->width != surface->width || nvCtx->height != surface->height)) {
         LOG(
@@ -7177,28 +7450,41 @@ prepare_input:
             ? nvCtx->encodeInputFormat
             : NV_ENC_BUFFER_FORMAT_NV12);
     picParams.pictureStruct = NV_ENC_PIC_STRUCT_FRAME;
-    const bool useHevcPackedHeaders =
-        isHEVCEncodeProfile(nvCtx->profile) &&
+    const bool usePackedHeaders =
+        (isH264EncodeProfile(nvCtx->profile) || isHEVCEncodeProfile(nvCtx->profile)) &&
         nvCtx->encodePackedHeaders.size > 0;
+    const bool useClientCodecHeaders =
+        usePackedHeaders &&
+        nvCtx->encodePackedHeaderHasSequence &&
+        nvCtx->encodePackedHeaderHasPicture;
     if (nvCtx->encodeForceIDR) {
         if (isAV1EncodeProfile(nvCtx->profile)) {
             picParams.encodePicFlags = NV_ENC_PIC_FLAG_FORCEINTRA | NV_ENC_PIC_FLAG_OUTPUT_SPSPPS;
         } else if (isHEVCEncodeProfile(nvCtx->profile)) {
             picParams.encodePicFlags = NV_ENC_PIC_FLAG_FORCEIDR;
-            if (!useHevcPackedHeaders) {
+            if (!useClientCodecHeaders) {
                 picParams.encodePicFlags |= NV_ENC_PIC_FLAG_OUTPUT_SPSPPS;
             }
         } else {
-            picParams.encodePicFlags = NV_ENC_PIC_FLAG_FORCEIDR | NV_ENC_PIC_FLAG_OUTPUT_SPSPPS;
+            picParams.encodePicFlags = NV_ENC_PIC_FLAG_FORCEIDR;
+            if (!useClientCodecHeaders) {
+                picParams.encodePicFlags |= NV_ENC_PIC_FLAG_OUTPUT_SPSPPS;
+            }
         }
     }
     LOG(
-        "submitting encode picture: width=%u height=%u pitch=%u flags=0x%x timestamp=%llu",
+        "submitting encode picture: width=%u height=%u session=%ux%u pitch=%u flags=0x%x timestamp=%llu path=%s bufferFmt=0x%x packedHeaders=%llu clientHeaderPolicy=%s",
         picParams.inputWidth,
         picParams.inputHeight,
+        nvCtx->width,
+        nvCtx->height,
         picParams.inputPitch,
         picParams.encodePicFlags,
-        (unsigned long long) picParams.inputTimeStamp
+        (unsigned long long) picParams.inputTimeStamp,
+        usingDirectEncodeInput ? "direct" : "staging",
+        picParams.bufferFmt,
+        (unsigned long long) nvCtx->encodePackedHeaders.size,
+        nvClientPackedHeadersPolicy()
     );
 
     VAStatus status = VA_STATUS_SUCCESS;
@@ -7252,7 +7538,7 @@ prepare_input:
     }
 
     const size_t packedHeaderBytes =
-        useHevcPackedHeaders ? nvCtx->encodePackedHeaders.size : 0;
+        usePackedHeaders ? nvCtx->encodePackedHeaders.size : 0;
     const size_t totalBitstreamBytes =
         packedHeaderBytes + lockBitstream.bitstreamSizeInBytes;
 

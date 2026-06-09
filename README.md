@@ -138,6 +138,9 @@ Environment variables used to control the behavior of this library.
 | `NVD_DISABLE_DIRECT_DMABUF_CUDA_IMPORT` | Disable direct raw dma-buf CUDA import path and use fallback import paths. |
 | `NVD_USE_PRIMARY_CUDA_CONTEXT` | Prefer CUDA primary context (`cuDevicePrimaryCtxRetain`) instead of creating a private context. If unset, the driver still auto-retries with primary context when `cuCtxCreate` fails. |
 | `NVD_DRM_PRIME_ASSUME_LINEAR` | Opt-in compatibility mode for plain `DRM_PRIME` external imports that do not carry explicit modifiers. When set to `1`, the driver admits plain `DRM_PRIME` input and reconstructs it as `DRM_FORMAT_MOD_LINEAR`. Default disabled. |
+| `NVD_DECODE_SURFACE_COUNT` | Override the default decode surface count used when clients create a decode context without render targets. Valid range is `1` to `32`; default is `32`. |
+| `NVD_ENABLE_CLIENT_PACKED_HEADERS` | Opt into prepending client-supplied H.264/HEVC packed header data. Default disabled because NVENC-generated SPS/PPS is safer for NVENC slice output. |
+| `NVD_DISABLE_CLIENT_PACKED_HEADERS` | Deprecated compatibility spelling. Client-supplied H.264/HEVC packed header data is ignored by default while packed-header capability advertisement remains enabled. |
 
 ### `NVD_ENCODE_PROBE_CACHE`
 
