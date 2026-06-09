@@ -25,7 +25,6 @@ static bool directRestoreBackingCudaViews(NVDriver *drv, BackingImage *img, cons
 static void directReleaseBackingCudaViews(NVDriver *drv, BackingImage *img, const char *reason);
 static void directReleaseWholeFrameNv12CudaArray(NVDriver *drv, BackingImage *img, const char *reason);
 static bool direct_isLinearModifier(uint64_t modifier);
-static bool directFdsShareBacking(int fdA, int fdB);
 
 static bool directAllowImportedGpuCopyWholeFrame(void) {
     return isTruthyEnv(getenv("NVD_EXPERIMENTAL_ALLOW_IMPORTED_GPU_COPY_DIRECT_ENCODE"));
@@ -425,20 +424,6 @@ static void direct_initBackingImageFds(BackingImage *img) {
     for (uint32_t i = 0; i < ARRAY_SIZE(img->fds); i++) {
         img->fds[i] = -1;
     }
-}
-
-static bool directFdsShareBacking(int fdA, int fdB) {
-    if (fdA < 0 || fdB < 0) {
-        return false;
-    }
-
-    struct stat aStat = {0};
-    struct stat bStat = {0};
-    if (fstat(fdA, &aStat) != 0 || fstat(fdB, &bStat) != 0) {
-        return false;
-    }
-
-    return aStat.st_dev == bStat.st_dev && aStat.st_ino == bStat.st_ino;
 }
 
 static void findGPUIndexFromFd(NVDriver *drv) {
@@ -1239,18 +1224,6 @@ bool directEnsureWholeFrameNv12CudaArray(NVDriver *drv, BackingImage *img) {
         );
         return false;
     }
-    // if (!directFdsShareBacking(img->fds[0], img->fds[1]) ||
-    //     img->size[0] == 0 ||
-    //     img->size[0] != img->size[1]) {
-    //     LOG(
-    //         "direct encode whole-frame reject reason=planes_do_not_share_backing fd0=%d fd1=%d size0=%u size1=%u",
-    //         img->fds[0],
-    //         img->fds[1],
-    //         img->size[0],
-    //         img->size[1]
-    //     );
-    //     return false;
-    // }
     if (img->offsets[0] != 0) {
         LOG(
             "direct encode whole-frame reject reason=luma_offset_nonzero offset0=%d",

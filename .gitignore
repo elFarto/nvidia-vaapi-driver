@@ -1,6 +1,10 @@
 *.o
 samples/*.mp4
 subprojects/*/
+!subprojects/packagefiles/
+!subprojects/packagefiles/ff-nvcodec-headers/
+!subprojects/packagefiles/ff-nvcodec-headers/meson.build
+subprojects/.wraplock
 videos
 va-api-nvidia.cflags
 va-api-nvidia.config

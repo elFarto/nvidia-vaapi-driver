@@ -17,7 +17,7 @@ deps = [
     cc.find_library('m'),
     cc.find_library('dl', required : false),
     dependency('egl'),
-    dependency('ffnvcodec', version: '>= 11.1.5.1'),
+    dependency('ffnvcodec', version: '>= 13.0.19.0'),
     dependency('libdrm', version: '>=2.4.60').partial_dependency(compile_args: true),
     dependency('threads'),
 ]

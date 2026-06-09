@@ -14,6 +14,13 @@
 #include "direct/nv-driver.h"
 #include "common.h"
 
+#ifndef VA_FOURCC_Q416
+#define VA_FOURCC_Q416 0x36313451
+#endif
+
+// libva <= 2.14 lacks this enum name; value matches newer libva headers.
+#define NV_VA_PROFILE_H264_HIGH10 ((VAProfile)36)
+
 #define SURFACE_QUEUE_SIZE 16
 #define MAX_IMAGE_COUNT 64
 #define MAX_PROFILES 32

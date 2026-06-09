@@ -162,10 +162,12 @@ static bool nvEnableExperimentalDirectEncodeCudaArrayNv12(void)
     return isTruthyEnv(getenv("NVD_EXPERIMENTAL_DIRECT_ENCODE_CUDAARRAY_NV12"));
 }
 
+#if NVENCAPI_MAJOR_VERSION >= 13
 static bool nvEnableExperimentalDirectEncodeNv12ChromaOffsetIn(void)
 {
     return isTruthyEnv(getenv("NVD_EXPERIMENTAL_DIRECT_ENCODE_NV12_CHROMA_OFFSET_IN"));
 }
+#endif
 
 static long long nvParseSignedEnvOrDefault(const char *name, long long fallback)
 {
@@ -185,6 +187,7 @@ static long long nvParseSignedEnvOrDefault(const char *name, long long fallback)
     return parsed;
 }
 
+#if NVENCAPI_MAJOR_VERSION >= 13
 static long long nvExperimentalDirectEncodeNv12ChromaOffsetInDeltaBytes(void)
 {
     return nvParseSignedEnvOrDefault(
@@ -240,6 +243,7 @@ static uint32_t nvResolveExperimentalDirectEncodeNv12ChromaOffsetIn(
     );
     return (uint32_t) resolved;
 }
+#endif
 
 static uint32_t nvResolveExperimentalDirectEncodeNv12RegisterWidth(
         const char *pathName,
@@ -1833,7 +1837,7 @@ static bool isH264EncodeProfile(VAProfile profile) {
     return profile == VAProfileH264ConstrainedBaseline ||
            profile == VAProfileH264Main ||
            profile == VAProfileH264High ||
-           profile == VAProfileH264High10;
+           profile == NV_VA_PROFILE_H264_HIGH10;
 }
 
 static bool isHEVCEncodeProfile(VAProfile profile) {
@@ -1867,7 +1871,7 @@ static bool isEncodeProfile(VAProfile profile) {
 }
 
 static bool isEncodeProfileSupportedByDriver(const NVDriver *drv, VAProfile profile) {
-    if (profile == VAProfileH264High10) {
+    if (profile == NV_VA_PROFILE_H264_HIGH10) {
 #if NVENCAPI_MAJOR_VERSION >= 13
         return drv->supportsEncodeH264 && drv->supportsEncodeH26410Bit;
 #else
@@ -1987,6 +1991,14 @@ static GUID vaProfileToEncodeGuid(VAProfile profile) {
 }
 
 static GUID vaProfileToEncodeProfileGuid(VAProfile profile, NV_ENC_BUFFER_FORMAT inputFmt) {
+    if (profile == NV_VA_PROFILE_H264_HIGH10) {
+#if NVENCAPI_MAJOR_VERSION >= 13
+        return NV_ENC_H264_PROFILE_HIGH_10_GUID;
+#else
+        return NV_ENC_CODEC_PROFILE_AUTOSELECT_GUID;
+#endif
+    }
+
     switch (profile) {
     case VAProfileH264ConstrainedBaseline:
         return NV_ENC_H264_PROFILE_BASELINE_GUID;
@@ -1998,12 +2010,6 @@ static GUID vaProfileToEncodeProfileGuid(VAProfile profile, NV_ENC_BUFFER_FORMAT
             return NV_ENC_H264_PROFILE_HIGH_444_GUID;
         }
         return NV_ENC_H264_PROFILE_HIGH_GUID;
-    case VAProfileH264High10:
-#if NVENCAPI_MAJOR_VERSION >= 13
-        return NV_ENC_H264_PROFILE_HIGH_10_GUID;
-#else
-        return NV_ENC_CODEC_PROFILE_AUTOSELECT_GUID;
-#endif
     case VAProfileHEVCMain:
         return NV_ENC_HEVC_PROFILE_MAIN_GUID;
     case VAProfileHEVCMain10:
@@ -2022,9 +2028,11 @@ static GUID vaProfileToEncodeProfileGuid(VAProfile profile, NV_ENC_BUFFER_FORMAT
 }
 
 static NV_ENC_BUFFER_FORMAT encodeProfileToInputBufferFormat(VAProfile profile) {
-    switch (profile) {
-    case VAProfileH264High10:
+    if (profile == NV_VA_PROFILE_H264_HIGH10) {
         return NV_ENC_BUFFER_FORMAT_YUV420_10BIT;
+    }
+
+    switch (profile) {
     case VAProfileHEVCMain422_10:
 #if NVENCAPI_MAJOR_VERSION >= 13
         return NV_ENC_BUFFER_FORMAT_P210;
@@ -2073,6 +2081,10 @@ static NV_ENC_BUFFER_FORMAT surfaceFormatToEncodeInputBufferFormat(
 }
 
 static uint32_t encodeProfileToRtFormatMask(const NVDriver *drv, VAProfile profile) {
+    if (profile == NV_VA_PROFILE_H264_HIGH10) {
+        return drv->supportsEncodeH26410Bit ? VA_RT_FORMAT_YUV420_10 : 0;
+    }
+
     switch (profile) {
     case VAProfileH264ConstrainedBaseline:
     case VAProfileH264Main:
@@ -2080,8 +2092,6 @@ static uint32_t encodeProfileToRtFormatMask(const NVDriver *drv, VAProfile profi
     case VAProfileH264High:
         return VA_RT_FORMAT_YUV420 |
                (drv->supportsEncodeH264444 ? VA_RT_FORMAT_YUV444 : 0);
-    case VAProfileH264High10:
-        return drv->supportsEncodeH26410Bit ? VA_RT_FORMAT_YUV420_10 : 0;
     case VAProfileHEVCMain10:
         return VA_RT_FORMAT_YUV420_10;
     case VAProfileHEVCMain422_10:
@@ -2103,6 +2113,10 @@ static uint32_t encodeProfileToRtFormatMask(const NVDriver *drv, VAProfile profi
 }
 
 static uint32_t encodeProfileToDefaultRtFormat(VAProfile profile) {
+    if (profile == NV_VA_PROFILE_H264_HIGH10) {
+        return VA_RT_FORMAT_YUV420_10;
+    }
+
     switch (profile) {
     case VAProfileH264ConstrainedBaseline:
     case VAProfileH264Main:
@@ -2110,8 +2124,6 @@ static uint32_t encodeProfileToDefaultRtFormat(VAProfile profile) {
     case VAProfileHEVCMain:
     case VAProfileAV1Profile0:
         return VA_RT_FORMAT_YUV420;
-    case VAProfileH264High10:
-        return VA_RT_FORMAT_YUV420_10;
     case VAProfileHEVCMain10:
         return VA_RT_FORMAT_YUV420_10;
     case VAProfileHEVCMain422_10:
@@ -2234,7 +2246,7 @@ static bool configureEncodeConfigForRtFormat(
         return true;
     }
 
-    if (profile == VAProfileH264High10) {
+    if (profile == NV_VA_PROFILE_H264_HIGH10) {
         if ((requestedRtFormat & VA_RT_FORMAT_YUV420_10) == 0) {
             return false;
         }
@@ -5213,7 +5225,7 @@ static VAStatus nvQueryConfigProfiles2(
             haveBaseline |= profile_list[i] == VAProfileH264ConstrainedBaseline;
             haveMain |= profile_list[i] == VAProfileH264Main;
             haveHigh |= profile_list[i] == VAProfileH264High;
-            haveHigh10 |= profile_list[i] == VAProfileH264High10;
+            haveHigh10 |= profile_list[i] == NV_VA_PROFILE_H264_HIGH10;
         }
         if (!haveBaseline) {
             profile_list[profiles++] = VAProfileH264ConstrainedBaseline;
@@ -5225,7 +5237,7 @@ static VAStatus nvQueryConfigProfiles2(
             profile_list[profiles++] = VAProfileH264High;
         }
         if (drv->supportsEncodeH26410Bit && !haveHigh10) {
-            profile_list[profiles++] = VAProfileH264High10;
+            profile_list[profiles++] = NV_VA_PROFILE_H264_HIGH10;
         }
     }
     if (drv->supportsEncodeHEVC) {
