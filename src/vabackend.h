@@ -170,6 +170,7 @@ typedef struct _NVContext
     void                *codecData;
     void                *lastSliceParams;
     unsigned int        lastSliceParamsCount;
+    uint32_t            lastSliceDataOffset;
     AppendableBuffer    bitstreamBuffer;
     AppendableBuffer    sliceOffsets;
     CUVIDPICPARAMS      pPicParams;

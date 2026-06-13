@@ -11,6 +11,13 @@ static int get_relative_dist(CUVIDAV1PICPARAMS *pps, int ref_hint, int order_hin
     return (diff & (m - 1)) - (diff & m);
 }
 
+static uint32_t CalcAv1TileLog2(uint32_t blockSize, uint32_t target)
+{
+    uint32_t k;
+    for (k = 0; (blockSize << k) < target; k++) {}
+    return k;
+}
+
 static void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *picParams) {
     static const int bit_depth_map[] = {0, 2, 4}; //8-bpc, 10-bpc, 12-bpc
 
@@ -82,7 +89,6 @@ static void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *pi
     pps->num_tile_cols = buf->tile_cols;
     pps->num_tile_rows = buf->tile_rows;
     pps->context_update_tile_id = buf->context_update_tile_id;
-    picParams->nNumSlices = pps->num_tile_cols * pps->num_tile_rows;
 
     pps->cdef_damping_minus_3 = buf->cdef_damping_minus_3;
     pps->cdef_bits = buf->cdef_bits;
@@ -210,11 +216,56 @@ static void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *pi
     pps->cr_luma_mult = buf->film_grain_info.cr_luma_mult;
     pps->cr_offset = buf->film_grain_info.cr_offset;
 
-    for (int i = 0; i < pps->num_tile_cols; i++) {
-        pps->tile_widths[i] = 1 + buf->width_in_sbs_minus_1[i];
-    }
-    for (int i = 0; i < pps->num_tile_rows; i++) {
-        pps->tile_heights[i] = 1 + buf->height_in_sbs_minus_1[i];
+    if (!buf->pic_info_fields.bits.uniform_tile_spacing_flag) {
+        for (int i = 0; i < pps->num_tile_cols; i++) {
+            pps->tile_widths[i] = 1 + buf->width_in_sbs_minus_1[i];
+        }
+        for (int i = 0; i < pps->num_tile_rows; i++) {
+            pps->tile_heights[i] = 1 + buf->height_in_sbs_minus_1[i];
+        }
+    } else {
+        // FUN!
+#define MOS_ALIGN_CEIL(_a, _alignment) (((_a) + ((_alignment)-1)) & (~((_alignment)-1)))
+        uint32_t widthMinus1 = buf->frame_width_minus1;
+        if (buf->pic_info_fields.bits.use_superres &&
+            buf->superres_scale_denominator != 8) { // av1ScaleNumerator
+            uint32_t dsWidth = ((widthMinus1 + 1) * 8 + buf->superres_scale_denominator / 2)
+                / buf->superres_scale_denominator;
+            widthMinus1 = dsWidth - 1;
+        }
+
+        const uint32_t maxMibSizeLog2 = 5;
+        const uint32_t minMibSizeLog2 = 4;
+        const uint32_t miSizeLog2     = 2;
+        int32_t mibSizeLog2 = buf->seq_info_fields.fields.use_128x128_superblock ? maxMibSizeLog2 : minMibSizeLog2;
+        int32_t miCols = MOS_ALIGN_CEIL(MOS_ALIGN_CEIL(widthMinus1 + 1, 8) >> miSizeLog2, 1 << mibSizeLog2);
+        int32_t miRows = MOS_ALIGN_CEIL(MOS_ALIGN_CEIL(buf->frame_height_minus1 + 1, 8) >> miSizeLog2, 1 << mibSizeLog2);
+        int32_t sbCols = miCols >> mibSizeLog2;
+        int32_t sbRows = miRows >> mibSizeLog2;
+
+        uint32_t tileColsLog2 = CalcAv1TileLog2(1, pps->num_tile_cols);
+        uint32_t tileRowsLog2 = CalcAv1TileLog2(1, pps->num_tile_rows);
+
+        uint32_t sizeSb = MOS_ALIGN_CEIL(sbCols, 1 << tileColsLog2);
+        sizeSb >>= tileColsLog2;
+        uint32_t sizeSbRemain = sbCols % sizeSb;
+        if (!sizeSbRemain) sizeSbRemain = sizeSb;
+
+        int i;
+        for (i = 0; i < pps->num_tile_cols - 1; i++) {
+            pps->tile_widths[i] = sizeSb;
+        }
+        pps->tile_widths[i] = sizeSbRemain;
+
+        sizeSb = MOS_ALIGN_CEIL(sbRows, 1 << tileRowsLog2);
+        sizeSb >>= tileRowsLog2;
+        sizeSbRemain = sbRows % sizeSb;
+        if (!sizeSbRemain) sizeSbRemain = sizeSb;
+
+        for (i = 0; i < pps->num_tile_rows - 1; i++) {
+            pps->tile_heights[i] = sizeSb;
+        }
+        pps->tile_heights[i] = sizeSbRemain;
     }
 
     for (int i = 0; i < (1<<pps->cdef_bits); i++) {
@@ -259,14 +310,13 @@ static void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *pi
         int ref_idx = buf->ref_frame_idx[i];
         pps->ref_frame[i].index = pps->ref_frame_map[ref_idx];
         //pull these from the surface itself
-        NVSurface *surf = nvSurfaceFromSurfaceId(ctx->drv, buf->ref_frame_map[i]);
+        NVSurface *surf = nvSurfaceFromSurfaceId(ctx->drv, buf->ref_frame_map[ref_idx]);
         if (surf != NULL) {
             pps->ref_frame[i].width = surf->width;
             pps->ref_frame[i].height = surf->height;
         }
 
-        //TODO not sure on this one
-        pps->global_motion[i].invalid = (buf->wm[i].wmtype == 0);
+        pps->global_motion[i].invalid = buf->wm[i].invalid;
         pps->global_motion[i].wmtype = buf->wm[i].wmtype;
         for (int j = 0; j < 6; j++) {
             pps->global_motion[i].wmmat[j] = buf->wm[i].wmmat[j];
@@ -299,24 +349,23 @@ static void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *pi
 }
 
 static void copyAV1SliceParam(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams) {
-    ctx->lastSliceParams = buf->ptr;
-    ctx->lastSliceParamsCount = buf->elements;
+    for (unsigned int i = 0; i < buf->elements; i++) {
+        VASliceParameterBufferAV1 *sliceParams = &((VASliceParameterBufferAV1*) buf->ptr)[i];
+        // append the slice offsets
+        uint32_t offset = sliceParams->slice_data_offset + ctx->lastSliceDataOffset;
+        appendBuffer(&ctx->sliceOffsets, &offset, sizeof(offset));
+        offset += sliceParams->slice_data_size;
+        appendBuffer(&ctx->sliceOffsets, &offset, sizeof(offset));
+    }
 
     picParams->nNumSlices += buf->elements;
 }
 
 static void copyAV1SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams) {
-    uint32_t offset = (uint32_t) ctx->bitstreamBuffer.size;
-    for (unsigned int i = 0; i < ctx->lastSliceParamsCount; i++) {
-        VASliceParameterBufferAV1 *sliceParams = &((VASliceParameterBufferAV1*) ctx->lastSliceParams)[i];
-
-        //copy just the slice we're looking at
-        appendBuffer(&ctx->bitstreamBuffer, PTROFF(buf->ptr, sliceParams->slice_data_offset), sliceParams->slice_data_size);
-
-        //now append the offset and size of the slice we just copied
-        appendBuffer(&ctx->sliceOffsets, &offset, sizeof(offset));
-        offset += sliceParams->slice_data_size;
-        appendBuffer(&ctx->sliceOffsets, &offset, sizeof(offset));
+    appendBuffer(&ctx->bitstreamBuffer, buf->ptr, buf->size);
+    // Compatibility with some clients that send one slice data followed by multiple slice params
+    if (ctx->sliceOffsets.size) {
+        ctx->lastSliceDataOffset += buf->size;
     }
 
     picParams->nBitstreamDataLen = ctx->bitstreamBuffer.size;
