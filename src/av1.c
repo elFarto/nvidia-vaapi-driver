@@ -45,7 +45,7 @@ static void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *pi
     pps->enable_masked_compound = buf->seq_info_fields.fields.enable_masked_compound;
     pps->enable_dual_filter = buf->seq_info_fields.fields.enable_dual_filter;
     pps->enable_order_hint = buf->seq_info_fields.fields.enable_order_hint;
-    pps->order_hint_bits_minus1 = buf->order_hint_bits_minus_1;
+    pps->order_hint_bits_minus1 = pps->enable_order_hint ? buf->order_hint_bits_minus_1 : 0;
     pps->enable_jnt_comp = buf->seq_info_fields.fields.enable_jnt_comp;
     //TODO not quite correct, use_superres can be 0, and enable_superres can be 1
     pps->enable_superres = buf->pic_info_fields.bits.use_superres;
@@ -61,7 +61,7 @@ static void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *pi
     pps->disable_cdf_update = buf->pic_info_fields.bits.disable_cdf_update;
     pps->allow_screen_content_tools = buf->pic_info_fields.bits.allow_screen_content_tools;
     pps->force_integer_mv = buf->pic_info_fields.bits.force_integer_mv || picParams->intra_pic_flag;
-    pps->coded_denom = buf->superres_scale_denominator;
+    pps->coded_denom = buf->pic_info_fields.bits.use_superres ? buf->superres_scale_denominator - 9 : 0;
     pps->allow_intrabc = buf->pic_info_fields.bits.allow_intrabc;
     pps->allow_high_precision_mv = buf->pic_info_fields.bits.allow_high_precision_mv;
 
@@ -180,9 +180,11 @@ static void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *pi
     pps->delta_lf_res = buf->mode_control_fields.bits.log2_delta_lf_res;
     pps->delta_lf_multi = buf->mode_control_fields.bits.delta_lf_multi;
 
-    pps->lr_type[0] = buf->loop_restoration_fields.bits.yframe_restoration_type;
-    pps->lr_type[1] = buf->loop_restoration_fields.bits.cbframe_restoration_type;
-    pps->lr_type[2] = buf->loop_restoration_fields.bits.crframe_restoration_type;
+    // libva/spec restoration type -> NVDEC enum order (NONE, SWITCHABLE, WIENER, SGRPROJ); matches ffmpeg nvdec_av1.c remap_lr_type.
+    static const int remap_lr_type[4] = {0, 3, 1, 2};
+    pps->lr_type[0] = remap_lr_type[buf->loop_restoration_fields.bits.yframe_restoration_type & 3];
+    pps->lr_type[1] = remap_lr_type[buf->loop_restoration_fields.bits.cbframe_restoration_type & 3];
+    pps->lr_type[2] = remap_lr_type[buf->loop_restoration_fields.bits.crframe_restoration_type & 3];
     pps->lr_unit_size[0] = 1 + buf->loop_restoration_fields.bits.lr_unit_shift;
     pps->lr_unit_size[1] = 1 + buf->loop_restoration_fields.bits.lr_unit_shift - buf->loop_restoration_fields.bits.lr_uv_shift;
     pps->lr_unit_size[2] = pps->lr_unit_size[1];
@@ -210,11 +212,28 @@ static void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *pi
     pps->cr_luma_mult = buf->film_grain_info.cr_luma_mult;
     pps->cr_offset = buf->film_grain_info.cr_offset;
 
-    for (int i = 0; i < pps->num_tile_cols; i++) {
-        pps->tile_widths[i] = 1 + buf->width_in_sbs_minus_1[i];
-    }
-    for (int i = 0; i < pps->num_tile_rows; i++) {
-        pps->tile_heights[i] = 1 + buf->height_in_sbs_minus_1[i];
+    if (buf->pic_info_fields.bits.uniform_tile_spacing_flag) {
+        // libva leaves width/height_in_sbs_minus_1 unset for uniform tiling; derive per AV1 spec from frame size + tile count.
+        int sbShift = pps->use_128x128_superblock ? 5 : 4;
+        int miCols = 2 * (((buf->frame_width_minus1 + 1) + 7) >> 3);
+        int miRows = 2 * (((buf->frame_height_minus1 + 1) + 7) >> 3);
+        int sbCols = (miCols + ((1 << sbShift) - 1)) >> sbShift;
+        int sbRows = (miRows + ((1 << sbShift) - 1)) >> sbShift;
+        int tileWidthSb = (sbCols + pps->num_tile_cols - 1) / pps->num_tile_cols;
+        int tileHeightSb = (sbRows + pps->num_tile_rows - 1) / pps->num_tile_rows;
+        for (int i = 0; i < pps->num_tile_cols; i++) {
+            pps->tile_widths[i] = (i < pps->num_tile_cols - 1) ? tileWidthSb : (sbCols - tileWidthSb * (pps->num_tile_cols - 1));
+        }
+        for (int i = 0; i < pps->num_tile_rows; i++) {
+            pps->tile_heights[i] = (i < pps->num_tile_rows - 1) ? tileHeightSb : (sbRows - tileHeightSb * (pps->num_tile_rows - 1));
+        }
+    } else {
+        for (int i = 0; i < pps->num_tile_cols; i++) {
+            pps->tile_widths[i] = 1 + buf->width_in_sbs_minus_1[i];
+        }
+        for (int i = 0; i < pps->num_tile_rows; i++) {
+            pps->tile_heights[i] = 1 + buf->height_in_sbs_minus_1[i];
+        }
     }
 
     for (int i = 0; i < (1<<pps->cdef_bits); i++) {
@@ -299,26 +318,20 @@ static void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *pi
 }
 
 static void copyAV1SliceParam(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams) {
-    ctx->lastSliceParams = buf->ptr;
-    ctx->lastSliceParamsCount = buf->elements;
-
-    picParams->nNumSlices += buf->elements;
+    // Each tile gets two absolute byte offsets into the whole slice-data buffer (copied by
+    // copyAV1SliceData). Matches ffmpeg nvdec_av1.c: bitstream = full buffer, offsets = tile ranges.
+    for (unsigned int i = 0; i < buf->elements; i++) {
+        VASliceParameterBufferAV1 *sliceParams = &((VASliceParameterBufferAV1*) buf->ptr)[i];
+        uint32_t start = sliceParams->slice_data_offset;
+        uint32_t end = start + sliceParams->slice_data_size;
+        appendBuffer(&ctx->sliceOffsets, &start, sizeof(start));
+        appendBuffer(&ctx->sliceOffsets, &end, sizeof(end));
+    }
 }
 
 static void copyAV1SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams) {
-    uint32_t offset = (uint32_t) ctx->bitstreamBuffer.size;
-    for (unsigned int i = 0; i < ctx->lastSliceParamsCount; i++) {
-        VASliceParameterBufferAV1 *sliceParams = &((VASliceParameterBufferAV1*) ctx->lastSliceParams)[i];
-
-        //copy just the slice we're looking at
-        appendBuffer(&ctx->bitstreamBuffer, PTROFF(buf->ptr, sliceParams->slice_data_offset), sliceParams->slice_data_size);
-
-        //now append the offset and size of the slice we just copied
-        appendBuffer(&ctx->sliceOffsets, &offset, sizeof(offset));
-        offset += sliceParams->slice_data_size;
-        appendBuffer(&ctx->sliceOffsets, &offset, sizeof(offset));
-    }
-
+    // Hand NVDEC the entire tile-group buffer as the bitstream; tile offsets above index into it.
+    appendBuffer(&ctx->bitstreamBuffer, buf->ptr, buf->size);
     picParams->nBitstreamDataLen = ctx->bitstreamBuffer.size;
 }
 
