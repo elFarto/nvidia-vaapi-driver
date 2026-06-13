@@ -1,6 +1,6 @@
 # nvidia-vaapi-driver
 
-This is a VA-API implementation that uses NVDEC for decode and includes experimental NVENC slice encode support (H.264/HEVC/AV1). This implementation is specifically designed to be used by Firefox for accelerated decode of web content, and may not operate correctly in other applications.
+This is a VA-API implementation that uses NVDEC for decode and includes experimental NVENC slice encode support (H.264/HEVC/AV1). This implementation is primarily designed to be used by Firefox for accelerated decode of web content. Chrome support requires an external hotpatch runtime; see the [Chrome](#chrome) section.
 
 # Table of contents
 
@@ -224,7 +224,29 @@ If you're using the Snap version of Firefox, it will be unable to access the hos
 
 ## Chrome
 
-Chrome is currently unsupported, and will not function.
+Stock Chrome does not use this driver on NVIDIA through the normal upstream
+Chrome path. For Chrome testing, use
+[`ntoskrnl7/chrome-vaapi-hotpatch`](https://github.com/ntoskrnl7/chrome-vaapi-hotpatch).
+
+That project runs copied or injected Chrome runtime paths without overwriting
+the system Chrome binary. With this driver's experimental `nvenc` branch, the
+hotpatch runtime can route official Google Chrome through VA-API paths for
+WebCodecs H.264 encode, H.265/HEVC encode, and HEVC decode verification.
+
+For NVIDIA, build and install this branch first, or point Chrome at the build
+directory:
+
+```bash
+LIBVA_DRIVERS_PATH=/path/to/nvidia-vaapi-driver/build \
+LIBVA_DRIVER_NAME=nvidia \
+CHROME_H265_VAAPI_DRIVER=nvidia \
+  /path/to/chrome-vaapi-hotpatch/run-h264-h265-vaapi.sh
+```
+
+For H.264-only encode testing, use the hotpatch project's
+`run-h264-vaapi.sh`. Use `vainfo` with the same `LIBVA_DRIVER_NAME` and
+`LIBVA_DRIVERS_PATH` environment to confirm the decode and encode entrypoints
+advertised by this driver on the target machine.
 
 ## MPV
 
