@@ -19,6 +19,7 @@
 #include <ctrl/ctrl2080/ctrl2080fb.h>
 
 #include "../vabackend.h"
+#include "../backend-common.h"
 
 #if !defined(_IOC_READ) && defined(IOC_OUT)
 #define _IOC_READ IOC_OUT
@@ -212,7 +213,7 @@ static bool nv_get_versions(const int fd, char **versionString) {
         if (procFd > 0) {
             char buf[257];
             ssize_t readBytes = read(procFd, buf, 256);
-            close(procFd);
+            backendCloseFd(procFd, "nv_driver_probe_proc_fd");
 
             //The first line should look something like this. We just need to extract the version, which seems to be surrounded by 2 spaces
             //NVRM version: NVIDIA UNIX x86_64 Kernel Module  560.31.02  Tue Jul 30 21:02:43 UTC 2024
@@ -382,7 +383,7 @@ bool init_nvdriver(NVDriverContext *context, const int drmFd) {
     free(ver);
 
     if (!get_device_info(drmFd, context)) {
-        return false;
+        goto err;
     }
 
     LOG("Got dev info: %x %x %x %x", context->gpu_id, context->sector_layout, context->page_kind_generation, context->generic_page_kind)
@@ -452,10 +453,10 @@ err:
 
     LOG("Got error initing")
     if (nvctlFd != -1) {
-        close(nvctlFd);
+        backendCloseFd(nvctlFd, "nv_driver_context_create_nvctl_fail");
     }
     if (nv0Fd != -1) {
-        close(nv0Fd);
+        backendCloseFd(nv0Fd, "nv_driver_context_create_nv0_fail");
     }
     return false;
 }
@@ -466,13 +467,13 @@ bool free_nvdriver(NVDriverContext *context) {
     nv_free_object(context->nvctlFd, context->clientObject, context->clientObject);
 
     if (context->nvctlFd > 0) {
-        close(context->nvctlFd);
+        backendCloseFd(context->nvctlFd, "nv_driver_context_destroy_nvctl");
     }
     if (context->drmFd > 0) {
-        close(context->drmFd);
+        backendCloseFd(context->drmFd, "nv_driver_context_destroy_drm");
     }
     if (context->nv0Fd > 0) {
-        close(context->nv0Fd);
+        backendCloseFd(context->nv0Fd, "nv_driver_context_destroy_nv0");
     }
 
     memset(context, 0, sizeof(NVDriverContext));
@@ -558,7 +559,7 @@ bool alloc_memory(const NVDriverContext *context, const uint32_t size, int *fd) 
  err:
     LOG("error")
     if (nvctlFd2 > 0) {
-        close(nvctlFd2);
+        backendCloseFd(nvctlFd2, "alloc_memory_fail_nvctl");
     }
 
     ret = nv_free_object(context->nvctlFd, context->clientObject, bufferObject);
@@ -594,19 +595,20 @@ bool alloc_memory(const NVDriverContext *context, const uint32_t size, int *fd) 
      uint32_t size = imageSizeInBytes;
 
      //this gets us some memory, and the fd to import into cuda
-     int memFd = -1;
-     bool ret = alloc_memory(context, size, &memFd);
-     if (!ret) {
-         LOG("alloc_memory failed");
-         return false;
-     }
+    int memFd = -1;
+    int memFd2 = -1;
+    bool ret = alloc_memory(context, size, &memFd);
+    if (!ret) {
+        LOG("alloc_memory failed");
+        goto err;
+    }
 
      //now export the dma-buf
      uint32_t pitchInBlocks = widthInBytes / (gobWidthInBytes << log2GobsPerBlockX);
 
      //printf("got gobsPerBlock: %ux%u %u %u %u %d\n", width, height, log2GobsPerBlockX, log2GobsPerBlockY, log2GobsPerBlockZ, pitchInBlocks);
      //duplicate the fd so we don't invalidate it by importing it
-     int memFd2 = dup(memFd);
+     memFd2 = dup(memFd);
      if (memFd2 == -1) {
          LOG("dup failed");
          goto err;
@@ -664,24 +666,26 @@ bool alloc_memory(const NVDriverContext *context, const uint32_t size, int *fd) 
      image->nvFd = memFd;
      image->nvFd2 = memFd2; //not sure why we can't close this one, we shouldn't need it after importing the image
      image->drmFd = prime_handle.fd;
+     image->useDmaBufHandle = false;
      image->mods = DRM_FORMAT_MOD_NVIDIA_BLOCK_LINEAR_2D(0, context->sector_layout, context->page_kind_generation, context->generic_page_kind, log2GobsPerBlockY);
      image->offset = 0;
      image->pitch = widthInBytes;
      image->memorySize = imageSizeInBytes;
      image->fourcc = fourcc;
 
-     //LOG("created image: %dx%d %lx %d %x", width, height, image->mods, widthInBytes, imageSizeInBytes);
-
      return true;
 
  prime_err:
      if (prime_handle.fd > 0) {
-         close(prime_handle.fd);
+         backendCloseFd(prime_handle.fd, "alloc_image_fail_prime_fd");
      }
 
  err:
+     if (memFd2 > 0) {
+         backendCloseFd(memFd2, "alloc_image_fail_memfd2");
+     }
      if (memFd > 0) {
-         close(memFd);
+         backendCloseFd(memFd, "alloc_image_fail_memfd");
      }
 
      return false;
