@@ -12,10 +12,12 @@
 #include <va/va_drmcommon.h>
 #include <va/va_vpp.h>
 
+#include <stdio.h>
 #include <pthread.h>
 #include "list.h"
 #include "direct/nv-driver.h"
 #include "common.h"
+#include "stats.h"
 
 #define SURFACE_QUEUE_SIZE 16
 #define MAX_IMAGE_COUNT 64
@@ -142,22 +144,6 @@ typedef struct _BackingImage {
 
 struct _NVDriver;
 
-typedef enum {
-    NV_STAT_DECODER_CREATES,
-    NV_STAT_DECODE_PICTURES,
-    NV_STAT_RESOLVE_FRAMES,
-    NV_STAT_EXPORT_COPIES,
-    NV_STAT_EXPORT_HOST_COPIES,
-    NV_STAT_EXPORT_DESCRIPTORS,
-    NV_STAT_EXPORT_DESCRIPTORS_SINGLE,
-    NV_STAT_EXPORT_DESCRIPTORS_MULTI,
-    NV_STAT_VIDEOPROC_REQUESTS,
-    NV_STAT_VIDEOPROC_CUDA,
-    NV_STAT_VIDEOPROC_CUDA_FAILURES,
-    NV_STAT_VIDEOPROC_CPU_FALLBACK,
-    NV_STAT_COUNT
-} NVStatCounter;
-
 typedef struct {
     const char *name;
     bool (*initExporter)(struct _NVDriver *drv);
@@ -279,8 +265,9 @@ typedef void (*HandlerFunc)(NVContext*, NVBuffer* , CUVIDPICPARAMS*);
 typedef cudaVideoCodec (*ComputeCudaCodec)(VAProfile);
 typedef void (*CodecBeginPictureFunc)(NVContext*);
 
-void nvStatsIncrement(NVDriver *drv, NVStatCounter counter);
-void nvStatsLog(NVDriver *drv, const char *reason);
+// Internals exposed for the stats subsystem (src/stats.c).
+pid_t nv_gettid(void);
+FILE *nvStatsOutput(void);
 
 //padding/alignment is very important to this structure as it's placed in it's own section
 //in the executable.

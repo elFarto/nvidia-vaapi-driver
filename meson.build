@@ -60,6 +60,7 @@ sources = [
     'src/kernels.c',
     'src/mpeg2.c',
     'src/mpeg4.c',
+    'src/stats.c',
     'src/vabackend.c',
     'src/vc1.c',
     'src/vp8.c',
