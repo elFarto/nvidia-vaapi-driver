@@ -658,44 +658,40 @@ uint32_t calculate_unified_image_layout(const NVDriverContext *context, NVDriver
      return offset;
 }
 
-bool alloc_buffer(NVDriverContext *context, const uint32_t totalSize, const NVDriverImage images[], int *nvFd, int *nvFd2, int *drmFd) {
-     int memFd = -1;
-     bool ret = alloc_memory(context, totalSize, &memFd);
-     if (!ret) {
-         LOG("alloc_memory failed");
-         return false;
-     }
-
+// Imports an already-allocated block-linear buffer (memFd) into NVKMS and exports
+// it as a PRIME dma-buf. On success a kept-alive dup of memFd is returned in *nvFd2
+// (needed for the later CUDA import) along with the exported dma-buf in *drmFd; the
+// caller retains ownership of memFd. On failure every fd allocated here is released
+// and memFd is left untouched for the caller to close.
+static bool import_and_export_buffer(const NVDriverContext *context, const int memFd, const uint32_t importSize,
+                                     const uint32_t pitchInBlocks, const uint32_t log2GobsPerBlockX,
+                                     const uint32_t log2GobsPerBlockY, const uint32_t log2GobsPerBlockZ,
+                                     int *nvFd2, int *drmFd) {
      int memFd2 = dup(memFd);
      if (memFd2 == -1) {
          LOG("dup failed");
-         goto err;
+         return false;
      }
 
-     const uint32_t pitchInBlocks = images[0].pitch / (GOB_WIDTH_IN_BYTES << images[0].log2GobsPerBlockX);
      struct NvKmsKapiPrivImportMemoryParams nvkmsParams = {
          .memFd = memFd2,
          .surfaceParams = {
              .layout = NvKmsSurfaceMemoryLayoutBlockLinear,
              .blockLinear = {
-                 .genericMemory = 0,
+                 .genericMemory = context->useSystemMemory ? 1 : 0,
                  .pitchInBlocks = pitchInBlocks,
-                 .log2GobsPerBlock.x = images[0].log2GobsPerBlockX,
-                 .log2GobsPerBlock.y = images[0].log2GobsPerBlockY,
-                 .log2GobsPerBlock.z = images[0].log2GobsPerBlockZ,
+                 .log2GobsPerBlock.x = log2GobsPerBlockX,
+                 .log2GobsPerBlock.y = log2GobsPerBlockY,
+                 .log2GobsPerBlock.z = log2GobsPerBlockZ,
              }
          }
      };
 
-     const uint32_t imageSizeInBytes = ROUND_UP(totalSize, 65536);
      struct drm_nvidia_gem_import_nvkms_memory_params params = {
-         .mem_size = imageSizeInBytes,
+         .mem_size = importSize,
          .nvkms_params_ptr = (uint64_t)(uintptr_t)&nvkmsParams,
          .nvkms_params_size = context->driverMajorVersion == 470 ? 0x20 : sizeof(nvkmsParams) //needs to be 0x20 in the 470 series driver
      };
-
-     LOG_DEBUG("alloc_buffer: totalSize=%u importSize=%u pitchInBlocks=%u log2GobsPerBlockY=%u",
-               totalSize, imageSizeInBytes, pitchInBlocks, images[0].log2GobsPerBlockY);
 
      int drmret = ioctl(context->drmFd, DRM_IOCTL_NVIDIA_GEM_IMPORT_NVKMS_MEMORY, &params);
      if (drmret != 0) {
@@ -722,7 +718,6 @@ bool alloc_buffer(NVDriverContext *context, const uint32_t totalSize, const NVDr
          goto prime_err;
      }
 
-     *nvFd = memFd;
      *nvFd2 = memFd2;
      *drmFd = prime_handle.fd;
      return true;
@@ -747,11 +742,36 @@ err:
      if (memFd2 >= 0) {
          close(memFd2);
      }
-     if (memFd >= 0) {
-         close(memFd);
-     }
 
      return false;
+}
+
+bool alloc_buffer(NVDriverContext *context, const uint32_t totalSize, const NVDriverImage images[], int *nvFd, int *nvFd2, int *drmFd) {
+     int memFd = -1;
+     bool ret = alloc_memory(context, totalSize, &memFd);
+     if (!ret) {
+         LOG("alloc_memory failed");
+         return false;
+     }
+
+     const uint32_t pitchInBlocks = images[0].pitch / (GOB_WIDTH_IN_BYTES << images[0].log2GobsPerBlockX);
+     const uint32_t imageSizeInBytes = ROUND_UP(totalSize, 65536);
+
+     LOG_DEBUG("alloc_buffer: totalSize=%u importSize=%u pitchInBlocks=%u log2GobsPerBlockY=%u",
+               totalSize, imageSizeInBytes, pitchInBlocks, images[0].log2GobsPerBlockY);
+
+     int memFd2 = -1, primeFd = -1;
+     if (!import_and_export_buffer(context, memFd, imageSizeInBytes, pitchInBlocks,
+                                   images[0].log2GobsPerBlockX, images[0].log2GobsPerBlockY,
+                                   images[0].log2GobsPerBlockZ, &memFd2, &primeFd)) {
+         close(memFd);
+         return false;
+     }
+
+     *nvFd = memFd;
+     *nvFd2 = memFd2;
+     *drmFd = primeFd;
+     return true;
 }
 
  bool alloc_image(NVDriverContext *context, uint32_t width, uint32_t height, uint8_t channels, uint8_t bitsPerChannel, uint32_t fourcc, NVDriverImage *image) {
@@ -786,66 +806,22 @@ err:
      //now export the dma-buf
      uint32_t pitchInBlocks = widthInBytes / gobWidthInBytes;
 
-     //printf("got gobsPerBlock: %ux%u %u %u %u %d\n", width, height, log2GobsPerBlockX, log2GobsPerBlockY, log2GobsPerBlockZ, pitchInBlocks);
-     //duplicate the fd so we don't invalidate it by importing it
-     int memFd2 = dup(memFd);
-     if (memFd2 == -1) {
-         LOG("dup failed");
-         goto err;
-     }
-
-     struct NvKmsKapiPrivImportMemoryParams nvkmsParams = {
-         .memFd = memFd2,
-         .surfaceParams = {
-             .layout = NvKmsSurfaceMemoryLayoutBlockLinear,
-             .blockLinear = {
-                 .genericMemory = context->useSystemMemory ? 1 : 0,
-                 .pitchInBlocks = pitchInBlocks,
-                 .log2GobsPerBlock.x = log2GobsPerBlockX,
-                 .log2GobsPerBlock.y = log2GobsPerBlockY,
-                 .log2GobsPerBlock.z = log2GobsPerBlockZ,
-             }
-         }
-     };
-
      //TODO find the proper page size
      imageSizeInBytes = ROUND_UP(imageSizeInBytes, 65536);
 
-     struct drm_nvidia_gem_import_nvkms_memory_params params = {
-         .mem_size = imageSizeInBytes,
-         .nvkms_params_ptr = (uint64_t)(uintptr_t)&nvkmsParams,
-         .nvkms_params_size = context->driverMajorVersion == 470 ? 0x20 : sizeof(nvkmsParams) //needs to be 0x20 in the 470 series driver
-     };
-     int drmret = ioctl(context->drmFd, DRM_IOCTL_NVIDIA_GEM_IMPORT_NVKMS_MEMORY, &params);
-     if (drmret != 0) {
-         LOG("DRM_IOCTL_NVIDIA_GEM_IMPORT_NVKMS_MEMORY failed: %d %d", drmret, errno);
-         goto err;
-     }
-
-     //export dma-buf
-     struct drm_prime_handle prime_handle = {
-         .handle = params.handle
-     };
-     drmret = ioctl(context->drmFd, DRM_IOCTL_PRIME_HANDLE_TO_FD, &prime_handle);
-     if (drmret != 0) {
-         LOG("DRM_IOCTL_PRIME_HANDLE_TO_FD failed: %d %d", drmret, errno);
-         goto err;
-     }
-
-     struct drm_gem_close gem_close = {
-         .handle = params.handle
-     };
-     drmret = ioctl(context->drmFd, DRM_IOCTL_GEM_CLOSE, &gem_close);
-     if (drmret != 0) {
-         LOG("DRM_IOCTL_GEM_CLOSE failed: %d %d", drmret, errno);
-         goto prime_err;
+     int memFd2 = -1, primeFd = -1;
+     if (!import_and_export_buffer(context, memFd, imageSizeInBytes, pitchInBlocks,
+                                   log2GobsPerBlockX, log2GobsPerBlockY, log2GobsPerBlockZ,
+                                   &memFd2, &primeFd)) {
+         close(memFd);
+         return false;
      }
 
      image->width = width;
      image->height = height;
      image->nvFd = memFd;
      image->nvFd2 = memFd2; //not sure why we can't close this one, we shouldn't need it after importing the image
-     image->drmFd = prime_handle.fd;
+     image->drmFd = primeFd;
      image->mods = DRM_FORMAT_MOD_NVIDIA_BLOCK_LINEAR_2D(0, context->sector_layout, context->page_kind_generation, context->generic_page_kind, log2GobsPerBlockY);
      image->offset = 0;
      image->pitch = widthInBytes;
@@ -858,16 +834,4 @@ err:
      //LOG("created image: %dx%d %lx %d %x", width, height, image->mods, widthInBytes, imageSizeInBytes);
 
      return true;
-
- prime_err:
-     if (prime_handle.fd > 0) {
-         close(prime_handle.fd);
-     }
-
- err:
-     if (memFd > 0) {
-         close(memFd);
-     }
-
-     return false;
  }
