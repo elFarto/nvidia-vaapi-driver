@@ -495,7 +495,13 @@ fail:
 }
 
 static BackingImage *direct_allocateBackingImage(NVDriver *drv, NVSurface *surface) {
-    if (drv->descriptorMode == DESCRIPTOR_MODE_SINGLE && !isRgbSurfaceFourcc((uint32_t) surface->fourcc)) {
+    // Multi-plane YUV surfaces must be exported as a single buffer holding every
+    // plane at an offset, so all planes share one DRM modifier. Chromium's
+    // vaapi_wrapper enforces one-modifier-per-buffer, so a per-plane export (a
+    // distinct modifier per fd) trips its CHECK and aborts the GPU process.
+    // Single-plane / packed surfaces (e.g. RGB) have nothing to unify and use the
+    // straightforward per-plane allocator below.
+    if (!isRgbSurfaceFourcc((uint32_t) surface->fourcc)) {
         return direct_allocateBackingImage_single(drv, surface);
     }
 

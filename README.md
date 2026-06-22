@@ -170,7 +170,7 @@ LIBVA_DRIVER_NAME=nvidia google-chrome \
 
 On Wayland, also try `--ozone-platform=wayland` or `--ozone-platform-hint=auto`.
 
-`NVD_DESCRIPTOR_MODE` defaults to Chromium-compatible `single` mode in this branch. Use `NVD_DESCRIPTOR_MODE=multi` only when testing traditional per-plane export behavior.
+Multi-plane YUV surfaces are always exported as a single buffer with all planes sharing one DRM modifier, which is what Chromium's `vaapi_wrapper` requires; no configuration is needed.
 
 ## MPV
 

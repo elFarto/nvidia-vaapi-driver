@@ -47,11 +47,6 @@ typedef struct {
     uint32_t log2GobsPerBlockZ;
 } NVDriverImage;
 
-typedef enum {
-    DESCRIPTOR_MODE_MULTI,
-    DESCRIPTOR_MODE_SINGLE
-} DescriptorMode;
-
 bool init_nvdriver(NVDriverContext *context, int drmFd);
 bool free_nvdriver(NVDriverContext *context);
 bool get_device_uuid(const NVDriverContext *context, uint8_t uuid[16]);

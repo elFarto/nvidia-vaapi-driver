@@ -3996,19 +3996,6 @@ VAStatus __vaDriverInit_1_0(VADriverContextP ctx) {
     drv->maxDetachedBackingImages =
         (uint32_t) parseEnvU64("NVD_MAX_DETACHED_BACKING_IMAGES", DEFAULT_MAX_DETACHED_BACKING_IMAGES);
 
-    const char *modeEnv = getenv("NVD_DESCRIPTOR_MODE");
-    if (modeEnv != NULL && strcmp(modeEnv, "single") == 0) {
-        drv->descriptorMode = DESCRIPTOR_MODE_SINGLE;
-    } else if (modeEnv != NULL && strcmp(modeEnv, "multi") == 0) {
-        drv->descriptorMode = DESCRIPTOR_MODE_MULTI;
-    } else if (modeEnv != NULL && strcmp(modeEnv, "auto") != 0) {
-        LOG("Ignoring invalid NVD_DESCRIPTOR_MODE=%s", modeEnv);
-        drv->descriptorMode = DESCRIPTOR_MODE_SINGLE;
-    } else {
-        drv->descriptorMode = DESCRIPTOR_MODE_SINGLE;
-    }
-    LOG("Descriptor mode: %s", drv->descriptorMode == DESCRIPTOR_MODE_SINGLE ? "single" : "multi")
-
     const char *statsEnv = getenv("NVD_STATS");
     if (statsEnv != NULL && strcmp(statsEnv, "0") != 0) {
         drv->statsEnabled = true;

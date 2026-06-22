@@ -198,7 +198,6 @@ typedef struct _NVDriver
     int                     numFramesPresented;
     int                     profileCount;
     VAProfile               profiles[MAX_PROFILES];
-    DescriptorMode          descriptorMode;
     CUmodule                videoProcModule;
     CUfunction              nv12ToArgbKernel;
     CUfunction              p010ToArgbKernel;
