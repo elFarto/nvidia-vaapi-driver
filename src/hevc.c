@@ -175,17 +175,15 @@ static void copyHEVCPicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *p
     ppc->num_tile_columns_minus1 = buf->num_tile_columns_minus1;
     ppc->num_tile_rows_minus1 = buf->num_tile_rows_minus1;
 
-    if (ppc->tiles_enabled_flag) {
-        //the uniform_spacing_flag isn't directly exposed in VA-API, so look through the columns and rows
-        //and see if they're all the same, this probably isn't correct
-        for (int i = 0; i < 19; i++) {
+    if (ppc->tiles_enabled_flag && ppc->num_tile_columns_minus1 > 0) {
+        for (int i = 0; i < ppc->num_tile_columns_minus1; i++) {
             if (buf->column_width_minus1[i] != buf->column_width_minus1[i+1]) {
                 ppc->uniform_spacing_flag = 0;
                 break;
             }
         }
         if (ppc->uniform_spacing_flag) {
-            for (int i = 0; i < 21; i++) {
+            for (int i = 0; i < ppc->num_tile_rows_minus1; i++) {
                 if (buf->row_height_minus1[i] != buf->row_height_minus1[i+1]) {
                     ppc->uniform_spacing_flag = 0;
                     break;
@@ -202,8 +200,8 @@ static void copyHEVCPicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *p
 //    ppc->chroma_qp_offset_list_len_minus1 = buf->pic_fields.bits.tiles_enabled_flag;
 
     ppc->NumBitsForShortTermRPSInSlice = buf->st_rps_bits;
-    ppc->NumDeltaPocsOfRefRpsIdx = 0;//TODO
-    ppc->NumPocTotalCurr = 0; //this looks to be the amount of reference images...
+    ppc->NumDeltaPocsOfRefRpsIdx = 0; // computed after reference picture loop
+    ppc->NumPocTotalCurr = 0; // computed after reference picture loop
     ppc->NumPocStCurrBefore = 0; //these three are set properly below
     ppc->NumPocStCurrAfter = 0;
     ppc->NumPocLtCurr = 0;
@@ -228,10 +226,6 @@ static void copyHEVCPicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *p
         ppc->PicOrderCntVal[i] = pic[i].pic_order_cnt;
         ppc->IsLongTerm[i]     = i != 0 && (pic[i].flags & VA_PICTURE_HEVC_LONG_TERM_REFERENCE) != 0;
 
-        if (i != 0 && ppc->RefPicIdx[i] != -1) {
-            ppc->NumPocTotalCurr++;
-        }
-
         if (pic[i].flags & VA_PICTURE_HEVC_RPS_ST_CURR_BEFORE) {
             ppc->RefPicSetStCurrBefore[ppc->NumPocStCurrBefore++] = i;
         } else if (pic[i].flags & VA_PICTURE_HEVC_RPS_ST_CURR_AFTER) {
@@ -240,6 +234,15 @@ static void copyHEVCPicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *p
             ppc->RefPicSetLtCurr[ppc->NumPocLtCurr++] = i;
         }
     }
+
+    ppc->NumPocTotalCurr = ppc->NumPocStCurrBefore + ppc->NumPocStCurrAfter + ppc->NumPocLtCurr;
+
+    int numDeltaPocs = 0;
+    for (int i = 1; i < 16; i++) {
+        if (ppc->RefPicIdx[i] != -1 && !ppc->IsLongTerm[i])
+            numDeltaPocs++;
+    }
+    ppc->NumDeltaPocsOfRefRpsIdx = numDeltaPocs;
 
     //This is required to make sure that the RefPicSetStCurrBefore and RefPicSetStCurrAfter arrays are in the correct order
     //VA-API doesn't pass this is, only marking each picture if it's in the arrays.
