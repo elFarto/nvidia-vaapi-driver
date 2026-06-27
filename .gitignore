@@ -11,3 +11,4 @@ va-api-nvidia.files
 va-api-nvidia.includes
 meson.build.user
 .idea
+pr_summary.md

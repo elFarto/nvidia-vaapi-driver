@@ -2,6 +2,7 @@
 #define VABACKEND_H
 
 #include <ffnvcodec/dynlink_loader.h>
+#include <ffnvcodec/nvEncodeAPI.h>
 #include <va/va_backend.h>
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
@@ -69,6 +70,16 @@ typedef struct
     pthread_mutex_t         mutex;
     pthread_cond_t          cond;
     bool                    decodeFailed;
+    /* Host-memory pixel buffer for encode-only IPC path (no CUDA) */
+    void                   *hostPixelData;
+    uint32_t                hostPixelSize;
+    bool                    hostPixelIsShm; /* true if hostPixelData points to SHM (don't free) */
+    /* Imported DMA-BUF for IPC encode (fd from Steam's GPU capture) */
+    int                     importedDmaBufFd;
+    uint32_t                importedPitches[4];
+    uint32_t                importedOffsets[4];
+    uint32_t                importedNumPlanes;
+    uint32_t                importedDataSize;
 } NVSurface;
 
 typedef enum
@@ -110,6 +121,9 @@ typedef struct _BackingImage {
     //direct backend only
     NVCudaImage cudaImages[3];
     NVFormat    format;
+    /* NVIDIA opaque fds for CUDA import (IPC encode path) */
+    int         nvFds[4];
+    uint32_t    memorySizes[4];
 } BackingImage;
 
 struct _NVDriver;
@@ -129,6 +143,7 @@ typedef struct _NVDriver
 {
     CudaFunctions           *cu;
     CuvidFunctions          *cv;
+    NvencFunctions          *nv;
     CUcontext               cudaContext;
     CUvideoctxlock          vidLock;
     Array/*<Object>*/       objects;
@@ -154,6 +169,8 @@ typedef struct _NVDriver
     int                     numFramesPresented;
     int                     profileCount;
     VAProfile               profiles[MAX_PROFILES];
+    bool                    nvencAvailable;
+    bool                    cudaAvailable;  /* false when 32-bit CUDA fails */
 } NVDriver;
 
 struct _NVCodec;
@@ -185,6 +202,8 @@ typedef struct _NVContext
     pthread_mutex_t     surfaceCreationMutex;
     int                 surfaceCount;
     bool                firstKeyframeValid;
+    bool                isEncode;
+    void               *encodeData; /* NVENCContext* for encode contexts */
 } NVContext;
 
 typedef struct
@@ -195,6 +214,7 @@ typedef struct
     cudaVideoChromaFormat   chromaFormat;
     int                     bitDepth;
     cudaVideoCodec          cudaCodec;
+    bool                    isEncode;
 } NVConfig;
 
 typedef void (*HandlerFunc)(NVContext*, NVBuffer* , CUVIDPICPARAMS*);

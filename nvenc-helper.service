@@ -1,0 +1,13 @@
+[Unit]
+Description=NVENC encode helper for nvidia-vaapi-driver
+Documentation=https://github.com/efortin/nvidia-vaapi-driver
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/libexec/nvenc-helper
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target
