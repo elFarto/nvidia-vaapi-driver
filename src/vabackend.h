@@ -5,8 +5,12 @@
 #include <va/va_backend.h>
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
+#include <sys/types.h>
+#include <sys/stat.h>
 #include <stdbool.h>
+#include <stdatomic.h>
 #include <va/va_drmcommon.h>
+#include <va/va_vpp.h>
 
 #include <pthread.h>
 #include "list.h"
@@ -64,8 +68,11 @@ typedef struct
     int                     topFieldFirst;
     int                     secondField;
     int                     order_hint; //needed for AV1
+    VAProcColorStandardType colorStandard;
+    bool                    colorRangeFull;
     struct _BackingImage    *backingImage;
     int                     resolving;
+    int                     fourcc;
     pthread_mutex_t         mutex;
     pthread_cond_t          cond;
     bool                    decodeFailed;
@@ -79,7 +86,8 @@ typedef enum
     NV_FORMAT_P012,
     NV_FORMAT_P016,
     NV_FORMAT_444P,
-    NV_FORMAT_Q416
+    NV_FORMAT_Q416,
+    NV_FORMAT_ARGB
 } NVFormat;
 
 typedef struct
@@ -103,6 +111,8 @@ typedef struct _BackingImage {
     uint32_t    height;
     int         fourcc;
     int         fds[4];
+    dev_t       st_dev[4];
+    ino_t       st_ino[4];
     int         offsets[4];
     int         strides[4];
     uint64_t    mods[4];
@@ -110,9 +120,42 @@ typedef struct _BackingImage {
     //direct backend only
     NVCudaImage cudaImages[3];
     NVFormat    format;
+    VAProcColorStandardType colorStandard;
+    bool        colorRangeFull;
+    uint32_t    totalSize;
+    CUexternalMemory extMem;
+    bool        isSingleBuffer;
+    bool        isExternalBuffer;
+    bool        borrowedCudaResources;
+    struct _BackingImage *borrowedBackingImage;
+    atomic_uint borrowCount;
+    bool        syncInitialized;
+    bool        resolving;
+    pthread_mutex_t mutex;
+    pthread_cond_t  cond;
+    void        *externalMapping;
+    uint32_t    externalMappingSize;
+    CUdeviceptr externalDevicePtr;
+    uint32_t    externalDeviceSize;
 } BackingImage;
 
 struct _NVDriver;
+
+typedef enum {
+    NV_STAT_DECODER_CREATES,
+    NV_STAT_DECODE_PICTURES,
+    NV_STAT_RESOLVE_FRAMES,
+    NV_STAT_EXPORT_COPIES,
+    NV_STAT_EXPORT_HOST_COPIES,
+    NV_STAT_EXPORT_DESCRIPTORS,
+    NV_STAT_EXPORT_DESCRIPTORS_SINGLE,
+    NV_STAT_EXPORT_DESCRIPTORS_MULTI,
+    NV_STAT_VIDEOPROC_REQUESTS,
+    NV_STAT_VIDEOPROC_CUDA,
+    NV_STAT_VIDEOPROC_CUDA_FAILURES,
+    NV_STAT_VIDEOPROC_CPU_FALLBACK,
+    NV_STAT_COUNT
+} NVStatCounter;
 
 typedef struct {
     const char *name;
@@ -154,6 +197,28 @@ typedef struct _NVDriver
     int                     numFramesPresented;
     int                     profileCount;
     VAProfile               profiles[MAX_PROFILES];
+    DescriptorMode          descriptorMode;
+    CUmodule                videoProcModule;
+    CUfunction              nv12ToArgbKernel;
+    CUfunction              p010ToArgbKernel;
+    CUmodule                videoProcModuleP010;
+    bool                    videoProcKernelP010Failed;
+    bool                    videoProcKernelFailed;
+    CUdeviceptr             videoProcYBuffer;
+    CUdeviceptr             videoProcUVBuffer;
+    CUdeviceptr             videoProcArgbBuffer;
+    size_t                  videoProcYBufferSize;
+    size_t                  videoProcUVBufferSize;
+    size_t                  videoProcArgbBufferSize;
+    void                    *cpuVideoProcYBuffer;
+    void                    *cpuVideoProcUVBuffer;
+    void                    *cpuVideoProcArgbBuffer;
+    size_t                  cpuVideoProcYBufferSize;
+    size_t                  cpuVideoProcUVBufferSize;
+    size_t                  cpuVideoProcArgbBufferSize;
+    bool                    statsEnabled;
+    uint64_t                statsLogInterval;
+    atomic_uint_fast64_t    stats[NV_STAT_COUNT];
 } NVDriver;
 
 struct _NVCodec;
@@ -167,13 +232,23 @@ typedef struct _NVContext
     uint32_t            height;
     CUvideodecoder      decoder;
     NVSurface           *renderTarget;
+    NVSurface           *displayTarget;
     void                *codecData;
     void                *lastSliceParams;
     unsigned int        lastSliceParamsCount;
     AppendableBuffer    bitstreamBuffer;
     AppendableBuffer    sliceOffsets;
+    bool                av1SequenceEnableRestoration;
+    uint32_t            av1TileOffsetsSeen;
+    uint32_t            av1TileMinOffset;
+    uint32_t            av1TileMaxEnd;
+    bool                av1BitstreamCompacted;
     CUVIDPICPARAMS      pPicParams;
     const struct _NVCodec *codec;
+    cudaVideoCodec      cudaCodec;
+    cudaVideoSurfaceFormat decoderSurfaceFormat;
+    cudaVideoChromaFormat decoderChromaFormat;
+    int                 decoderBitDepth;
     int                 currentPictureId;
     pthread_t           resolveThread;
     pthread_mutex_t     resolveMutex;
@@ -200,6 +275,9 @@ typedef struct
 typedef void (*HandlerFunc)(NVContext*, NVBuffer* , CUVIDPICPARAMS*);
 typedef cudaVideoCodec (*ComputeCudaCodec)(VAProfile);
 typedef void (*CodecBeginPictureFunc)(NVContext*);
+
+void nvStatsIncrement(NVDriver *drv, NVStatCounter counter);
+void nvStatsLog(NVDriver *drv, const char *reason);
 
 //padding/alignment is very important to this structure as it's placed in it's own section
 //in the executable.
@@ -229,12 +307,22 @@ extern const NVFormatInfo formatsInfo[];
 void appendBuffer(AppendableBuffer *ab, const void *buf, uint64_t size);
 int pictureIdxFromSurfaceId(NVDriver *ctx, VASurfaceID surf);
 NVSurface* nvSurfaceFromSurfaceId(NVDriver *drv, VASurfaceID surf);
+const char *nvColorStandardName(VAProcColorStandardType colorStandard);
+VAProcColorStandardType nvColorStandardFromMatrixCoefficients(uint8_t matrixCoefficients);
+void nvSurfaceResetColorMetadata(NVSurface *surface);
+void nvSurfaceSetColorMetadata(NVSurface *surface, VAProcColorStandardType colorStandard, bool colorRangeFull);
+void nvSurfaceCopyColorMetadata(NVSurface *dst, const NVSurface *src);
+void nvSurfaceCopyColorMetadataFromBackingImage(NVSurface *surface, const BackingImage *img);
+void nvBackingImageStoreSurfaceColorMetadata(BackingImage *img, const NVSurface *surface);
+void nvBackingImageCopyColorMetadata(BackingImage *dst, const BackingImage *src);
 bool checkCudaErrors(CUresult err, const char *file, const char *function, const int line);
 void logger(const char *filename, const char *function, int line, const char *msg, ...);
+bool nvdLogDebugEnabled(void);
 #define CHECK_CUDA_RESULT(err) checkCudaErrors(err, __FILE__, __func__, __LINE__)
 #define CHECK_CUDA_RESULT_RETURN(err, ret) if (checkCudaErrors(err, __FILE__, __func__, __LINE__)) { return ret; }
 #define cudaVideoCodec_NONE ((cudaVideoCodec) -1)
 #define LOG(...) logger(__FILE__, __func__, __LINE__, __VA_ARGS__);
+#define LOG_DEBUG(...) do { if (nvdLogDebugEnabled()) { logger(__FILE__, __func__, __LINE__, __VA_ARGS__); } } while (0)
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
 #define PTROFF(base, bytes) ((void *)((unsigned char *)(base) + (bytes)))
 #define DECLARE_CODEC(name) \

@@ -69,7 +69,28 @@ static void copyVP9PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *pi
 }
 
 static GstVp9Parser *parser;
-static void parseExtraInfo(void *buf, uint32_t size, CUVIDPICPARAMS *picParams) {
+
+static VAProcColorStandardType vp9ColorStandard(GstVp9ColorSpace colorSpace) {
+    switch (colorSpace) {
+    case GST_VP9_CS_BT_601:
+        return VAProcColorStandardBT601;
+    case GST_VP9_CS_BT_709:
+        return VAProcColorStandardBT709;
+    case GST_VP9_CS_SMPTE_170:
+        return VAProcColorStandardSMPTE170M;
+    case GST_VP9_CS_SMPTE_240:
+        return VAProcColorStandardSMPTE240M;
+    case GST_VP9_CS_BT_2020:
+        return VAProcColorStandardBT2020;
+    case GST_VP9_CS_UNKNOWN:
+    case GST_VP9_CS_RESERVED_2:
+    case GST_VP9_CS_SRGB:
+    default:
+        return VAProcColorStandardNone;
+    }
+}
+
+static void parseExtraInfo(NVContext *ctx, void *buf, uint32_t size, CUVIDPICPARAMS *picParams) {
     //TODO a bit of a hack as we don't have per decoder init/deinit functions atm
     if (parser == NULL) {
         parser = gst_vp9_parser_new ();
@@ -107,6 +128,12 @@ static void parseExtraInfo(void *buf, uint32_t size, CUVIDPICPARAMS *picParams) 
         picParams->CodecSpecific.vp9.qpChAc = hdr.quant_indices.uv_ac_delta;
 
         picParams->CodecSpecific.vp9.colorSpace = parser->color_space;
+        VAProcColorStandardType colorStandard = vp9ColorStandard((GstVp9ColorSpace) parser->color_space);
+        bool colorRangeFull = parser->color_range == GST_VP9_CR_FULL;
+        nvSurfaceSetColorMetadata(ctx->renderTarget, colorStandard, colorRangeFull);
+        LOG_DEBUG("VP9 color metadata: color_space=%u color_standard=%s(%d) full_range=%d render=%p",
+            parser->color_space, nvColorStandardName(colorStandard), colorStandard, colorRangeFull,
+            ctx->renderTarget);
     }
 
     //gst_vp9_parser_free(parser);
@@ -132,7 +159,7 @@ static void copyVP9SliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picP
         appendBuffer(&ctx->bitstreamBuffer, PTROFF(buf->ptr, sliceParams->slice_data_offset), sliceParams->slice_data_size);
 
         //TODO this might not be the best place to call as we may not have a complete packet yet...
-        parseExtraInfo(PTROFF(buf->ptr, sliceParams->slice_data_offset), sliceParams->slice_data_size, picParams);
+        parseExtraInfo(ctx, PTROFF(buf->ptr, sliceParams->slice_data_offset), sliceParams->slice_data_size, picParams);
         picParams->nBitstreamDataLen += sliceParams->slice_data_size;
     }
 }
