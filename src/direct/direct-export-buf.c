@@ -666,19 +666,18 @@ static void destroyBackingImage(NVDriver *drv, BackingImage *img) {
     free(img);
 }
 
-static bool pruneDetachedBackingImages(NVDriver *drv) {
-    bool pruned = false;
+// Reclaim the single oldest detached, unborrowed backing image (lowest
+// detachedSerial). Returns true if one was destroyed. Used to relieve
+// allocation pressure oldest-first, so the most-recently-detached images --
+// whose exported dma-bufs are the most likely to still be in the client's
+// display pipeline, or about to be re-imported across a codec/format switch --
+// are freed last rather than all at once.
+static bool pruneOldestReclaimableDetachedBackingImage(NVDriver *drv) {
+    uint64_t bytes = 0;
+    uint32_t count = 0;
 
     pthread_mutex_lock(&drv->imagesMutex);
-
-    ARRAY_FOR_EACH_REV(BackingImage*, it, &drv->images)
-        if (it->surface == NULL && atomic_load(&it->borrowCount) == 0) {
-            destroyBackingImage(drv, it);
-            remove_element_at(&drv->images, it_idx);
-            pruned = true;
-        }
-    END_FOR_EACH
-
+    const bool pruned = pruneOldestDetachedBackingImageLocked(drv, &bytes, &count);
     pthread_mutex_unlock(&drv->imagesMutex);
 
     return pruned;
@@ -795,9 +794,22 @@ static bool direct_realiseSurface(NVDriver *drv, NVSurface *surface) {
         //try to find a free surface
         BackingImage *img = direct_allocateBackingImage(drv, surface);
         if (img == NULL) {
-            if (pruneDetachedBackingImages(drv)) {
-                LOG("Pruned detached BackingImages after allocation failure")
+            // Allocation failed, typically under VRAM pressure. Reclaim detached
+            // backing images oldest-first, retrying the allocation after each
+            // one, instead of destroying the whole detached cache at once. The
+            // most-recently-detached images are the most likely to still have
+            // their exported dma-buf in flight in the client (or about to be
+            // re-imported across a codec/format switch); freeing those out from
+            // under the client corrupts the displayed frame. Oldest-first with a
+            // retry between each prune frees only what this allocation needs and
+            // keeps the recent frames alive.
+            uint32_t reclaimed = 0;
+            while (img == NULL && pruneOldestReclaimableDetachedBackingImage(drv)) {
+                reclaimed++;
                 img = direct_allocateBackingImage(drv, surface);
+            }
+            if (reclaimed > 0 && img != NULL) {
+                LOG("Reclaimed %u detached BackingImage(s) oldest-first after allocation failure", reclaimed)
             }
             if (img == NULL) {
                 LOG("Unable to realise surface: %p (%d)", surface, surface->pictureIdx)
