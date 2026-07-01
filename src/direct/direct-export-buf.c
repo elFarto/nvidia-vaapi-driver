@@ -439,10 +439,21 @@ static BackingImage *direct_allocateBackingImage_single(NVDriver *drv, NVSurface
     memFd2 = -1;
 
     for (uint32_t i = 0; i < fmtInfo->numPlanes; i++) {
+        // The single buffer is exported under one DRM modifier that carries a
+        // single block height (log2GobsPerBlockY, the max across all planes).
+        // CUDA, however, derives a plane's block-linear layout from the array
+        // height it is handed, so a shorter plane (e.g. NV12 chroma when the
+        // coded height is ~86-170px, as at 144p) would be tiled with a smaller
+        // block than the modifier advertises. The importer then detiles that
+        // plane with the wrong block height and the chroma turns green. Create
+        // the array at the block-aligned height (memorySize / pitch) so CUDA
+        // lays every plane out with the same block height the modifier reports.
+        const uint32_t alignedHeight = driverImages[i].pitch != 0 ?
+            driverImages[i].memorySize / driverImages[i].pitch : driverImages[i].height;
         CUDA_EXTERNAL_MEMORY_MIPMAPPED_ARRAY_DESC mipmapArrayDesc = {
             .arrayDesc = {
                 .Width = driverImages[i].width,
-                .Height = driverImages[i].height,
+                .Height = alignedHeight,
                 .Depth = 0,
                 .Format = fmtInfo->bppc == 1 ? CU_AD_FORMAT_UNSIGNED_INT8 : CU_AD_FORMAT_UNSIGNED_INT16,
                 .NumChannels = fmtInfo->plane[i].channelCount,
