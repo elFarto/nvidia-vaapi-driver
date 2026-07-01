@@ -42,6 +42,9 @@ typedef struct {
     uint32_t offset;
     uint32_t pitch;
     uint32_t fourcc;
+    uint32_t log2GobsPerBlockX;
+    uint32_t log2GobsPerBlockY;
+    uint32_t log2GobsPerBlockZ;
 } NVDriverImage;
 
 bool init_nvdriver(NVDriverContext *context, int drmFd);
@@ -49,5 +52,8 @@ bool free_nvdriver(NVDriverContext *context);
 bool get_device_uuid(const NVDriverContext *context, uint8_t uuid[16]);
 bool alloc_memory(const NVDriverContext *context, uint32_t size, int *fd);
 bool alloc_image(NVDriverContext *context, uint32_t width, uint32_t height, uint8_t channels, uint8_t bytesPerChannel, uint32_t fourcc, NVDriverImage *image);
+uint32_t calculate_unified_image_layout(const NVDriverContext *context, NVDriverImage images[], uint32_t width, uint32_t height,
+                                        uint32_t bppc, uint32_t numPlanes, const NVFormatPlane planes[]);
+bool alloc_buffer(NVDriverContext *context, uint32_t totalSize, const NVDriverImage images[], int *nvFd, int *nvFd2, int *drmFd);
 
 #endif
