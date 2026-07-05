@@ -351,12 +351,21 @@ static void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *pi
 
     if (pps->apply_grain) {
         NVSurface *display = nvSurfaceFromSurfaceId(ctx->drv, buf->current_display_picture);
-        if (display != NULL) {
+        // Film grain decodes the clean frame into the render target (kept as a
+        // reference) and writes the grain-applied frame to a separate display
+        // surface. That only works if the display surface is a distinct surface
+        // with a valid decoder picture index; otherwise redirecting would either
+        // pass CurrPicIdx=-1 (decode failure) or make the grained output alias
+        // the reference frame. In those cases decode normally into the render
+        // target instead.
+        if (display != NULL && display != ctx->renderTarget && display->pictureIdx >= 0) {
             ctx->displayTarget = display;
             picParams->CurrPicIdx = display->pictureIdx;
             pps->decodePicIdx = ctx->renderTarget->pictureIdx;
-        } else {
+        } else if (display == NULL) {
             LOG("AV1 film grain requested without a valid display surface: %u", buf->current_display_picture);
+        } else if (display->pictureIdx < 0) {
+            LOG("AV1 film grain display surface %u has no picture index yet, decoding in place", buf->current_display_picture);
         }
     }
 
