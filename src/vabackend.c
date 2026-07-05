@@ -2636,6 +2636,10 @@ fail:
 
 static bool copySurfaceBackingImage(NVDriver *drv, NVSurface *src, NVSurface *dst, const VAProcPipelineParameterBuffer *pipeline) {
     if (src == NULL || dst == NULL || pipeline == NULL) {
+        // The destination (render target) was marked resolving in nvBeginPicture;
+        // clear it so a later vaSyncSurface doesn't block forever on a blit we
+        // never performed.
+        setSurfaceResolving(dst, false);
         return false;
     }
 
@@ -2653,15 +2657,17 @@ static bool copySurfaceBackingImage(NVDriver *drv, NVSurface *src, NVSurface *ds
         LOG("Unsupported VideoProc blit: src=%dx%d+%d+%d dst=%dx%d+%d+%d",
             srcRegion.width, srcRegion.height, srcRegion.x, srcRegion.y,
             dstRegion.width, dstRegion.height, dstRegion.x, dstRegion.y);
+        setSurfaceResolving(dst, false);
         return false;
     }
 
     waitSurfaceResolved(src);
 
-    CHECK_CUDA_RESULT_RETURN(cu->cuCtxPushCurrent(drv->cudaContext), false);
+    CHECK_CUDA_RESULT_RETURN(cu->cuCtxPushCurrent(drv->cudaContext), (setSurfaceResolving(dst, false), false));
     bool realised = drv->backend->realiseSurface(drv, src) && drv->backend->realiseSurface(drv, dst);
     if (!realised) {
         CHECK_CUDA_RESULT(cu->cuCtxPopCurrent(NULL));
+        setSurfaceResolving(dst, false);
         return false;
     }
 
@@ -2690,10 +2696,8 @@ static bool copySurfaceBackingImage(NVDriver *drv, NVSurface *src, NVSurface *ds
             sampleInfo.sampleShift, sampleInfo.yScale, sampleInfo.yOffset, sampleInfo.uvOffset, sampleInfo.valueShift);
         bool ret = convertNV12ToARGB(drv, srcImg, dstImg, srcRegion.width, srcRegion.height, matrix, sampleInfo);
         bool popFailed = CHECK_CUDA_RESULT(cu->cuCtxPopCurrent(NULL));
-        if (!ret) {
-            return false;
-        }
-        if (popFailed) {
+        if (!ret || popFailed) {
+            setSurfaceResolving(dst, false);
             return false;
         }
         goto done;
@@ -2704,6 +2708,7 @@ static bool copySurfaceBackingImage(NVDriver *drv, NVSurface *src, NVSurface *ds
             srcImg != NULL ? srcImg->format : NV_FORMAT_NONE,
             dstImg != NULL ? dstImg->format : NV_FORMAT_NONE);
         CHECK_CUDA_RESULT(cu->cuCtxPopCurrent(NULL));
+        setSurfaceResolving(dst, false);
         return false;
     }
 
@@ -2726,19 +2731,21 @@ static bool copySurfaceBackingImage(NVDriver *drv, NVSurface *src, NVSurface *ds
             CHECK_CUDA_RESULT(drv->cu->cuMemcpy2DAsync(&cpy, 0));
         }
     }
-    CHECK_CUDA_RESULT_RETURN(cu->cuCtxPopCurrent(NULL), false);
+    CHECK_CUDA_RESULT_RETURN(cu->cuCtxPopCurrent(NULL), (setSurfaceResolving(dst, false), false));
 
 done:
     pthread_mutex_lock(&dst->mutex);
-    dst->resolving = 0;
     dst->context = src->context;
     dst->progressiveFrame = src->progressiveFrame;
     dst->topFieldFirst = src->topFieldFirst;
     dst->secondField = src->secondField;
     dst->decodeFailed = src->decodeFailed;
     nvSurfaceCopyColorMetadata(dst, src);
-    pthread_cond_signal(&dst->cond);
     pthread_mutex_unlock(&dst->mutex);
+
+    // Clears both the surface and its backing-image resolving flags and wakes
+    // any waiter (vaSyncSurface / a later blit that reuses this surface).
+    setSurfaceResolving(dst, false);
 
     return true;
 }
@@ -2819,6 +2826,7 @@ static VAStatus nvRenderPicture(
     }
 
     if (nvCtx->entrypoint == VAEntrypointVideoProc) {
+        bool processed = false;
         for (int i = 0; i < num_buffers; i++) {
             NVBuffer *buf = (NVBuffer*) getObjectPtr(drv, OBJECT_TYPE_BUFFER, buffers[i]);
             if (buf == NULL || buf->ptr == NULL || buf->bufferType != VAProcPipelineParameterBufferType) {
@@ -2827,11 +2835,20 @@ static VAStatus nvRenderPicture(
             }
 
             nvStatsIncrement(drv, NV_STAT_VIDEOPROC_REQUESTS);
+            processed = true;
             VAProcPipelineParameterBuffer *pipeline = (VAProcPipelineParameterBuffer*) buf->ptr;
             NVSurface *src = (NVSurface*) getObjectPtr(drv, OBJECT_TYPE_SURFACE, pipeline->surface);
+            // copySurfaceBackingImage always clears the render target's resolving
+            // flag, on both success and every failure path.
             if (!copySurfaceBackingImage(drv, src, nvCtx->renderTarget, pipeline)) {
                 return VA_STATUS_ERROR_OPERATION_FAILED;
             }
+        }
+
+        // If no pipeline buffer touched the render target, it was still marked
+        // resolving in nvBeginPicture; clear it so vaSyncSurface can't hang.
+        if (!processed) {
+            setSurfaceResolving(nvCtx->renderTarget, false);
         }
 
         return VA_STATUS_SUCCESS;
