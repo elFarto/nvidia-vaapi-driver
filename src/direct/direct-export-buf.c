@@ -701,9 +701,19 @@ static void direct_detachBackingImageFromSurface(NVDriver *drv, NVSurface *surfa
         return;
     }
 
+    // Publish the detach (surface -> NULL) and assign the detached serial while
+    // holding imagesMutex. The prune path reads both under the same lock to pick
+    // the oldest reclaimable image; doing it unlocked exposes a window where a
+    // just-detached image (serial not yet written, still 0) looks like the
+    // oldest and gets reclaimed first -- exactly the most-recently-detached
+    // image whose exported dma-buf is most likely still in the client's
+    // pipeline, which is the corruption the oldest-first prune exists to avoid.
+    pthread_mutex_lock(&drv->imagesMutex);
     surface->backingImage->surface = NULL;
     surface->backingImage->detachedSerial = ++drv->detachedBackingImageSerial;
     surface->backingImage = NULL;
+    pthread_mutex_unlock(&drv->imagesMutex);
+
     pruneDetachedBackingImagesToLimits(drv);
 }
 
