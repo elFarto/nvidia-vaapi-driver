@@ -24,6 +24,7 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <stdarg.h>
+#include <dlfcn.h>
 
 #include <time.h>
 
@@ -89,7 +90,16 @@ FILE *nvStatsOutput(void) {
     return STATS_OUTPUT != NULL ? STATS_OUTPUT : LOG_OUTPUT;
 }
 
+// Fallback byte ceiling for the detached backing-image cache when the GPU's
+// total VRAM cannot be queried. When it can, the default scales with the
+// device instead: totalVram/64 (~1.6%), clamped to [64 MiB, 512 MiB]. The
+// image-count limit below is the primary bound (it matches the cache's
+// purpose: keep the last N frames alive across a stream switch, whatever
+// their resolution); the byte ceiling is a safety net so those N frames
+// can't pin an outsized share of a small card's VRAM.
 static const uint64_t DEFAULT_MAX_DETACHED_BACKING_IMAGE_BYTES = 128ULL * 1024ULL * 1024ULL;
+static const uint64_t MIN_DYNAMIC_DETACHED_BACKING_IMAGE_BYTES = 64ULL * 1024ULL * 1024ULL;
+static const uint64_t MAX_DYNAMIC_DETACHED_BACKING_IMAGE_BYTES = 512ULL * 1024ULL * 1024ULL;
 static const uint32_t DEFAULT_MAX_DETACHED_BACKING_IMAGES = 16;
 
 static int gpu = -1;
@@ -337,6 +347,51 @@ static uint64_t parseEnvU64(const char *name, uint64_t fallback) {
     }
 
     return parsed;
+}
+
+// Default byte ceiling for the detached backing-image cache, derived from the
+// GPU's total VRAM: totalVram/64 clamped to [64 MiB, 512 MiB]. Computed once at
+// init (deterministic per machine) -- deliberately NOT from *free* VRAM, which
+// is a device-wide value shared with every other process and would make the
+// cache size race with whatever else the GPU is running. ffnvcodec's loader
+// doesn't expose cuDeviceTotalMem, so resolve it from the already-loaded
+// libcuda; if anything fails, fall back to the fixed default.
+static uint64_t defaultMaxDetachedBackingImageBytes(int cudaGpuId) {
+    typedef CUresult CUDAAPI tcuDeviceTotalMem_l(size_t *bytes, CUdevice dev);
+
+    if (cu == NULL || cu->cuDeviceGet == NULL) {
+        return DEFAULT_MAX_DETACHED_BACKING_IMAGE_BYTES;
+    }
+
+    // libcuda is already loaded by cuda_load_functions; RTLD_NOLOAD just takes
+    // another reference to it without touching the filesystem.
+    void *libcuda = dlopen("libcuda.so.1", RTLD_NOW | RTLD_NOLOAD);
+    if (libcuda == NULL) {
+        libcuda = dlopen("libcuda.so.1", RTLD_NOW);
+    }
+    if (libcuda == NULL) {
+        return DEFAULT_MAX_DETACHED_BACKING_IMAGE_BYTES;
+    }
+
+    uint64_t ret = DEFAULT_MAX_DETACHED_BACKING_IMAGE_BYTES;
+    tcuDeviceTotalMem_l *deviceTotalMem = (tcuDeviceTotalMem_l *) dlsym(libcuda, "cuDeviceTotalMem_v2");
+    CUdevice dev = 0;
+    size_t totalVram = 0;
+    if (deviceTotalMem != NULL &&
+        cu->cuDeviceGet(&dev, cudaGpuId >= 0 ? cudaGpuId : 0) == CUDA_SUCCESS &&
+        deviceTotalMem(&totalVram, dev) == CUDA_SUCCESS && totalVram > 0) {
+        ret = totalVram / 64;
+        if (ret < MIN_DYNAMIC_DETACHED_BACKING_IMAGE_BYTES) {
+            ret = MIN_DYNAMIC_DETACHED_BACKING_IMAGE_BYTES;
+        } else if (ret > MAX_DYNAMIC_DETACHED_BACKING_IMAGE_BYTES) {
+            ret = MAX_DYNAMIC_DETACHED_BACKING_IMAGE_BYTES;
+        }
+        LOG("Detached backing-image cache ceiling: %llu bytes (total VRAM %zu bytes)",
+            (unsigned long long) ret, totalVram);
+    }
+
+    dlclose(libcuda);
+    return ret;
 }
 
 bool checkCudaErrors(CUresult err, const char *file, const char *function, const int line) {
@@ -3939,7 +3994,7 @@ VAStatus __vaDriverInit_1_0(VADriverContextP ctx) {
     //make sure that we want the default GPU, and that a DRM fd that we care about is passed in
     drv->drmFd = drmFd;
     drv->maxDetachedBackingImageBytes =
-        parseEnvU64("NVD_MAX_DETACHED_BACKING_IMAGE_BYTES", DEFAULT_MAX_DETACHED_BACKING_IMAGE_BYTES);
+        parseEnvU64("NVD_MAX_DETACHED_BACKING_IMAGE_BYTES", defaultMaxDetachedBackingImageBytes(drv->cudaGpuId));
     drv->maxDetachedBackingImages =
         (uint32_t) parseEnvU64("NVD_MAX_DETACHED_BACKING_IMAGES", DEFAULT_MAX_DETACHED_BACKING_IMAGES);
 
