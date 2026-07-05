@@ -697,22 +697,31 @@ static bool copyFrameToSurface(NVDriver *drv, CUdeviceptr ptr, NVSurface *surfac
     const NVFormatInfo *fmtInfo = &formatsInfo[surface->backingImage->format];
     uint32_t y = 0;
 
+    // For the host-mapped external surface fallback we stage each plane through
+    // a host buffer. Plane 0 (luma) is always the largest, so allocate one
+    // buffer sized to it up front and reuse it for every plane instead of
+    // malloc/free per plane on every resolved frame.
+    uint8_t *stagingPlane = NULL;
+    if (surface->backingImage->externalMapping != NULL) {
+        const uint32_t stagingBytes = surface->width * fmtInfo->bppc * fmtInfo->plane[0].channelCount * surface->height;
+        stagingPlane = malloc(stagingBytes);
+        if (stagingPlane == NULL) {
+            return false;
+        }
+    }
+
     for (uint32_t i = 0; i < fmtInfo->numPlanes; i++) {
         const NVFormatPlane *p = &fmtInfo->plane[i];
         const uint32_t widthInBytes = (surface->width >> p->ss.x) * fmtInfo->bppc * p->channelCount;
         const uint32_t height = surface->height >> p->ss.y;
         if (surface->backingImage->externalMapping != NULL) {
-            uint8_t *plane = malloc((size_t) widthInBytes * height);
-            if (plane == NULL) {
-                return false;
-            }
             CUDA_MEMCPY2D cpy = {
                 .srcMemoryType = CU_MEMORYTYPE_DEVICE,
                 .srcDevice = ptr,
                 .srcY = y,
                 .srcPitch = pitch,
                 .dstMemoryType = CU_MEMORYTYPE_HOST,
-                .dstHost = plane,
+                .dstHost = stagingPlane,
                 .dstPitch = widthInBytes,
                 .Height = height,
                 .WidthInBytes = widthInBytes
@@ -722,12 +731,12 @@ static bool copyFrameToSurface(NVDriver *drv, CUdeviceptr ptr, NVSurface *surfac
                 uint8_t *dst = (uint8_t*) surface->backingImage->externalMapping + surface->backingImage->offsets[i];
                 for (uint32_t row = 0; row < height; row++) {
                     memcpy(dst + (size_t) row * surface->backingImage->strides[i],
-                           plane + (size_t) row * widthInBytes,
+                           stagingPlane + (size_t) row * widthInBytes,
                            widthInBytes);
                 }
             }
-            free(plane);
             if (failed) {
+                free(stagingPlane);
                 return false;
             }
             y += height;
@@ -751,6 +760,8 @@ static bool copyFrameToSurface(NVDriver *drv, CUdeviceptr ptr, NVSurface *surfac
         }
         y += height;
     }
+
+    free(stagingPlane);
 
     //notify anyone waiting for us to be resolved
     pthread_mutex_lock(&surface->mutex);

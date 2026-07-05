@@ -2437,8 +2437,13 @@ static bool convertNV12ToARGBCuda(NVDriver *drv, BackingImage *srcImg, BackingIm
         .WidthInBytes = width * bpp,
         .Height = uvHeight
     };
-    if (CHECK_CUDA_RESULT(drv->cu->cuMemcpy2D(&yCpy)) ||
-        CHECK_CUDA_RESULT(drv->cu->cuMemcpy2D(&uvCpy))) {
+    // Queue the two input copies async on stream 0; the kernel below runs on
+    // the same stream so it observes them in order, and the frame is fully
+    // synchronised before we signal completion (cuStreamSynchronize for an
+    // external dst, or the synchronous ARGB copy-back otherwise). This drops two
+    // host-side blocking waits per converted frame.
+    if (CHECK_CUDA_RESULT(drv->cu->cuMemcpy2DAsync(&yCpy, 0)) ||
+        CHECK_CUDA_RESULT(drv->cu->cuMemcpy2DAsync(&uvCpy, 0))) {
         goto fail;
     }
 
