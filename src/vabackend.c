@@ -1163,20 +1163,32 @@ static void parseSurfaceImportAttributes(VASurfaceAttrib *attribList, unsigned i
         imported->width = desc->width;
         imported->height = desc->height;
         imported->numFds = desc->num_objects;
-        if (desc->num_layers == 0 || imported->numFds == 0 || imported->numFds > 4 || desc->layers[0].num_planes > 4) {
+        if (desc->num_layers == 0 || imported->numFds == 0 || imported->numFds > 4) {
             imported->valid = false;
             return;
         }
-        imported->numPlanes = desc->layers[0].num_planes;
         for (uint32_t i = 0; i < imported->numFds; i++) {
             imported->fds[i] = desc->objects[i].fd;
             imported->dataSize += desc->objects[i].size;
         }
-        for (uint32_t i = 0; i < imported->numPlanes; i++) {
-            imported->pitches[i] = desc->layers[0].pitch[i];
-            imported->offsets[i] = desc->layers[0].offset[i];
+        // A planar surface may be described either as one layer holding every
+        // plane, or as several single-plane layers (e.g. NV12 as separate Y and
+        // UV layers). Flatten all layers into one plane list so chroma isn't
+        // dropped when the client uses the multi-layer form.
+        uint32_t planeIdx = 0;
+        for (uint32_t l = 0; l < desc->num_layers; l++) {
+            for (uint32_t p = 0; p < desc->layers[l].num_planes; p++) {
+                if (planeIdx >= 4) {
+                    imported->valid = false;
+                    return;
+                }
+                imported->pitches[planeIdx] = desc->layers[l].pitch[p];
+                imported->offsets[planeIdx] = desc->layers[l].offset[p];
+                planeIdx++;
+            }
         }
-        imported->valid = true;
+        imported->numPlanes = planeIdx;
+        imported->valid = planeIdx > 0;
     }
 }
 
