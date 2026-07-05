@@ -564,8 +564,10 @@ static BackingImage *direct_allocateBackingImage(NVDriver *drv, NVSurface *surfa
 
     LOG_DEBUG("Allocating BackingImages: %p %dx%d", backingImage, surface->width, surface->height);
     for (uint32_t i = 0; i < fmtInfo->numPlanes; i++) {
-        alloc_image(&drv->driverContext, surface->width >> p[i].ss.x, surface->height >> p[i].ss.y,
-                    p[i].channelCount, 8 * fmtInfo->bppc, p[i].fourcc, &driverImages[i]);
+        if (!alloc_image(&drv->driverContext, surface->width >> p[i].ss.x, surface->height >> p[i].ss.y,
+                         p[i].channelCount, 8 * fmtInfo->bppc, p[i].fourcc, &driverImages[i])) {
+            goto bail;
+        }
     }
 
     for (uint32_t i = 0; i < fmtInfo->numPlanes; i++) {
@@ -586,8 +588,9 @@ static BackingImage *direct_allocateBackingImage(NVDriver *drv, NVSurface *surfa
     return backingImage;
 
 bail:
-    //another 'free' might occur on this pointer.
-    //hence, set it to NULL to ensure no operation is performed if this really happens.
+    // Close the not-yet-transferred driver fds, then let destroyBackingImage
+    // release any CUDA arrays/external-memory already imported by import_to_cuda
+    // and the sync mutex/cond -- a plain free() here leaked all of those.
     for (uint32_t i = 0; i < fmtInfo->numPlanes; i++) {
         if (driverImages[i].nvFd != 0) {
             close(driverImages[i].nvFd);
@@ -601,7 +604,7 @@ bail:
     }
 
     if (backingImage != NULL) {
-        free(backingImage);
+        destroyBackingImage(drv, backingImage);
     }
 
     return NULL;

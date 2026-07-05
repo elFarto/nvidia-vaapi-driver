@@ -383,7 +383,7 @@ bool init_nvdriver(NVDriverContext *context, const int drmFd) {
     free(ver);
 
     if (!get_device_info(drmFd, context)) {
-        return false;
+        goto err;
     }
 
     LOG("Got dev info: %x %x %x %x", context->gpu_id, context->sector_layout, context->page_kind_generation, context->generic_page_kind)

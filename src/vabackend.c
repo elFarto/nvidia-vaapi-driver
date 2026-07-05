@@ -1229,15 +1229,32 @@ static bool importExternalBackingToCuda(NVDriver *drv, BackingImage *img) {
             .numLevels = 1,
             .offset = (unsigned long long) img->offsets[i]
         };
-        if (CHECK_CUDA_RESULT(drv->cu->cuExternalMemoryGetMappedMipmappedArray(&img->cudaImages[i].mipmapArray, img->extMem, &mipmapArrayDesc))) {
-            return false;
-        }
-        if (CHECK_CUDA_RESULT(drv->cu->cuMipmappedArrayGetLevel(&img->arrays[i], img->cudaImages[i].mipmapArray, 0))) {
-            return false;
+        if (CHECK_CUDA_RESULT(drv->cu->cuExternalMemoryGetMappedMipmappedArray(&img->cudaImages[i].mipmapArray, img->extMem, &mipmapArrayDesc)) ||
+            CHECK_CUDA_RESULT(drv->cu->cuMipmappedArrayGetLevel(&img->arrays[i], img->cudaImages[i].mipmapArray, 0))) {
+            goto fail;
         }
     }
 
     return true;
+
+fail:
+    // Release the CUDA arrays/mipmaps created so far and the external memory
+    // object; the caller only frees the BackingImage struct and its fds.
+    for (uint32_t i = 0; i < fmtInfo->numPlanes; i++) {
+        if (img->arrays[i] != NULL) {
+            CHECK_CUDA_RESULT(drv->cu->cuArrayDestroy(img->arrays[i]));
+            img->arrays[i] = NULL;
+        }
+        if (img->cudaImages[i].mipmapArray != NULL) {
+            CHECK_CUDA_RESULT(drv->cu->cuMipmappedArrayDestroy(img->cudaImages[i].mipmapArray));
+            img->cudaImages[i].mipmapArray = NULL;
+        }
+    }
+    if (img->extMem != NULL) {
+        CHECK_CUDA_RESULT(drv->cu->cuDestroyExternalMemory(img->extMem));
+        img->extMem = NULL;
+    }
+    return false;
 }
 
 static bool importExternalBufferToCuda(NVDriver *drv, BackingImage *img) {
@@ -1545,6 +1562,11 @@ static VAStatus nvCreateSurfaces2(
         if (importSurface) {
             BackingImage *img = createImportedBackingImage(drv, &imported, width, height);
             if (img == NULL) {
+                // Roll back every surface object allocated in this call, including
+                // the current one, so a failed import doesn't leak them.
+                for (uint32_t j = 0; j <= i; j++) {
+                    deleteObject(drv, surfaces[j]);
+                }
                 CHECK_CUDA_RESULT_RETURN(cu->cuCtxPopCurrent(NULL), VA_STATUS_ERROR_OPERATION_FAILED);
                 return VA_STATUS_ERROR_ALLOCATION_FAILED;
             }

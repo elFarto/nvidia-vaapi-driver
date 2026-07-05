@@ -472,16 +472,29 @@ static void ensureAV1SliceOffsetStorage(NVContext *ctx, const uint32_t numSlices
     }
 
     if (ctx->sliceOffsets.buf == NULL) {
-        ctx->sliceOffsets.allocated = requiredSize * 2;
-        ctx->sliceOffsets.buf = memalign(16, ctx->sliceOffsets.allocated);
-    } else if (requiredSize > ctx->sliceOffsets.allocated) {
-        while (requiredSize > ctx->sliceOffsets.allocated) {
-            ctx->sliceOffsets.allocated += ctx->sliceOffsets.allocated >> 1;
+        void *newBuffer = memalign(16, requiredSize * 2);
+        if (newBuffer == NULL) {
+            LOG("Unable to allocate AV1 slice offset storage");
+            ctx->sliceOffsets.size = 0;
+            return;
         }
-        void *newBuffer = memalign(16, ctx->sliceOffsets.allocated);
+        ctx->sliceOffsets.allocated = requiredSize * 2;
+        ctx->sliceOffsets.buf = newBuffer;
+    } else if (requiredSize > ctx->sliceOffsets.allocated) {
+        uint64_t newAllocated = ctx->sliceOffsets.allocated;
+        while (requiredSize > newAllocated) {
+            newAllocated += newAllocated >> 1;
+        }
+        void *newBuffer = memalign(16, newAllocated);
+        if (newBuffer == NULL) {
+            LOG("Unable to grow AV1 slice offset storage");
+            ctx->sliceOffsets.size = 0;
+            return;
+        }
         memcpy(newBuffer, ctx->sliceOffsets.buf, oldSize);
         free(ctx->sliceOffsets.buf);
         ctx->sliceOffsets.buf = newBuffer;
+        ctx->sliceOffsets.allocated = newAllocated;
     }
 
     if (requiredSize > oldSize) {
