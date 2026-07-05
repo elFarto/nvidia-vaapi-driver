@@ -31,6 +31,30 @@ static bool isRgbSurfaceFourcc(uint32_t fourcc) {
            fourcc == VA_FOURCC_BGRX;
 }
 
+static NVFormat nvFormatForSurface(const NVSurface *surface) {
+    if (isRgbSurfaceFourcc((uint32_t) surface->fourcc)) {
+        return NV_FORMAT_ARGB;
+    }
+
+    switch (surface->format) {
+    case cudaVideoSurfaceFormat_P016:
+        switch (surface->bitDepth) {
+        case 10:
+            return NV_FORMAT_P010;
+        case 12:
+            return NV_FORMAT_P012;
+        default:
+            return NV_FORMAT_P016;
+        }
+    case cudaVideoSurfaceFormat_YUV444_16Bit:
+        return NV_FORMAT_Q416;
+    case cudaVideoSurfaceFormat_YUV444:
+        return NV_FORMAT_444P;
+    default:
+        return NV_FORMAT_NV12;
+    }
+}
+
 static void findGPUIndexFromFd(NVDriver *drv) {
     //find the CUDA device id
     uint8_t drmUuid[16];
@@ -375,38 +399,7 @@ static BackingImage *direct_allocateBackingImage_single(NVDriver *drv, NVSurface
         backingImage->fds[i] = -1;
     }
 
-    if (isRgbSurfaceFourcc((uint32_t) surface->fourcc)) {
-        backingImage->format = NV_FORMAT_ARGB;
-    } else {
-    switch (surface->format)
-    {
-    case cudaVideoSurfaceFormat_P016:
-        switch (surface->bitDepth) {
-        case 10:
-            backingImage->format = NV_FORMAT_P010;
-            break;
-        case 12:
-            backingImage->format = NV_FORMAT_P012;
-            break;
-        default:
-            backingImage->format = NV_FORMAT_P016;
-            break;
-        }
-        break;
-
-    case cudaVideoSurfaceFormat_YUV444_16Bit:
-        backingImage->format = NV_FORMAT_Q416;
-        break;
-
-    case cudaVideoSurfaceFormat_YUV444:
-        backingImage->format = NV_FORMAT_444P;
-        break;
-
-    default:
-        backingImage->format = NV_FORMAT_NV12;
-        break;
-    }
-    }
+    backingImage->format = nvFormatForSurface(surface);
 
     const NVFormatInfo *fmtInfo = &formatsInfo[backingImage->format];
 
@@ -526,38 +519,7 @@ static BackingImage *direct_allocateBackingImage(NVDriver *drv, NVSurface *surfa
         backingImage->fds[i] = -1;
     }
 
-    if (isRgbSurfaceFourcc((uint32_t) surface->fourcc)) {
-        backingImage->format = NV_FORMAT_ARGB;
-    } else {
-    switch (surface->format)
-    {
-    case cudaVideoSurfaceFormat_P016:
-        switch (surface->bitDepth) {
-        case 10:
-            backingImage->format = NV_FORMAT_P010;
-            break;
-        case 12:
-            backingImage->format = NV_FORMAT_P012;
-            break;
-        default:
-            backingImage->format = NV_FORMAT_P016;
-            break;
-        }
-        break;
-
-    case cudaVideoSurfaceFormat_YUV444_16Bit:
-        backingImage->format = NV_FORMAT_Q416;
-        break;
-
-    case cudaVideoSurfaceFormat_YUV444:
-        backingImage->format = NV_FORMAT_444P;
-        break;
-    
-    default:
-        backingImage->format = NV_FORMAT_NV12;
-        break;
-    }
-    }
+    backingImage->format = nvFormatForSurface(surface);
 
     const NVFormatInfo *fmtInfo = &formatsInfo[backingImage->format];
     const NVFormatPlane *p = fmtInfo->plane;
