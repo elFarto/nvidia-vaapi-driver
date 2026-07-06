@@ -8,6 +8,7 @@ This is an VA-API implementation that uses NVDEC as a backend. This implementati
 - [Table of contents](#table-of-contents)
 - [Codec Support](#codec-support)
 - [Installation](#installation)
+  - [Quick install from this fork](#quick-install-from-this-fork)
   - [Packaging status](#packaging-status)
   - [Building](#building)
   - [Removal](#removal)
@@ -52,6 +53,24 @@ To install and use `nvidia-vaapi-driver`, follow the steps in installation and c
 **Requirements**
 
 * NVIDIA driver series 470 or 500+
+
+## Quick install from this fork
+
+This fork's `main` branch is intended to match the locally tested AoTofu driver build. If the repository is private, clone it with a GitHub account that has access:
+
+```sh
+git clone git@github.com:AoTofu/nvidia-vaapi-driver.git
+cd nvidia-vaapi-driver
+./install.sh --deps --clean
+```
+
+The installer builds the driver, backs up any existing `nvidia_drv_video.so`, installs the new driver into libva's driver directory, and runs a `vainfo` smoke test when possible. To skip dependency installation:
+
+```sh
+./install.sh --clean
+```
+
+The installer prints a rollback command if it replaced an existing driver.
 
 ## Packaging status
 
@@ -105,6 +124,8 @@ Environment variables used to control the behavior of this library.
 | `NVD_LOG` | Used to control logging. `1` to log to stdout, anything else to append to the given file. |
 | `NVD_MAX_INSTANCES` | Controls the maximum concurrent instances of the driver will be allowed per-process. This option is only really useful for older GPUs with not much VRAM, especially with Firefox on video heavy websites. |
 | `NVD_BACKEND` | Controls which backend this library uses. Either `egl`, or `direct` (default). See [direct backend](#direct-backend) for more details. |
+| `NVD_MAX_DETACHED_BACKING_IMAGE_BYTES` | Upper bound (in bytes) on the size of the detached backing-image cache used by the direct backend to recycle decode surfaces across stream switches. Lower this on low-VRAM GPUs to reduce memory usage at the cost of more re-allocation when streams change. Set to `0` to disable detached caching. Default: scales with the GPU — total VRAM / 64 (~1.6%), clamped to 64 MiB–512 MiB; falls back to `134217728` (128 MiB) if the VRAM size cannot be queried. |
+| `NVD_MAX_DETACHED_BACKING_IMAGES` | Upper bound on the number of cached detached backing images. Set to `0` to disable detached caching. Default: `16`. |
 
 ## Firefox
 
@@ -138,7 +159,18 @@ If you're using the Snap version of Firefox, it will be unable to access the hos
 
 ## Chrome
 
-Chrome is currently unsupported, and will not function.
+This fork includes the Chromium-compatible single-buffer export path. For Chrome / Chromium based browsers, set `LIBVA_DRIVER_NAME=nvidia` and start the browser with flags similar to:
+
+```sh
+LIBVA_DRIVER_NAME=nvidia google-chrome \
+  --enable-features=AcceleratedVideoDecodeLinuxGL,VaapiOnNvidiaGPUs \
+  --ignore-gpu-blocklist \
+  --use-gl=angle --use-angle=gl
+```
+
+On Wayland, also try `--ozone-platform=wayland` or `--ozone-platform-hint=auto`.
+
+Multi-plane YUV surfaces are always exported as a single buffer with all planes sharing one DRM modifier, which is what Chromium's `vaapi_wrapper` requires; no configuration is needed.
 
 ## MPV
 

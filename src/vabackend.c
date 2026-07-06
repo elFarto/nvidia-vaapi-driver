@@ -2,6 +2,7 @@
 
 #include "vabackend.h"
 #include "backend-common.h"
+#include "kernels.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -11,15 +12,19 @@
 #include <malloc.h>
 #include <fcntl.h>
 #include <sys/param.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
 
 #include <va/va_backend.h>
 #include <va/va_drmcommon.h>
+#include <va/va_vpp.h>
 
 #include <drm_fourcc.h>
 
 #include <unistd.h>
 #include <sys/types.h>
 #include <stdarg.h>
+#include <dlfcn.h>
 
 #include <time.h>
 
@@ -29,6 +34,10 @@
 
 #ifndef __has_include
 #define __has_include(x) 0
+#endif
+
+#ifndef CU_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_FD
+#define CU_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_FD ((CUexternalMemoryHandleType)7)
 #endif
 
 #if __has_include(<pthread_np.h>)
@@ -52,7 +61,7 @@
 #endif
 #endif
 
-static pid_t nv_gettid(void)
+pid_t nv_gettid(void)
 {
 #if HAVE_GETTID
     return gettid();
@@ -72,6 +81,26 @@ extern const NVCodec __start_nvd_codecs[];
 extern const NVCodec __stop_nvd_codecs[];
 
 static FILE *LOG_OUTPUT;
+static FILE *STATS_OUTPUT;
+static bool LOG_DEBUG_ENABLED;
+
+// Destination for the statistics dump: the dedicated stats log if one was opened
+// (NVD_STATS_LOG), otherwise the regular log stream. Used by the stats subsystem.
+FILE *nvStatsOutput(void) {
+    return STATS_OUTPUT != NULL ? STATS_OUTPUT : LOG_OUTPUT;
+}
+
+// Fallback byte ceiling for the detached backing-image cache when the GPU's
+// total VRAM cannot be queried. When it can, the default scales with the
+// device instead: totalVram/64 (~1.6%), clamped to [64 MiB, 512 MiB]. The
+// image-count limit below is the primary bound (it matches the cache's
+// purpose: keep the last N frames alive across a stream switch, whatever
+// their resolution); the byte ceiling is a safety net so those N frames
+// can't pin an outsized share of a small card's VRAM.
+static const uint64_t DEFAULT_MAX_DETACHED_BACKING_IMAGE_BYTES = 128ULL * 1024ULL * 1024ULL;
+static const uint64_t MIN_DYNAMIC_DETACHED_BACKING_IMAGE_BYTES = 64ULL * 1024ULL * 1024ULL;
+static const uint64_t MAX_DYNAMIC_DETACHED_BACKING_IMAGE_BYTES = 512ULL * 1024ULL * 1024ULL;
+static const uint32_t DEFAULT_MAX_DETACHED_BACKING_IMAGES = 16;
 
 static int gpu = -1;
 static enum {
@@ -89,6 +118,7 @@ const NVFormatInfo formatsInfo[] =
 #if VA_CHECK_VERSION(1, 20, 0)
     [NV_FORMAT_Q416] = {2, 3, DRM_FORMAT_INVALID,  true,  true,  {{1, DRM_FORMAT_R16,      {0,0}}, {1, DRM_FORMAT_R16,    {0,0}}, {1, DRM_FORMAT_R16,{0,0}}}, {VA_FOURCC_Q416, VA_LSB_FIRST,   48, 0,0,0,0,0}},
 #endif
+    [NV_FORMAT_ARGB] = {1, 1, VA_FOURCC_ARGB,      false, false, {{4, DRM_FORMAT_ARGB8888, {0,0}}},                            {VA_FOURCC_ARGB, VA_LSB_FIRST,   32, 0,0,0,0,0}},
 };
 
 static NVFormat nvFormatFromVaFormat(uint32_t fourcc) {
@@ -98,6 +128,84 @@ static NVFormat nvFormatFromVaFormat(uint32_t fourcc) {
         }
     }
     return NV_FORMAT_NONE;
+}
+
+static bool isRgbFourcc(uint32_t fourcc) {
+    return fourcc == VA_FOURCC_ARGB ||
+           fourcc == VA_FOURCC_XRGB ||
+           fourcc == VA_FOURCC_ABGR ||
+           fourcc == VA_FOURCC_XBGR ||
+           fourcc == VA_FOURCC_RGBA ||
+           fourcc == VA_FOURCC_RGBX ||
+           fourcc == VA_FOURCC_BGRA ||
+           fourcc == VA_FOURCC_BGRX;
+}
+
+static NVFormat nvFormatFromSurfaceFourcc(uint32_t fourcc) {
+    if (isRgbFourcc(fourcc)) {
+        return NV_FORMAT_ARGB;
+    }
+    return nvFormatFromVaFormat(fourcc);
+}
+
+static const char *fourccString(uint32_t fourcc, char out[5]) {
+    out[0] = (char) (fourcc & 0xff);
+    out[1] = (char) ((fourcc >> 8) & 0xff);
+    out[2] = (char) ((fourcc >> 16) & 0xff);
+    out[3] = (char) ((fourcc >> 24) & 0xff);
+    out[4] = '\0';
+    return out;
+}
+
+static void cacheBackingImageFdStat(BackingImage *img, int index) {
+    if (img == NULL || index < 0 || index >= 4 || img->fds[index] < 0) {
+        return;
+    }
+
+    struct stat s;
+    if (fstat(img->fds[index], &s) == 0) {
+        img->st_dev[index] = s.st_dev;
+        img->st_ino[index] = s.st_ino;
+    }
+}
+
+static bool backingImageFdMatchesStat(const BackingImage *img, const struct stat *fdStat, int index) {
+    return img->fds[index] >= 0 &&
+           img->st_dev[index] == fdStat->st_dev &&
+           img->st_ino[index] == fdStat->st_ino;
+}
+
+static bool backingImageMatchesImport(BackingImage *img, const struct stat *fdStat, NVFormat format, uint32_t width, uint32_t height) {
+    if (img == NULL || img->isExternalBuffer || img->borrowedCudaResources ||
+        img->format != format || img->width != width || img->height != height) {
+        return false;
+    }
+    for (int i = 0; i < 4; i++) {
+        if (backingImageFdMatchesStat(img, fdStat, i)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static BackingImage *retainBackingImageByFd(NVDriver *drv, int fd, NVFormat format, uint32_t width, uint32_t height) {
+    struct stat fdStat;
+    if (fd < 0 || fstat(fd, &fdStat) != 0) {
+        return NULL;
+    }
+
+    BackingImage *ret = NULL;
+    pthread_mutex_lock(&drv->imagesMutex);
+    ARRAY_FOR_EACH(BackingImage*, img, &drv->images)
+        if (backingImageMatchesImport(img, &fdStat, format, width, height)) {
+            ret = img;
+            atomic_fetch_add(&ret->borrowCount, 1);
+            break;
+        }
+    END_FOR_EACH
+    pthread_mutex_unlock(&drv->imagesMutex);
+
+    return ret;
 }
 
 __attribute__ ((constructor))
@@ -111,6 +219,22 @@ static void init() {
             if (LOG_OUTPUT == NULL) {
                 LOG_OUTPUT = stdout;
             }
+        }
+    }
+    char *nvdLogVerbose = getenv("NVD_LOG_VERBOSE");
+    LOG_DEBUG_ENABLED = nvdLogVerbose != NULL && strcmp(nvdLogVerbose, "0") != 0;
+    char *nvdStats = getenv("NVD_STATS");
+    if (nvdStats != NULL && strcmp(nvdStats, "0") != 0) {
+        char *nvdStatsLog = getenv("NVD_STATS_LOG");
+        if (nvdStatsLog != NULL) {
+            STATS_OUTPUT = fopen(nvdStatsLog, "a");
+            if (STATS_OUTPUT == NULL) {
+                STATS_OUTPUT = stdout;
+            }
+        } else if (LOG_OUTPUT != NULL) {
+            STATS_OUTPUT = LOG_OUTPUT;
+        } else {
+            STATS_OUTPUT = stdout;
         }
     }
 
@@ -203,6 +327,71 @@ void logger(const char *filename, const char *function, int line, const char *ms
 
     fprintf(LOG_OUTPUT, "%10ld.%09ld [%d-%d] %s:%4d %24s %s\n", (long)tp.tv_sec, tp.tv_nsec, getpid(), nv_gettid(), filename, line, function, formattedMessage);
     fflush(LOG_OUTPUT);
+}
+
+bool nvdLogDebugEnabled(void) {
+    return LOG_DEBUG_ENABLED;
+}
+
+static uint64_t parseEnvU64(const char *name, uint64_t fallback) {
+    const char *value = getenv(name);
+    if (value == NULL || value[0] == '\0') {
+        return fallback;
+    }
+
+    char *end = NULL;
+    unsigned long long parsed = strtoull(value, &end, 10);
+    if (end == value || *end != '\0') {
+        LOG("Ignoring invalid %s=%s", name, value);
+        return fallback;
+    }
+
+    return parsed;
+}
+
+// Default byte ceiling for the detached backing-image cache, derived from the
+// GPU's total VRAM: totalVram/64 clamped to [64 MiB, 512 MiB]. Computed once at
+// init (deterministic per machine) -- deliberately NOT from *free* VRAM, which
+// is a device-wide value shared with every other process and would make the
+// cache size race with whatever else the GPU is running. ffnvcodec's loader
+// doesn't expose cuDeviceTotalMem, so resolve it from the already-loaded
+// libcuda; if anything fails, fall back to the fixed default.
+static uint64_t defaultMaxDetachedBackingImageBytes(int cudaGpuId) {
+    typedef CUresult CUDAAPI tcuDeviceTotalMem_l(size_t *bytes, CUdevice dev);
+
+    if (cu == NULL || cu->cuDeviceGet == NULL) {
+        return DEFAULT_MAX_DETACHED_BACKING_IMAGE_BYTES;
+    }
+
+    // libcuda is already loaded by cuda_load_functions; RTLD_NOLOAD just takes
+    // another reference to it without touching the filesystem.
+    void *libcuda = dlopen("libcuda.so.1", RTLD_NOW | RTLD_NOLOAD);
+    if (libcuda == NULL) {
+        libcuda = dlopen("libcuda.so.1", RTLD_NOW);
+    }
+    if (libcuda == NULL) {
+        return DEFAULT_MAX_DETACHED_BACKING_IMAGE_BYTES;
+    }
+
+    uint64_t ret = DEFAULT_MAX_DETACHED_BACKING_IMAGE_BYTES;
+    tcuDeviceTotalMem_l *deviceTotalMem = (tcuDeviceTotalMem_l *) dlsym(libcuda, "cuDeviceTotalMem_v2");
+    CUdevice dev = 0;
+    size_t totalVram = 0;
+    if (deviceTotalMem != NULL &&
+        cu->cuDeviceGet(&dev, cudaGpuId >= 0 ? cudaGpuId : 0) == CUDA_SUCCESS &&
+        deviceTotalMem(&totalVram, dev) == CUDA_SUCCESS && totalVram > 0) {
+        ret = totalVram / 64;
+        if (ret < MIN_DYNAMIC_DETACHED_BACKING_IMAGE_BYTES) {
+            ret = MIN_DYNAMIC_DETACHED_BACKING_IMAGE_BYTES;
+        } else if (ret > MAX_DYNAMIC_DETACHED_BACKING_IMAGE_BYTES) {
+            ret = MAX_DYNAMIC_DETACHED_BACKING_IMAGE_BYTES;
+        }
+        LOG("Detached backing-image cache ceiling: %llu bytes (total VRAM %zu bytes)",
+            (unsigned long long) ret, totalVram);
+    }
+
+    dlclose(libcuda);
+    return ret;
 }
 
 bool checkCudaErrors(CUresult err, const char *file, const char *function, const int line) {
@@ -320,15 +509,17 @@ static void deleteObject(NVDriver *drv, VAGenericID id) {
 static bool destroyContext(NVDriver *drv, NVContext *nvCtx) {
     CHECK_CUDA_RESULT_RETURN(cu->cuCtxPushCurrent(drv->cudaContext), false);
 
-    LOG("Signaling resolve thread to exit");
-    struct timespec timeout;
-    clock_gettime(CLOCK_REALTIME, &timeout);
-    timeout.tv_sec += 5;
-    nvCtx->exiting = true;
-    pthread_cond_signal(&nvCtx->resolveCondition);
-    LOG("Waiting for resolve thread to exit");
-    int ret = pthread_timedjoin_np(nvCtx->resolveThread, NULL, &timeout);
-    LOG("Finished waiting for resolve thread with %d", ret);
+    if (nvCtx->decoder != NULL) {
+        LOG("Signaling resolve thread to exit");
+        struct timespec timeout;
+        clock_gettime(CLOCK_REALTIME, &timeout);
+        timeout.tv_sec += 5;
+        nvCtx->exiting = true;
+        pthread_cond_signal(&nvCtx->resolveCondition);
+        LOG("Waiting for resolve thread to exit");
+        int ret = pthread_timedjoin_np(nvCtx->resolveThread, NULL, &timeout);
+        LOG("Finished waiting for resolve thread with %d", ret);
+    }
 
     free(nvCtx->codecData);
     nvCtx->codecData = NULL;
@@ -369,6 +560,9 @@ int pictureIdxFromSurfaceId(NVDriver *drv, VASurfaceID surfId) {
     }
     return -1;
 }
+
+static void setSurfaceResolving(NVSurface *surface, bool resolving);
+static void waitSurfaceResolved(NVSurface *surface);
 
 static cudaVideoCodec vaToCuCodec(VAProfile profile) {
     for (const NVCodec *c = __start_nvd_codecs; c < __stop_nvd_codecs; c++) {
@@ -436,15 +630,13 @@ static void* resolveSurfaces(void *param) {
 
         //LOG("Mapping surface %d", surface->pictureIdx);
         if (surface->decodeFailed || CHECK_CUDA_RESULT(cv->cuvidMapVideoFrame(ctx->decoder, surface->pictureIdx, &deviceMemory, &pitch, &procParams))) {
-            pthread_mutex_lock(&surface->mutex);
-            surface->resolving = 0;
-            pthread_cond_signal(&surface->cond);
-            pthread_mutex_unlock(&surface->mutex);
+            setSurfaceResolving(surface, false);
             continue;
         }
         //LOG("Mapped surface %d to %p (%d)", surface->pictureIdx, (void*)deviceMemory, pitch);
 
         //update cuarray
+        nvStatsIncrement(drv, NV_STAT_RESOLVE_FRAMES);
         drv->backend->exportCudaPtr(drv, deviceMemory, surface, pitch);
         //LOG("Surface %d exported", surface->pictureIdx);
         //unmap frame
@@ -593,6 +785,8 @@ static VAStatus nvQueryConfigProfiles2(
         }
     }
 
+    profile_list[profiles++] = VAProfileNone;
+
     *num_profiles = profiles;
 
     CHECK_CUDA_RESULT_RETURN(cu->cuCtxPopCurrent(NULL), VA_STATUS_ERROR_OPERATION_FAILED);
@@ -607,6 +801,12 @@ static VAStatus nvQueryConfigEntrypoints(
         int *num_entrypoints			/* out */
     )
 {
+    if (profile == VAProfileNone) {
+        entrypoint_list[0] = VAEntrypointVideoProc;
+        *num_entrypoints = 1;
+        return VA_STATUS_SUCCESS;
+    }
+
     entrypoint_list[0] = VAEntrypointVLD;
     *num_entrypoints = 1;
 
@@ -621,6 +821,21 @@ static VAStatus nvGetConfigAttributes(
         int num_attribs
     )
 {
+    if (entrypoint == VAEntrypointVideoProc && profile == VAProfileNone) {
+        NVDriver *drv = (NVDriver*) ctx->pDriverData;
+        for (int i = 0; i < num_attribs; i++) {
+            if (attrib_list[i].type == VAConfigAttribRTFormat) {
+                attrib_list[i].value = VA_RT_FORMAT_YUV420 | VA_RT_FORMAT_RGB32;
+                if (drv->supports16BitSurface) {
+                    attrib_list[i].value |= VA_RT_FORMAT_YUV420_10;
+                }
+            } else {
+                LOG("unhandled vpp config attribute: %d", attrib_list[i].type);
+            }
+        }
+        return VA_STATUS_SUCCESS;
+    }
+
     if (entrypoint != VAEntrypointVLD) {
         return VA_STATUS_ERROR_UNSUPPORTED_ENTRYPOINT;
     }
@@ -700,6 +915,19 @@ static VAStatus nvCreateConfig(
     //LOG("got profile: %d with %d attributes", profile, num_attribs);
     cudaVideoCodec cudaCodec = vaToCuCodec(profile);
 
+    if (entrypoint == VAEntrypointVideoProc && profile == VAProfileNone) {
+        Object obj = allocateObject(drv, OBJECT_TYPE_CONFIG, sizeof(NVConfig));
+        NVConfig *cfg = (NVConfig*) obj->obj;
+        cfg->profile = profile;
+        cfg->entrypoint = entrypoint;
+        cfg->cudaCodec = cudaVideoCodec_NONE;
+        cfg->chromaFormat = cudaVideoChromaFormat_420;
+        cfg->surfaceFormat = cudaVideoSurfaceFormat_NV12;
+        cfg->bitDepth = 8;
+        *config_id = obj->id;
+        return VA_STATUS_SUCCESS;
+    }
+
     if (cudaCodec == cudaVideoCodec_NONE) {
         //we don't support this yet
         LOG("Profile not supported: %d", profile);
@@ -725,6 +953,13 @@ static VAStatus nvCreateConfig(
     cfg->chromaFormat = cudaVideoChromaFormat_420;
     cfg->surfaceFormat = cudaVideoSurfaceFormat_NV12;
     cfg->bitDepth = 8;
+    uint32_t rtFormat = 0;
+    for (int i = 0; i < num_attribs; i++) {
+        if (attrib_list[i].type == VAConfigAttribRTFormat) {
+            rtFormat = attrib_list[i].value;
+            break;
+        }
+    }
 
     if (drv->supports16BitSurface) {
         switch(cfg->profile) {
@@ -742,18 +977,13 @@ static VAStatus nvCreateConfig(
             // configuration is appropriate. If a format is not required here, the caller
             // must pass render targets to createContext so we can use those to establish
             // the surface format and bit depth.
-            if (num_attribs > 0 && attrib_list[0].type == VAConfigAttribRTFormat) {
-                switch(attrib_list[0].value) {
-                case VA_RT_FORMAT_YUV420_12:
+            if (rtFormat != 0) {
+                if ((rtFormat & VA_RT_FORMAT_YUV420_12) != 0) {
                     cfg->surfaceFormat = cudaVideoSurfaceFormat_P016;
                     cfg->bitDepth = 12;
-                    break;
-                case VA_RT_FORMAT_YUV420_10:
+                } else if ((rtFormat & VA_RT_FORMAT_YUV420_10) != 0) {
                     cfg->surfaceFormat = cudaVideoSurfaceFormat_P016;
                     cfg->bitDepth = 10;
-                    break;
-                default:
-                    break;
                 }
             } else {
                 if (cfg->profile == VAProfileVP9Profile2) {
@@ -800,25 +1030,19 @@ static VAStatus nvCreateConfig(
             // configuration is appropriate. If a format is not required here, the caller
             // must pass render targets to createContext so we can use those to establish
             // the surface format and bit depth.
-            if (num_attribs > 0 && attrib_list[0].type == VAConfigAttribRTFormat) {
-                switch(attrib_list[0].value) {
-                case VA_RT_FORMAT_YUV444_12:
+            if (rtFormat != 0) {
+                if ((rtFormat & VA_RT_FORMAT_YUV444_12) != 0) {
                     cfg->surfaceFormat = cudaVideoSurfaceFormat_YUV444_16Bit;
                     cfg->chromaFormat = cudaVideoChromaFormat_444;
                     cfg->bitDepth = 12;
-                    break;
-                case VA_RT_FORMAT_YUV444_10:
+                } else if ((rtFormat & VA_RT_FORMAT_YUV444_10) != 0) {
                     cfg->surfaceFormat = cudaVideoSurfaceFormat_YUV444_16Bit;
                     cfg->chromaFormat = cudaVideoChromaFormat_444;
                     cfg->bitDepth = 10;
-                    break;
-                case VA_RT_FORMAT_YUV444:
+                } else if ((rtFormat & VA_RT_FORMAT_YUV444) != 0) {
                     cfg->surfaceFormat = cudaVideoSurfaceFormat_YUV444;
                     cfg->chromaFormat = cudaVideoChromaFormat_444;
                     cfg->bitDepth = 8;
-                    break;
-                default:
-                    break;
                 }
             } else {
                 if (cfg->profile == VAProfileVP9Profile3) {
@@ -865,6 +1089,20 @@ static VAStatus nvQueryConfigAttributes(
         return VA_STATUS_ERROR_INVALID_CONFIG;
     }
 
+    if (cfg->entrypoint == VAEntrypointVideoProc) {
+        *profile = cfg->profile;
+        *entrypoint = cfg->entrypoint;
+        int i = 0;
+        attrib_list[i].value = VA_RT_FORMAT_YUV420 | VA_RT_FORMAT_RGB32;
+        attrib_list[i].type = VAConfigAttribRTFormat;
+        if (drv->supports16BitSurface) {
+            attrib_list[i].value |= VA_RT_FORMAT_YUV420_10;
+        }
+        i++;
+        *num_attribs = i;
+        return VA_STATUS_SUCCESS;
+    }
+
     *profile = cfg->profile;
     *entrypoint = cfg->entrypoint;
     int i = 0;
@@ -909,6 +1147,378 @@ static VAStatus nvQueryConfigAttributes(
     return VA_STATUS_SUCCESS;
 }
 
+typedef struct {
+    bool valid;
+    uint32_t memoryType;
+    uint32_t pixelFormat;
+    uint32_t width;
+    uint32_t height;
+    uint32_t dataSize;
+    uint32_t numPlanes;
+    uint32_t pitches[4];
+    uint32_t offsets[4];
+    int fds[4];
+    uint32_t numFds;
+} ImportedSurface;
+
+static void initImportedSurface(ImportedSurface *imported) {
+    memset(imported, 0, sizeof(*imported));
+    for (int i = 0; i < 4; i++) {
+        imported->fds[i] = -1;
+    }
+}
+
+static void parseSurfaceImportAttributes(VASurfaceAttrib *attribList, unsigned int numAttribs, ImportedSurface *imported) {
+    initImportedSurface(imported);
+    void *externalDescriptor = NULL;
+
+    for (unsigned int i = 0; i < numAttribs; i++) {
+        switch (attribList[i].type) {
+        case VASurfaceAttribMemoryType:
+            imported->memoryType = (uint32_t) attribList[i].value.value.i;
+            break;
+        case VASurfaceAttribExternalBufferDescriptor:
+            externalDescriptor = attribList[i].value.value.p;
+            break;
+        case VASurfaceAttribPixelFormat:
+            imported->pixelFormat = (uint32_t) attribList[i].value.value.i;
+            break;
+        default:
+            break;
+        }
+    }
+
+    if (externalDescriptor == NULL) {
+        return;
+    }
+
+    if ((imported->memoryType & VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME) != 0) {
+        VASurfaceAttribExternalBuffers *ext = (VASurfaceAttribExternalBuffers*) externalDescriptor;
+        imported->pixelFormat = ext->pixel_format != 0 ? ext->pixel_format : imported->pixelFormat;
+        imported->width = ext->width;
+        imported->height = ext->height;
+        imported->dataSize = ext->data_size;
+        imported->numPlanes = ext->num_planes;
+        imported->numFds = ext->num_buffers;
+        if (imported->numPlanes > 4 || imported->numFds == 0 || imported->numFds > 4 || ext->buffers == NULL) {
+            imported->valid = false;
+            return;
+        }
+        for (uint32_t i = 0; i < imported->numPlanes; i++) {
+            imported->pitches[i] = ext->pitches[i];
+            imported->offsets[i] = ext->offsets[i];
+        }
+        for (uint32_t i = 0; i < imported->numFds; i++) {
+            imported->fds[i] = (int) ext->buffers[i];
+        }
+        imported->valid = true;
+    } else if ((imported->memoryType & VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2) != 0) {
+        VADRMPRIMESurfaceDescriptor *desc = (VADRMPRIMESurfaceDescriptor*) externalDescriptor;
+        imported->pixelFormat = desc->fourcc;
+        imported->width = desc->width;
+        imported->height = desc->height;
+        imported->numFds = desc->num_objects;
+        if (desc->num_layers == 0 || imported->numFds == 0 || imported->numFds > 4) {
+            imported->valid = false;
+            return;
+        }
+        for (uint32_t i = 0; i < imported->numFds; i++) {
+            imported->fds[i] = desc->objects[i].fd;
+            imported->dataSize += desc->objects[i].size;
+        }
+        // A planar surface may be described either as one layer holding every
+        // plane, or as several single-plane layers (e.g. NV12 as separate Y and
+        // UV layers). Flatten all layers into one plane list so chroma isn't
+        // dropped when the client uses the multi-layer form.
+        uint32_t planeIdx = 0;
+        for (uint32_t l = 0; l < desc->num_layers; l++) {
+            for (uint32_t p = 0; p < desc->layers[l].num_planes; p++) {
+                if (planeIdx >= 4) {
+                    imported->valid = false;
+                    return;
+                }
+                imported->pitches[planeIdx] = desc->layers[l].pitch[p];
+                imported->offsets[planeIdx] = desc->layers[l].offset[p];
+                planeIdx++;
+            }
+        }
+        imported->numPlanes = planeIdx;
+        imported->valid = planeIdx > 0;
+    }
+}
+
+static bool importExternalBackingToCuda(NVDriver *drv, BackingImage *img) {
+    if (img->fds[0] < 0 || img->totalSize == 0) {
+        return false;
+    }
+
+    int importFd = dup(img->fds[0]);
+    if (importFd < 0) {
+        return false;
+    }
+
+    CUDA_EXTERNAL_MEMORY_HANDLE_DESC extMemDesc = {
+        .type = CU_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD,
+        .handle.fd = importFd,
+        .flags = 0,
+        .size = img->totalSize
+    };
+    LOG_DEBUG("Importing external memory to CUDA: fd=%d size=%u", importFd, img->totalSize);
+    if (CHECK_CUDA_RESULT(drv->cu->cuImportExternalMemory(&img->extMem, &extMemDesc))) {
+        close(importFd);
+        return false;
+    }
+    img->isSingleBuffer = true;
+
+    const NVFormatInfo *fmtInfo = &formatsInfo[img->format];
+    for (uint32_t i = 0; i < fmtInfo->numPlanes; i++) {
+        CUDA_EXTERNAL_MEMORY_MIPMAPPED_ARRAY_DESC mipmapArrayDesc = {
+            .arrayDesc = {
+                .Width = img->width >> fmtInfo->plane[i].ss.x,
+                .Height = img->height >> fmtInfo->plane[i].ss.y,
+                .Depth = 0,
+                .Format = fmtInfo->bppc == 1 ? CU_AD_FORMAT_UNSIGNED_INT8 : CU_AD_FORMAT_UNSIGNED_INT16,
+                .NumChannels = fmtInfo->plane[i].channelCount,
+                .Flags = 0
+            },
+            .numLevels = 1,
+            .offset = (unsigned long long) img->offsets[i]
+        };
+        if (CHECK_CUDA_RESULT(drv->cu->cuExternalMemoryGetMappedMipmappedArray(&img->cudaImages[i].mipmapArray, img->extMem, &mipmapArrayDesc)) ||
+            CHECK_CUDA_RESULT(drv->cu->cuMipmappedArrayGetLevel(&img->arrays[i], img->cudaImages[i].mipmapArray, 0))) {
+            goto fail;
+        }
+    }
+
+    return true;
+
+fail:
+    // Release the CUDA arrays/mipmaps created so far and the external memory
+    // object; the caller only frees the BackingImage struct and its fds.
+    for (uint32_t i = 0; i < fmtInfo->numPlanes; i++) {
+        if (img->arrays[i] != NULL) {
+            CHECK_CUDA_RESULT(drv->cu->cuArrayDestroy(img->arrays[i]));
+            img->arrays[i] = NULL;
+        }
+        if (img->cudaImages[i].mipmapArray != NULL) {
+            CHECK_CUDA_RESULT(drv->cu->cuMipmappedArrayDestroy(img->cudaImages[i].mipmapArray));
+            img->cudaImages[i].mipmapArray = NULL;
+        }
+    }
+    if (img->extMem != NULL) {
+        CHECK_CUDA_RESULT(drv->cu->cuDestroyExternalMemory(img->extMem));
+        img->extMem = NULL;
+    }
+    return false;
+}
+
+static bool importExternalBufferToCuda(NVDriver *drv, BackingImage *img) {
+    if (img->fds[0] < 0 || img->totalSize == 0 || drv->cu->cuExternalMemoryGetMappedBuffer == NULL) {
+        return false;
+    }
+
+    int importFd = dup(img->fds[0]);
+    if (importFd < 0) {
+        return false;
+    }
+
+    CUDA_EXTERNAL_MEMORY_HANDLE_DESC extMemDesc = {
+        .type = CU_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD,
+        .handle.fd = importFd,
+        .flags = 0,
+        .size = img->totalSize
+    };
+    if (CHECK_CUDA_RESULT(drv->cu->cuImportExternalMemory(&img->extMem, &extMemDesc))) {
+        close(importFd);
+        return false;
+    }
+
+    CUDA_EXTERNAL_MEMORY_BUFFER_DESC bufferDesc = {
+        .offset = 0,
+        .size = img->totalSize,
+        .flags = 0
+    };
+    if (CHECK_CUDA_RESULT(drv->cu->cuExternalMemoryGetMappedBuffer(&img->externalDevicePtr, img->extMem, &bufferDesc))) {
+        CHECK_CUDA_RESULT(drv->cu->cuDestroyExternalMemory(img->extMem));
+        img->extMem = NULL;
+        return false;
+    }
+
+    img->externalDeviceSize = img->totalSize;
+    img->isSingleBuffer = true;
+    char fourcc[5];
+    LOG_DEBUG("Imported external %s surface as CUDA mapped buffer", fourccString((uint32_t) img->fourcc, fourcc));
+    return true;
+}
+
+static bool mapExternalBacking(BackingImage *img) {
+    if (img->fds[0] < 0 || img->totalSize == 0) {
+        return false;
+    }
+
+    img->externalMapping = mmap(NULL, img->totalSize, PROT_READ | PROT_WRITE, MAP_SHARED, img->fds[0], 0);
+    if (img->externalMapping == MAP_FAILED) {
+        img->externalMapping = NULL;
+        return false;
+    }
+    img->externalMappingSize = img->totalSize;
+    return true;
+}
+
+static BackingImage *createImportedBackingImage(NVDriver *drv, const ImportedSurface *imported, uint32_t width, uint32_t height) {
+    NVFormat format = nvFormatFromSurfaceFourcc(imported->pixelFormat);
+    if (format == NV_FORMAT_NONE || imported->numPlanes == 0 || imported->fds[0] < 0) {
+        return NULL;
+    }
+
+    BackingImage *img = calloc(1, sizeof(BackingImage));
+    if (img == NULL) {
+        return NULL;
+    }
+    for (int i = 0; i < 4; i++) {
+        img->fds[i] = -1;
+    }
+
+    img->isExternalBuffer = true;
+    img->format = format;
+    img->width = width;
+    img->height = height;
+    img->fourcc = (int) imported->pixelFormat;
+    img->totalSize = imported->dataSize;
+    for (uint32_t i = 0; i < imported->numFds && i < 4; i++) {
+        img->fds[i] = dup(imported->fds[i]);
+        if (img->fds[i] < 0) {
+            goto fail;
+        }
+        cacheBackingImageFdStat(img, (int) i);
+    }
+    off_t realSize = lseek(img->fds[0], 0, SEEK_END);
+    if (realSize > 0) {
+        img->totalSize = (uint32_t) realSize;
+        lseek(img->fds[0], 0, SEEK_SET);
+    }
+    for (uint32_t i = 0; i < imported->numPlanes && i < 4; i++) {
+        img->strides[i] = (int) imported->pitches[i];
+        img->offsets[i] = (int) imported->offsets[i];
+        img->size[i] = imported->dataSize;
+    }
+
+    BackingImage *existing = retainBackingImageByFd(drv, imported->fds[0], format, width, height);
+    if (existing != NULL) {
+        nvBackingImageCopyColorMetadata(img, existing);
+        const NVFormatInfo *fmtInfo = &formatsInfo[format];
+        for (uint32_t i = 0; i < fmtInfo->numPlanes; i++) {
+            img->arrays[i] = existing->arrays[i];
+            img->strides[i] = existing->strides[i];
+            img->offsets[i] = existing->offsets[i];
+            img->size[i] = existing->size[i];
+            img->mods[i] = existing->mods[i];
+        }
+        img->totalSize = existing->totalSize != 0 ? existing->totalSize : existing->size[0];
+        img->borrowedCudaResources = true;
+        img->borrowedBackingImage = existing;
+        LOG_DEBUG("Imported surface reused backing image color metadata: imported=%p backing=%p color_standard=%s(%d) full_range=%d",
+            img, existing, nvColorStandardName(img->colorStandard), img->colorStandard, img->colorRangeFull);
+        return img;
+    }
+
+    if (isRgbFourcc(imported->pixelFormat) && importExternalBufferToCuda(drv, img)) {
+        return img;
+    }
+
+    if (mapExternalBacking(img)) {
+        return img;
+    }
+
+    if (isRgbFourcc(imported->pixelFormat)) {
+        char fourcc[5];
+        LOG("Unable to mmap imported RGB surface %s", fourccString(imported->pixelFormat, fourcc));
+        goto fail;
+    }
+
+    if (!importExternalBackingToCuda(drv, img)) {
+        char fourcc[5];
+        LOG("Unable to import external surface %s to CUDA", fourccString(imported->pixelFormat, fourcc));
+        goto fail;
+    }
+
+    return img;
+
+fail:
+    for (int i = 0; i < 4; i++) {
+        if (img->fds[i] >= 0) {
+            close(img->fds[i]);
+        }
+    }
+    if (img->externalMapping != NULL) {
+        munmap(img->externalMapping, img->externalMappingSize);
+    }
+    free(img);
+    return NULL;
+}
+
+static BackingImage *surfaceSyncBackingImage(NVSurface *surface) {
+    if (surface == NULL || surface->backingImage == NULL) {
+        return NULL;
+    }
+    if (surface->backingImage->borrowedBackingImage != NULL) {
+        return surface->backingImage->borrowedBackingImage;
+    }
+    return surface->backingImage;
+}
+
+static void setSurfaceBackingImageResolving(NVSurface *surface, bool resolving) {
+    BackingImage *img = surfaceSyncBackingImage(surface);
+    if (img == NULL || !img->syncInitialized) {
+        return;
+    }
+
+    pthread_mutex_lock(&img->mutex);
+    img->resolving = resolving;
+    if (!resolving) {
+        pthread_cond_broadcast(&img->cond);
+    }
+    pthread_mutex_unlock(&img->mutex);
+}
+
+static void setSurfaceResolving(NVSurface *surface, bool resolving) {
+    if (surface == NULL) {
+        return;
+    }
+
+    setSurfaceBackingImageResolving(surface, resolving);
+
+    pthread_mutex_lock(&surface->mutex);
+    surface->resolving = resolving ? 1 : 0;
+    if (!resolving) {
+        pthread_cond_broadcast(&surface->cond);
+    }
+    pthread_mutex_unlock(&surface->mutex);
+}
+
+static void waitSurfaceResolved(NVSurface *surface) {
+    if (surface == NULL) {
+        return;
+    }
+
+    pthread_mutex_lock(&surface->mutex);
+    while (surface->resolving) {
+        pthread_cond_wait(&surface->cond, &surface->mutex);
+    }
+    pthread_mutex_unlock(&surface->mutex);
+
+    BackingImage *img = surfaceSyncBackingImage(surface);
+    if (img == NULL || !img->syncInitialized) {
+        return;
+    }
+
+    pthread_mutex_lock(&img->mutex);
+    while (img->resolving) {
+        pthread_cond_wait(&img->cond, &img->mutex);
+    }
+    pthread_mutex_unlock(&img->mutex);
+}
+
 static VAStatus nvCreateSurfaces2(
             VADriverContextP    ctx,
             unsigned int        format,
@@ -921,6 +1531,10 @@ static VAStatus nvCreateSurfaces2(
         )
 {
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
+    ImportedSurface imported;
+    parseSurfaceImportAttributes(attrib_list, num_attribs, &imported);
+    const bool importSurface = imported.valid;
+    uint32_t surfaceFourcc = importSurface ? imported.pixelFormat : 0;
 
     cudaVideoSurfaceFormat nvFormat;
     cudaVideoChromaFormat chromaFormat;
@@ -958,6 +1572,11 @@ static VAStatus nvCreateSurfaces2(
         chromaFormat = cudaVideoChromaFormat_444;
         bitdepth = 12;
         break;
+    case VA_RT_FORMAT_RGB32:
+        nvFormat = cudaVideoSurfaceFormat_NV12;
+        chromaFormat = cudaVideoChromaFormat_444;
+        bitdepth = 8;
+        break;
     
     default:
         LOG("Unknown format: %X", format);
@@ -987,6 +1606,7 @@ static VAStatus nvCreateSurfaces2(
         suf->width = width;
         suf->height = height;
         suf->format = nvFormat;
+        suf->fourcc = surfaceFourcc != 0 ? (int) surfaceFourcc : (format == VA_RT_FORMAT_RGB32 ? VA_FOURCC_ARGB : 0);
         suf->pictureIdx = -1;
         suf->bitDepth = bitdepth;
         suf->context = NULL;
@@ -994,7 +1614,27 @@ static VAStatus nvCreateSurfaces2(
         pthread_mutex_init(&suf->mutex, NULL);
         pthread_cond_init(&suf->cond, NULL);
 
-        LOG("Creating surface %ux%u, format %X (%p)", width, height, format, suf);
+        if (importSurface) {
+            BackingImage *img = createImportedBackingImage(drv, &imported, width, height);
+            if (img == NULL) {
+                // Roll back every surface object allocated in this call, including
+                // the current one, so a failed import doesn't leak them.
+                for (uint32_t j = 0; j <= i; j++) {
+                    deleteObject(drv, surfaces[j]);
+                }
+                CHECK_CUDA_RESULT_RETURN(cu->cuCtxPopCurrent(NULL), VA_STATUS_ERROR_OPERATION_FAILED);
+                return VA_STATUS_ERROR_ALLOCATION_FAILED;
+            }
+            suf->backingImage = img;
+            img->surface = suf;
+            nvSurfaceCopyColorMetadataFromBackingImage(suf, img);
+            char fourcc[5];
+            LOG_DEBUG("Importing surface %ux%u, format %X/%s (%p) color_standard=%s(%d) full_range=%d",
+                width, height, format, fourccString(surfaceFourcc, fourcc), suf,
+                nvColorStandardName(suf->colorStandard), suf->colorStandard, suf->colorRangeFull);
+        } else {
+            LOG_DEBUG("Creating surface %ux%u, format %X (%p)", width, height, format, suf);
+        }
     }
 
     CHECK_CUDA_RESULT_RETURN(cu->cuCtxPopCurrent(NULL), VA_STATUS_ERROR_OPERATION_FAILED);
@@ -1029,7 +1669,7 @@ static VAStatus nvDestroySurfaces(
             return VA_STATUS_ERROR_INVALID_SURFACE;
         }
 
-        LOG("Destroying surface %d (%p)", surface->pictureIdx, surface);
+        LOG_DEBUG("Destroying surface %d (%p)", surface->pictureIdx, surface);
 
         drv->backend->detachBackingImageFromSurface(drv, surface);
 
@@ -1055,6 +1695,32 @@ static VAStatus nvCreateContext(
 
     if (cfg == NULL) {
         return VA_STATUS_ERROR_INVALID_CONFIG;
+    }
+
+    if (cfg->entrypoint == VAEntrypointVideoProc) {
+        Object contextObj = allocateObject(drv, OBJECT_TYPE_CONTEXT, sizeof(NVContext));
+        LOG("Creating VideoProc context id: %d", contextObj->id);
+
+        NVContext *nvCtx = (NVContext*) contextObj->obj;
+        nvCtx->drv = drv;
+        nvCtx->decoder = NULL;
+        nvCtx->profile = cfg->profile;
+        nvCtx->entrypoint = cfg->entrypoint;
+        nvCtx->width = picture_width;
+        nvCtx->height = picture_height;
+        nvCtx->codec = NULL;
+
+        pthread_mutexattr_t attrib;
+        pthread_mutexattr_init(&attrib);
+        pthread_mutexattr_settype(&attrib, PTHREAD_MUTEX_RECURSIVE);
+        pthread_mutex_init(&nvCtx->surfaceCreationMutex, &attrib);
+        pthread_mutexattr_destroy(&attrib);
+
+        pthread_mutex_init(&nvCtx->resolveMutex, NULL);
+        pthread_cond_init(&nvCtx->resolveCondition, NULL);
+
+        *context = contextObj->id;
+        return VA_STATUS_SUCCESS;
     }
 
     LOG("Creating context with %d render targets, at %dx%d", num_render_targets, picture_width, picture_height);
@@ -1136,6 +1802,7 @@ static VAStatus nvCreateContext(
 
     CUvideodecoder decoder;
     CHECK_CUDA_RESULT_RETURN(cv->cuvidCreateDecoder(&decoder, &vdci), VA_STATUS_ERROR_ALLOCATION_FAILED);
+    nvStatsIncrement(drv, NV_STAT_DECODER_CREATES);
 
     CHECK_CUDA_RESULT_RETURN(cu->cuCtxPopCurrent(NULL), VA_STATUS_ERROR_OPERATION_FAILED);
 
@@ -1150,6 +1817,10 @@ static VAStatus nvCreateContext(
     nvCtx->width = picture_width;
     nvCtx->height = picture_height;
     nvCtx->codec = selectedCodec;
+    nvCtx->cudaCodec = cfg->cudaCodec;
+    nvCtx->decoderSurfaceFormat = cfg->surfaceFormat;
+    nvCtx->decoderChromaFormat = cfg->chromaFormat;
+    nvCtx->decoderBitDepth = cfg->bitDepth;
     nvCtx->surfaceCount = surfaceCount;
     nvCtx->firstKeyframeValid = false;
     
@@ -1194,6 +1865,74 @@ static VAStatus nvDestroyContext(
     deleteObject(drv, context);
 
     return ret;
+}
+
+static VAStatus recreateDecoderForSurface(NVContext *nvCtx, NVSurface *surface) {
+    if (nvCtx->decoderSurfaceFormat == surface->format &&
+        nvCtx->decoderChromaFormat == surface->chromaFormat &&
+        nvCtx->decoderBitDepth == surface->bitDepth) {
+        return VA_STATUS_SUCCESS;
+    }
+
+    if (nvCtx->currentPictureId != 0) {
+        LOG("Decoder/surface format mismatch after decode start: decoder format=%d chroma=%d bitDepth=%d, surface format=%d chroma=%d bitDepth=%d",
+            nvCtx->decoderSurfaceFormat, nvCtx->decoderChromaFormat, nvCtx->decoderBitDepth,
+            surface->format, surface->chromaFormat, surface->bitDepth);
+        return VA_STATUS_ERROR_OPERATION_FAILED;
+    }
+
+    int display_area_width = nvCtx->width;
+    int display_area_height = nvCtx->height;
+
+    switch(surface->chromaFormat) {
+        case cudaVideoChromaFormat_422:
+            display_area_width = ROUND_UP(display_area_width, 2);
+            break;
+        case cudaVideoChromaFormat_420:
+            display_area_width = ROUND_UP(display_area_width, 2);
+            display_area_height = ROUND_UP(display_area_height, 2);
+            break;
+        default:
+            break;
+    }
+
+    CUVIDDECODECREATEINFO vdci = {
+        .ulWidth             = vdci.ulMaxWidth  = vdci.ulTargetWidth  = nvCtx->width,
+        .ulHeight            = vdci.ulMaxHeight = vdci.ulTargetHeight = nvCtx->height,
+        .CodecType           = nvCtx->cudaCodec,
+        .ulCreationFlags     = cudaVideoCreate_PreferCUVID,
+        .ulIntraDecodeOnly   = 0,
+        .display_area.right  = display_area_width,
+        .display_area.bottom = display_area_height,
+        .ChromaFormat        = surface->chromaFormat,
+        .OutputFormat        = surface->format,
+        .bitDepthMinus8      = surface->bitDepth - 8,
+        .DeinterlaceMode     = cudaVideoDeinterlaceMode_Weave,
+        .ulNumOutputSurfaces = 1,
+        .ulNumDecodeSurfaces = nvCtx->surfaceCount,
+    };
+
+    NVDriver *drv = nvCtx->drv;
+    CHECK_CUDA_RESULT_RETURN(cu->cuCtxPushCurrent(drv->cudaContext), VA_STATUS_ERROR_OPERATION_FAILED);
+    if (nvCtx->decoder != NULL) {
+        CHECK_CUDA_RESULT(cv->cuvidDestroyDecoder(nvCtx->decoder));
+        nvCtx->decoder = NULL;
+    }
+
+    CUvideodecoder decoder;
+    CUresult result = cv->cuvidCreateDecoder(&decoder, &vdci);
+    CHECK_CUDA_RESULT_RETURN(cu->cuCtxPopCurrent(NULL), VA_STATUS_ERROR_OPERATION_FAILED);
+    if (result != CUDA_SUCCESS) {
+        LOG("cuvidCreateDecoder failed while matching first surface: %d", result);
+        return VA_STATUS_ERROR_ALLOCATION_FAILED;
+    }
+
+    nvCtx->decoder = decoder;
+    nvCtx->decoderSurfaceFormat = surface->format;
+    nvCtx->decoderChromaFormat = surface->chromaFormat;
+    nvCtx->decoderBitDepth = surface->bitDepth;
+    nvStatsIncrement(drv, NV_STAT_DECODER_CREATES);
+    return VA_STATUS_SUCCESS;
 }
 
 static VAStatus nvCreateBuffer(
@@ -1304,6 +2043,807 @@ static VAStatus nvDestroyBuffer(
     return VA_STATUS_SUCCESS;
 }
 
+static uint8_t clampU8(int value) {
+    if (value < 0) {
+        return 0;
+    }
+    if (value > 255) {
+        return 255;
+    }
+    return (uint8_t) value;
+}
+
+typedef struct {
+    int vToR;
+    int uToG;
+    int vToG;
+    int uToB;
+} ColorMatrix;
+
+typedef struct {
+    int sampleShift;
+    int yScale;
+    int yOffset;
+    int uvOffset;
+    int rounding;
+    int valueShift;
+} VideoProcSampleInfo;
+
+static const ColorMatrix kLimitedRangeColorMatrices[] = {
+    { 409, 100, 208, 516 },
+    { 459,  55, 136, 541 },
+    { 430,  48, 167, 548 },
+};
+
+static const ColorMatrix kFullRangeColorMatrices[] = {
+    { 359,  88, 183, 454 },
+    { 403,  48, 120, 475 },
+    { 377,  42, 146, 482 },
+};
+
+static const char *colorMatrixName(const ColorMatrix *matrix) {
+    if (matrix == &kLimitedRangeColorMatrices[0] || matrix == &kFullRangeColorMatrices[0]) {
+        return "BT.601";
+    }
+    if (matrix == &kLimitedRangeColorMatrices[1] || matrix == &kFullRangeColorMatrices[1]) {
+        return "BT.709";
+    }
+    if (matrix == &kLimitedRangeColorMatrices[2] || matrix == &kFullRangeColorMatrices[2]) {
+        return "BT.2020";
+    }
+    return "unknown";
+}
+
+static const char *sourceRangeName(uint8_t range) {
+    switch (range) {
+    case VA_SOURCE_RANGE_FULL:
+        return "full";
+    case VA_SOURCE_RANGE_REDUCED:
+        return "limited";
+    case VA_SOURCE_RANGE_UNKNOWN:
+    default:
+        return "unknown";
+    }
+}
+
+static const char *effectiveRangeName(bool fullRange) {
+    return fullRange ? "full" : "limited";
+}
+
+VAProcColorStandardType nvColorStandardFromMatrixCoefficients(uint8_t matrixCoefficients) {
+    switch (matrixCoefficients) {
+    case 1:
+        return VAProcColorStandardBT709;
+    case 4:
+        return VAProcColorStandardBT470M;
+    case 5:
+        return VAProcColorStandardBT470BG;
+    case 6:
+        return VAProcColorStandardSMPTE170M;
+    case 7:
+        return VAProcColorStandardSMPTE240M;
+    case 9:
+        return VAProcColorStandardBT2020;
+    default:
+        return VAProcColorStandardNone;
+    }
+}
+
+void nvSurfaceResetColorMetadata(NVSurface *surface) {
+    if (surface == NULL) {
+        return;
+    }
+
+    surface->colorStandard = VAProcColorStandardNone;
+    surface->colorRangeFull = false;
+}
+
+void nvSurfaceSetColorMetadata(NVSurface *surface, VAProcColorStandardType colorStandard, bool colorRangeFull) {
+    if (surface == NULL) {
+        return;
+    }
+
+    surface->colorStandard = colorStandard;
+    surface->colorRangeFull = colorRangeFull;
+}
+
+void nvSurfaceCopyColorMetadata(NVSurface *dst, const NVSurface *src) {
+    if (dst == NULL || src == NULL) {
+        return;
+    }
+
+    dst->colorStandard = src->colorStandard;
+    dst->colorRangeFull = src->colorRangeFull;
+}
+
+static BackingImage *metadataBackingImage(BackingImage *img) {
+    if (img != NULL && img->borrowedBackingImage != NULL) {
+        return img->borrowedBackingImage;
+    }
+    return img;
+}
+
+static const BackingImage *constMetadataBackingImage(const BackingImage *img) {
+    if (img != NULL && img->borrowedBackingImage != NULL) {
+        return img->borrowedBackingImage;
+    }
+    return img;
+}
+
+void nvSurfaceCopyColorMetadataFromBackingImage(NVSurface *surface, const BackingImage *img) {
+    const BackingImage *metadataImg = constMetadataBackingImage(img);
+    if (surface == NULL || metadataImg == NULL) {
+        return;
+    }
+
+    surface->colorStandard = metadataImg->colorStandard;
+    surface->colorRangeFull = metadataImg->colorRangeFull;
+}
+
+void nvBackingImageStoreSurfaceColorMetadata(BackingImage *img, const NVSurface *surface) {
+    BackingImage *metadataImg = metadataBackingImage(img);
+    if (metadataImg == NULL || surface == NULL) {
+        return;
+    }
+
+    metadataImg->colorStandard = surface->colorStandard;
+    metadataImg->colorRangeFull = surface->colorRangeFull;
+}
+
+void nvBackingImageCopyColorMetadata(BackingImage *dst, const BackingImage *src) {
+    const BackingImage *metadataSrc = constMetadataBackingImage(src);
+    if (dst == NULL || metadataSrc == NULL) {
+        return;
+    }
+
+    dst->colorStandard = metadataSrc->colorStandard;
+    dst->colorRangeFull = metadataSrc->colorRangeFull;
+}
+
+const char *nvColorStandardName(VAProcColorStandardType colorStandard) {
+    switch (colorStandard) {
+    case VAProcColorStandardNone:
+        return "None";
+    case VAProcColorStandardBT601:
+        return "BT.601";
+    case VAProcColorStandardBT709:
+        return "BT.709";
+    case VAProcColorStandardBT470M:
+        return "BT.470M";
+    case VAProcColorStandardBT470BG:
+        return "BT.470BG";
+    case VAProcColorStandardSMPTE170M:
+        return "SMPTE170M";
+    case VAProcColorStandardSMPTE240M:
+        return "SMPTE240M";
+    case VAProcColorStandardGenericFilm:
+        return "GenericFilm";
+    case VAProcColorStandardSRGB:
+        return "sRGB";
+    case VAProcColorStandardSTRGB:
+        return "stRGB";
+    case VAProcColorStandardXVYCC601:
+        return "xvYCC601";
+    case VAProcColorStandardXVYCC709:
+        return "xvYCC709";
+    case VAProcColorStandardBT2020:
+        return "BT.2020";
+    case VAProcColorStandardExplicit:
+        return "Explicit";
+    default:
+        return "unknown";
+    }
+}
+
+static const ColorMatrix *colorMatrixForStandard(VAProcColorStandardType colorStandard, uint32_t width, bool fullRange) {
+    const ColorMatrix *matrices = fullRange ? kFullRangeColorMatrices : kLimitedRangeColorMatrices;
+
+    switch (colorStandard) {
+    case VAProcColorStandardBT601:
+    case VAProcColorStandardSMPTE170M:
+    case VAProcColorStandardBT470M:
+    case VAProcColorStandardBT470BG:
+        return &matrices[0];
+    case VAProcColorStandardBT709:
+    case VAProcColorStandardSMPTE240M:
+        return &matrices[1];
+    case VAProcColorStandardBT2020:
+        return &matrices[2];
+    case VAProcColorStandardNone:
+    default:
+        return width >= 1280 ? &matrices[1] : &matrices[0];
+    }
+}
+
+static VAProcColorStandardType effectiveSurfaceColorStandard(const NVSurface *src, const VAProcPipelineParameterBuffer *pipeline) {
+    if (pipeline->surface_color_standard == VAProcColorStandardExplicit) {
+        return nvColorStandardFromMatrixCoefficients(pipeline->input_color_properties.matrix_coefficients);
+    }
+    if (pipeline->surface_color_standard != VAProcColorStandardNone) {
+        return pipeline->surface_color_standard;
+    }
+    if (src != NULL && src->colorStandard != VAProcColorStandardNone) {
+        return src->colorStandard;
+    }
+    return VAProcColorStandardNone;
+}
+
+static bool effectiveSurfaceColorRangeFull(const NVSurface *src, const VAProcPipelineParameterBuffer *pipeline) {
+    if (pipeline->input_color_properties.color_range == VA_SOURCE_RANGE_FULL) {
+        return true;
+    }
+    if (pipeline->input_color_properties.color_range == VA_SOURCE_RANGE_REDUCED) {
+        return false;
+    }
+    return src != NULL && src->colorRangeFull;
+}
+
+static VideoProcSampleInfo videoProcSampleInfoForFormat(NVFormat format, bool fullRange) {
+    const int yScale = fullRange ? 256 : 298;
+    switch (format) {
+    case NV_FORMAT_P010:
+        return (VideoProcSampleInfo) { 6, yScale, fullRange ? 0 : 64, 512, 512, 10 };
+    case NV_FORMAT_P012:
+        return (VideoProcSampleInfo) { 4, yScale, fullRange ? 0 : 256, 2048, 2048, 12 };
+    case NV_FORMAT_NV12:
+    default:
+        return (VideoProcSampleInfo) { 0, yScale, fullRange ? 0 : 16, 128, 128, 8 };
+    }
+}
+
+static bool loadVideoProcKernel(NVDriver *drv, bool is16Bit) {
+    if (is16Bit) {
+        static bool loggedP010KernelFailure = false;
+
+        if (drv->p010ToArgbKernel != NULL) {
+            return true;
+        }
+        if (drv->videoProcKernelP010Failed) {
+            return false;
+        }
+
+        if (CHECK_CUDA_RESULT(drv->cu->cuModuleLoadData(&drv->videoProcModuleP010, p010ToArgbPtx)) ||
+            CHECK_CUDA_RESULT(drv->cu->cuModuleGetFunction(&drv->p010ToArgbKernel, drv->videoProcModuleP010, "p010_to_argb"))) {
+            if (drv->videoProcModuleP010 != NULL) {
+                CHECK_CUDA_RESULT(drv->cu->cuModuleUnload(drv->videoProcModuleP010));
+                drv->videoProcModuleP010 = NULL;
+            }
+            drv->p010ToArgbKernel = NULL;
+            drv->videoProcKernelP010Failed = true;
+            if (!loggedP010KernelFailure) {
+                LOG("CUDA P010 VideoProc kernel unavailable, using CPU fallback");
+                loggedP010KernelFailure = true;
+            }
+            return false;
+        }
+
+        return true;
+    } else {
+        static bool loggedNV12KernelFailure = false;
+
+        if (drv->nv12ToArgbKernel != NULL) {
+            return true;
+        }
+        if (drv->videoProcKernelFailed) {
+            return false;
+        }
+
+        if (CHECK_CUDA_RESULT(drv->cu->cuModuleLoadData(&drv->videoProcModule, nv12ToArgbPtx)) ||
+            CHECK_CUDA_RESULT(drv->cu->cuModuleGetFunction(&drv->nv12ToArgbKernel, drv->videoProcModule, "nv12_to_argb"))) {
+            if (drv->videoProcModule != NULL) {
+                CHECK_CUDA_RESULT(drv->cu->cuModuleUnload(drv->videoProcModule));
+                drv->videoProcModule = NULL;
+            }
+            drv->nv12ToArgbKernel = NULL;
+            drv->videoProcKernelFailed = true;
+            if (!loggedNV12KernelFailure) {
+                LOG("CUDA NV12 VideoProc kernel unavailable, using CPU fallback");
+                loggedNV12KernelFailure = true;
+            }
+            return false;
+        }
+
+        return true;
+    }
+}
+
+static uint32_t rgbOrderForFourcc(uint32_t fourcc) {
+    switch (fourcc) {
+    case VA_FOURCC_RGBA:
+    case VA_FOURCC_RGBX:
+        return 1;
+    case VA_FOURCC_ARGB:
+    case VA_FOURCC_XRGB:
+        return 2;
+    case VA_FOURCC_ABGR:
+    case VA_FOURCC_XBGR:
+        return 3;
+    case VA_FOURCC_BGRA:
+    case VA_FOURCC_BGRX:
+    default:
+        return 0;
+    }
+}
+
+static size_t roundVideoProcBufferSize(size_t requiredSize) {
+    const size_t blockSize = 1024 * 1024;
+    if (requiredSize > SIZE_MAX - (blockSize - 1)) {
+        return requiredSize;
+    }
+    return (requiredSize + blockSize - 1) & ~(blockSize - 1);
+}
+
+static bool ensureVideoProcBuffer(NVDriver *drv, CUdeviceptr *buffer, size_t *bufferSize, size_t requiredSize) {
+    if (*bufferSize >= requiredSize && *buffer != 0) {
+        return true;
+    }
+    if (*buffer != 0 && CHECK_CUDA_RESULT(drv->cu->cuMemFree(*buffer))) {
+        *buffer = 0;
+        *bufferSize = 0;
+        return false;
+    }
+    *buffer = 0;
+    *bufferSize = 0;
+    const size_t allocSize = roundVideoProcBufferSize(requiredSize);
+    if (CHECK_CUDA_RESULT(drv->cu->cuMemAlloc(buffer, allocSize))) {
+        return false;
+    }
+    *bufferSize = allocSize;
+    return true;
+}
+
+static bool ensureCpuVideoProcBuffer(void **buffer, size_t *bufferSize, size_t requiredSize) {
+    if (*bufferSize >= requiredSize && *buffer != NULL) {
+        return true;
+    }
+
+    const size_t allocSize = roundVideoProcBufferSize(requiredSize);
+    void *newBuffer = realloc(*buffer, allocSize);
+    if (newBuffer == NULL) {
+        return false;
+    }
+
+    *buffer = newBuffer;
+    *bufferSize = allocSize;
+    return true;
+}
+
+static void writeRgbPixel(uint8_t *dst, uint32_t fourcc, uint8_t r, uint8_t g, uint8_t b) {
+    switch (fourcc) {
+    case VA_FOURCC_RGBA:
+    case VA_FOURCC_RGBX:
+        dst[0] = r;
+        dst[1] = g;
+        dst[2] = b;
+        dst[3] = 255;
+        break;
+    case VA_FOURCC_BGRA:
+    case VA_FOURCC_BGRX:
+        dst[0] = b;
+        dst[1] = g;
+        dst[2] = r;
+        dst[3] = 255;
+        break;
+    case VA_FOURCC_ARGB:
+    case VA_FOURCC_XRGB:
+        dst[0] = 255;
+        dst[1] = r;
+        dst[2] = g;
+        dst[3] = b;
+        break;
+    case VA_FOURCC_ABGR:
+    case VA_FOURCC_XBGR:
+        dst[0] = 255;
+        dst[1] = b;
+        dst[2] = g;
+        dst[3] = r;
+        break;
+    default:
+        dst[0] = b;
+        dst[1] = g;
+        dst[2] = r;
+        dst[3] = 255;
+        break;
+    }
+}
+
+static bool convertNV12ToARGBCuda(NVDriver *drv, BackingImage *srcImg, BackingImage *dstImg, uint32_t width, uint32_t height, bool is16Bit, const ColorMatrix *matrix, VideoProcSampleInfo sampleInfo) {
+    if (srcImg->arrays[0] == NULL || srcImg->arrays[1] == NULL) {
+        return false;
+    }
+
+    const size_t bpp = is16Bit ? 2 : 1;
+    const size_t ySize = (size_t) width * height * bpp;
+    const size_t uvHeight = (height + 1) / 2;
+    const size_t uvSize = (size_t) width * uvHeight * bpp;
+    const size_t argbSize = (size_t) width * height * 4;
+    CUdeviceptr dstDevice = dstImg->externalDevicePtr != 0 ? dstImg->externalDevicePtr + (CUdeviceptr) dstImg->offsets[0] : drv->videoProcArgbBuffer;
+    uint32_t dstPitch = dstImg->externalDevicePtr != 0 ? (uint32_t) dstImg->strides[0] : width * 4;
+
+    pthread_mutex_lock(&drv->exportMutex);
+    if (!loadVideoProcKernel(drv, is16Bit) ||
+        !ensureVideoProcBuffer(drv, &drv->videoProcYBuffer, &drv->videoProcYBufferSize, ySize) ||
+        !ensureVideoProcBuffer(drv, &drv->videoProcUVBuffer, &drv->videoProcUVBufferSize, uvSize)) {
+        goto fail;
+    }
+    if (dstImg->externalDevicePtr == 0 &&
+        !ensureVideoProcBuffer(drv, &drv->videoProcArgbBuffer, &drv->videoProcArgbBufferSize, argbSize)) {
+        goto fail;
+    }
+    if (dstImg->externalDevicePtr == 0) {
+        dstDevice = drv->videoProcArgbBuffer;
+    }
+
+    CUDA_MEMCPY2D yCpy = {
+        .srcMemoryType = CU_MEMORYTYPE_ARRAY,
+        .srcArray = srcImg->arrays[0],
+        .dstMemoryType = CU_MEMORYTYPE_DEVICE,
+        .dstDevice = drv->videoProcYBuffer,
+        .dstPitch = width * bpp,
+        .WidthInBytes = width * bpp,
+        .Height = height
+    };
+    CUDA_MEMCPY2D uvCpy = {
+        .srcMemoryType = CU_MEMORYTYPE_ARRAY,
+        .srcArray = srcImg->arrays[1],
+        .dstMemoryType = CU_MEMORYTYPE_DEVICE,
+        .dstDevice = drv->videoProcUVBuffer,
+        .dstPitch = width * bpp,
+        .WidthInBytes = width * bpp,
+        .Height = uvHeight
+    };
+    // Queue the two input copies async on stream 0; the kernel below runs on
+    // the same stream so it observes them in order, and the frame is fully
+    // synchronised before we signal completion (cuStreamSynchronize for an
+    // external dst, or the synchronous ARGB copy-back otherwise). This drops two
+    // host-side blocking waits per converted frame.
+    if (CHECK_CUDA_RESULT(drv->cu->cuMemcpy2DAsync(&yCpy, 0)) ||
+        CHECK_CUDA_RESULT(drv->cu->cuMemcpy2DAsync(&uvCpy, 0))) {
+        goto fail;
+    }
+
+    uint32_t yPitch = width * bpp;
+    uint32_t uvPitch = width * bpp;
+    uint32_t order = rgbOrderForFourcc((uint32_t) dstImg->fourcc);
+    uint32_t vToR = (uint32_t) matrix->vToR;
+    uint32_t uToG = (uint32_t) matrix->uToG;
+    uint32_t vToG = (uint32_t) matrix->vToG;
+    uint32_t uToB = (uint32_t) matrix->uToB;
+    uint32_t yScale = (uint32_t) sampleInfo.yScale;
+    uint32_t sampleShift = (uint32_t) sampleInfo.sampleShift;
+    uint32_t yOffset = (uint32_t) sampleInfo.yOffset;
+    uint32_t uvOffset = (uint32_t) sampleInfo.uvOffset;
+    uint32_t rounding = (uint32_t) sampleInfo.rounding;
+    uint32_t valueShift = (uint32_t) sampleInfo.valueShift;
+    void *nv12Args[] = {
+        &drv->videoProcYBuffer,
+        &drv->videoProcUVBuffer,
+        &dstDevice,
+        &width,
+        &height,
+        &yPitch,
+        &uvPitch,
+        &dstPitch,
+        &order,
+        &vToR,
+        &uToG,
+        &vToG,
+        &uToB,
+        &yScale,
+        &yOffset,
+        &uvOffset,
+        &rounding,
+        &valueShift
+    };
+    void *p010Args[] = {
+        &drv->videoProcYBuffer,
+        &drv->videoProcUVBuffer,
+        &dstDevice,
+        &width,
+        &height,
+        &yPitch,
+        &uvPitch,
+        &dstPitch,
+        &order,
+        &vToR,
+        &uToG,
+        &vToG,
+        &uToB,
+        &yScale,
+        &sampleShift,
+        &yOffset,
+        &uvOffset,
+        &rounding,
+        &valueShift
+    };
+    void **args = is16Bit ? p010Args : nv12Args;
+    CUfunction kernel = is16Bit ? drv->p010ToArgbKernel : drv->nv12ToArgbKernel;
+    if (CHECK_CUDA_RESULT(drv->cu->cuLaunchKernel(kernel,
+            (width + 15) / 16, (height + 15) / 16, 1,
+            16, 16, 1, 0, 0, args, NULL))) {
+        goto fail;
+    }
+
+    if (dstImg->externalDevicePtr == 0) {
+        CUDA_MEMCPY2D argbCpy = {
+            .srcMemoryType = CU_MEMORYTYPE_DEVICE,
+            .srcDevice = drv->videoProcArgbBuffer,
+            .srcPitch = width * 4,
+            .dstMemoryType = CU_MEMORYTYPE_ARRAY,
+            .dstArray = dstImg->arrays[0],
+            .WidthInBytes = width * 4,
+            .Height = height
+        };
+        if (CHECK_CUDA_RESULT(drv->cu->cuMemcpy2D(&argbCpy))) {
+            goto fail;
+        }
+    } else if (CHECK_CUDA_RESULT(drv->cu->cuStreamSynchronize(0))) {
+        goto fail;
+    }
+
+    pthread_mutex_unlock(&drv->exportMutex);
+    return true;
+
+fail:
+    pthread_mutex_unlock(&drv->exportMutex);
+    return false;
+}
+
+static bool convertNV12ToARGB(NVDriver *drv, BackingImage *srcImg, BackingImage *dstImg, uint32_t width, uint32_t height, const ColorMatrix *matrix, VideoProcSampleInfo sampleInfo) {
+    const bool is16Bit = srcImg->format == NV_FORMAT_P010 || srcImg->format == NV_FORMAT_P012;
+    const char *formatName = is16Bit ? "P010/P012" : "NV12";
+
+    if (dstImg->externalMapping == NULL || dstImg->externalDevicePtr != 0) {
+        if (convertNV12ToARGBCuda(drv, srcImg, dstImg, width, height, is16Bit, matrix, sampleInfo)) {
+            nvStatsIncrement(drv, NV_STAT_VIDEOPROC_CUDA);
+            static bool loggedCudaVideoProc[2] = { false, false };
+            const int logIndex = is16Bit ? 1 : 0;
+            if (!loggedCudaVideoProc[logIndex]) {
+                LOG("Using CUDA %s to RGB VideoProc conversion", formatName);
+                loggedCudaVideoProc[logIndex] = true;
+            }
+            return true;
+        }
+        nvStatsIncrement(drv, NV_STAT_VIDEOPROC_CUDA_FAILURES);
+        static bool loggedCudaFallback[2] = { false, false };
+        const int logIndex = is16Bit ? 1 : 0;
+        if (!loggedCudaFallback[logIndex]) {
+            LOG("CUDA %s to RGB conversion failed, falling back to CPU", formatName);
+            loggedCudaFallback[logIndex] = true;
+        }
+    }
+    nvStatsIncrement(drv, NV_STAT_VIDEOPROC_CPU_FALLBACK);
+
+    const size_t bpp = is16Bit ? 2 : 1;
+    const size_t ySize = (size_t) width * height * bpp;
+    const size_t uvSize = (size_t) width * ((height + 1) / 2) * bpp;
+    const size_t argbSize = (size_t) width * height * 4;
+
+    pthread_mutex_lock(&drv->exportMutex);
+
+    if (!ensureCpuVideoProcBuffer(&drv->cpuVideoProcYBuffer, &drv->cpuVideoProcYBufferSize, ySize) ||
+        !ensureCpuVideoProcBuffer(&drv->cpuVideoProcUVBuffer, &drv->cpuVideoProcUVBufferSize, uvSize)) {
+        goto fail;
+    }
+    if (dstImg->externalMapping == NULL &&
+        !ensureCpuVideoProcBuffer(&drv->cpuVideoProcArgbBuffer, &drv->cpuVideoProcArgbBufferSize, argbSize)) {
+        goto fail;
+    }
+
+    uint8_t *yPlane = drv->cpuVideoProcYBuffer;
+    uint8_t *uvPlane = drv->cpuVideoProcUVBuffer;
+    uint8_t *argb = dstImg->externalMapping == NULL ? drv->cpuVideoProcArgbBuffer : NULL;
+
+    if (srcImg->externalMapping != NULL) {
+        const uint8_t *srcY = (const uint8_t*) srcImg->externalMapping + srcImg->offsets[0];
+        const uint8_t *srcUV = (const uint8_t*) srcImg->externalMapping + srcImg->offsets[1];
+        for (uint32_t y = 0; y < height; y++) {
+            memcpy(yPlane + (size_t) y * width * bpp, srcY + (size_t) y * srcImg->strides[0], width * bpp);
+        }
+        for (uint32_t y = 0; y < (height + 1) / 2; y++) {
+            memcpy(uvPlane + (size_t) y * width * bpp, srcUV + (size_t) y * srcImg->strides[1], width * bpp);
+        }
+    } else {
+        CUDA_MEMCPY2D yCpy = {
+            .srcMemoryType = CU_MEMORYTYPE_ARRAY,
+            .srcArray = srcImg->arrays[0],
+            .dstMemoryType = CU_MEMORYTYPE_HOST,
+            .dstHost = yPlane,
+            .dstPitch = width * bpp,
+            .WidthInBytes = width * bpp,
+            .Height = height
+        };
+        CUDA_MEMCPY2D uvCpy = {
+            .srcMemoryType = CU_MEMORYTYPE_ARRAY,
+            .srcArray = srcImg->arrays[1],
+            .dstMemoryType = CU_MEMORYTYPE_HOST,
+            .dstHost = uvPlane,
+            .dstPitch = width * bpp,
+            .WidthInBytes = width * bpp,
+            .Height = (height + 1) / 2
+        };
+
+        if (CHECK_CUDA_RESULT(drv->cu->cuMemcpy2D(&yCpy)) ||
+            CHECK_CUDA_RESULT(drv->cu->cuMemcpy2D(&uvCpy))) {
+            goto fail;
+        }
+    }
+
+    for (uint32_t y = 0; y < height; y++) {
+        for (uint32_t x = 0; x < width; x++) {
+            int yy, u, v;
+            if (is16Bit) {
+                const uint16_t *yPlane16 = (const uint16_t*) yPlane;
+                const uint16_t *uvPlane16 = (const uint16_t*) uvPlane;
+                yy = yPlane16[(size_t) y * width + x] >> sampleInfo.sampleShift;
+                const size_t uvIndex = (size_t) (y / 2) * width + (x & ~1u);
+                u = uvPlane16[uvIndex] >> sampleInfo.sampleShift;
+                v = uvPlane16[uvIndex + 1] >> sampleInfo.sampleShift;
+            } else {
+                yy = yPlane[(size_t) y * width + x];
+                const size_t uvIndex = (size_t) (y / 2) * width + (x & ~1u);
+                u = uvPlane[uvIndex];
+                v = uvPlane[uvIndex + 1];
+            }
+            const int c = yy > sampleInfo.yOffset ? yy - sampleInfo.yOffset : 0;
+            const int d = u - sampleInfo.uvOffset;
+            const int e = v - sampleInfo.uvOffset;
+            const uint8_t r = clampU8((sampleInfo.yScale * c + matrix->vToR * e + sampleInfo.rounding) >> sampleInfo.valueShift);
+            const uint8_t g = clampU8((sampleInfo.yScale * c - matrix->uToG * d - matrix->vToG * e + sampleInfo.rounding) >> sampleInfo.valueShift);
+            const uint8_t b = clampU8((sampleInfo.yScale * c + matrix->uToB * d + sampleInfo.rounding) >> sampleInfo.valueShift);
+            if (dstImg->externalMapping != NULL) {
+                uint8_t *row = (uint8_t*) dstImg->externalMapping + dstImg->offsets[0] + (size_t) y * dstImg->strides[0];
+                writeRgbPixel(row + (size_t) x * 4, (uint32_t) dstImg->fourcc, r, g, b);
+            } else {
+                const size_t out = ((size_t) y * width + x) * 4;
+                argb[out + 0] = b;
+                argb[out + 1] = g;
+                argb[out + 2] = r;
+                argb[out + 3] = 255;
+            }
+        }
+    }
+
+    if (dstImg->externalMapping != NULL) {
+        pthread_mutex_unlock(&drv->exportMutex);
+        return true;
+    }
+
+    CUDA_MEMCPY2D argbCpy = {
+        .srcMemoryType = CU_MEMORYTYPE_HOST,
+        .srcHost = argb,
+        .srcPitch = width * 4,
+        .dstMemoryType = CU_MEMORYTYPE_ARRAY,
+        .dstArray = dstImg->arrays[0],
+        .WidthInBytes = width * 4,
+        .Height = height
+    };
+    bool failed = CHECK_CUDA_RESULT(drv->cu->cuMemcpy2D(&argbCpy));
+
+    pthread_mutex_unlock(&drv->exportMutex);
+    return !failed;
+
+fail:
+    pthread_mutex_unlock(&drv->exportMutex);
+    return false;
+}
+
+static bool copySurfaceBackingImage(NVDriver *drv, NVSurface *src, NVSurface *dst, const VAProcPipelineParameterBuffer *pipeline) {
+    if (src == NULL || dst == NULL || pipeline == NULL) {
+        // The destination (render target) was marked resolving in nvBeginPicture;
+        // clear it so a later vaSyncSurface doesn't block forever on a blit we
+        // never performed.
+        setSurfaceResolving(dst, false);
+        return false;
+    }
+
+    VARectangle srcRegion = { 0, 0, src->width, src->height };
+    VARectangle dstRegion = { 0, 0, dst->width, dst->height };
+    if (pipeline->surface_region != NULL) {
+        srcRegion = *pipeline->surface_region;
+    }
+    if (pipeline->output_region != NULL) {
+        dstRegion = *pipeline->output_region;
+    }
+
+    if (srcRegion.x != 0 || srcRegion.y != 0 || dstRegion.x != 0 || dstRegion.y != 0 ||
+        srcRegion.width != dstRegion.width || srcRegion.height != dstRegion.height) {
+        LOG("Unsupported VideoProc blit: src=%dx%d+%d+%d dst=%dx%d+%d+%d",
+            srcRegion.width, srcRegion.height, srcRegion.x, srcRegion.y,
+            dstRegion.width, dstRegion.height, dstRegion.x, dstRegion.y);
+        setSurfaceResolving(dst, false);
+        return false;
+    }
+
+    waitSurfaceResolved(src);
+
+    CHECK_CUDA_RESULT_RETURN(cu->cuCtxPushCurrent(drv->cudaContext), (setSurfaceResolving(dst, false), false));
+    bool realised = drv->backend->realiseSurface(drv, src) && drv->backend->realiseSurface(drv, dst);
+    if (!realised) {
+        CHECK_CUDA_RESULT(cu->cuCtxPopCurrent(NULL));
+        setSurfaceResolving(dst, false);
+        return false;
+    }
+
+    BackingImage *srcImg = src->backingImage;
+    BackingImage *dstImg = dst->backingImage;
+    nvSurfaceCopyColorMetadataFromBackingImage(src, srcImg);
+    if (srcImg != NULL && dstImg != NULL && (srcImg->format == NV_FORMAT_NV12 || srcImg->format == NV_FORMAT_P010 || srcImg->format == NV_FORMAT_P012) && dstImg->format == NV_FORMAT_ARGB) {
+        const VAProcColorStandardType colorStandard = effectiveSurfaceColorStandard(src, pipeline);
+        const bool fullRange = effectiveSurfaceColorRangeFull(src, pipeline);
+        const ColorMatrix *matrix = colorMatrixForStandard(colorStandard, srcRegion.width, fullRange);
+        const VideoProcSampleInfo sampleInfo = videoProcSampleInfoForFormat(srcImg->format, fullRange);
+        char srcFourcc[5];
+        char dstFourcc[5];
+        LOG_DEBUG("VideoProc color matrix: src=%s dst=%s size=%ux%u surface_color_standard=%s(%d) input_matrix_coefficients=%u input_range=%s(%u) decoded_color_standard=%s(%d) decoded_full_range=%d output_color_standard=%s(%d) effective_color_standard=%s(%d) effective_range=%s matrix=%s coeffs=%d,%d,%d,%d sample_shift=%d y_scale=%d y_offset=%d uv_offset=%d value_shift=%d",
+            fourccString(formatsInfo[srcImg->format].vaFormat.fourcc, srcFourcc),
+            fourccString(formatsInfo[dstImg->format].vaFormat.fourcc, dstFourcc),
+            srcRegion.width, srcRegion.height,
+            nvColorStandardName(pipeline->surface_color_standard), pipeline->surface_color_standard,
+            pipeline->input_color_properties.matrix_coefficients,
+            sourceRangeName(pipeline->input_color_properties.color_range), pipeline->input_color_properties.color_range,
+            nvColorStandardName(src->colorStandard), src->colorStandard, src->colorRangeFull,
+            nvColorStandardName(pipeline->output_color_standard), pipeline->output_color_standard,
+            nvColorStandardName(colorStandard), colorStandard,
+            effectiveRangeName(fullRange),
+            colorMatrixName(matrix), matrix->vToR, matrix->uToG, matrix->vToG, matrix->uToB,
+            sampleInfo.sampleShift, sampleInfo.yScale, sampleInfo.yOffset, sampleInfo.uvOffset, sampleInfo.valueShift);
+        bool ret = convertNV12ToARGB(drv, srcImg, dstImg, srcRegion.width, srcRegion.height, matrix, sampleInfo);
+        bool popFailed = CHECK_CUDA_RESULT(cu->cuCtxPopCurrent(NULL));
+        if (!ret || popFailed) {
+            setSurfaceResolving(dst, false);
+            return false;
+        }
+        goto done;
+    }
+
+    if (srcImg == NULL || dstImg == NULL || srcImg->format != dstImg->format) {
+        LOG("Unsupported VideoProc formats: %d -> %d",
+            srcImg != NULL ? srcImg->format : NV_FORMAT_NONE,
+            dstImg != NULL ? dstImg->format : NV_FORMAT_NONE);
+        CHECK_CUDA_RESULT(cu->cuCtxPopCurrent(NULL));
+        setSurfaceResolving(dst, false);
+        return false;
+    }
+
+    const NVFormatInfo *fmtInfo = &formatsInfo[srcImg->format];
+
+    for (uint32_t i = 0; i < fmtInfo->numPlanes; i++) {
+        const NVFormatPlane *p = &fmtInfo->plane[i];
+        CUDA_MEMCPY2D cpy = {
+            .srcMemoryType = CU_MEMORYTYPE_ARRAY,
+            .srcArray = srcImg->arrays[i],
+            .dstMemoryType = CU_MEMORYTYPE_ARRAY,
+            .dstArray = dstImg->arrays[i],
+            .WidthInBytes = ((uint32_t) srcRegion.width >> p->ss.x) * fmtInfo->bppc * p->channelCount,
+            .Height = (uint32_t) srcRegion.height >> p->ss.y
+        };
+
+        if (i == fmtInfo->numPlanes - 1) {
+            CHECK_CUDA_RESULT(drv->cu->cuMemcpy2D(&cpy));
+        } else {
+            CHECK_CUDA_RESULT(drv->cu->cuMemcpy2DAsync(&cpy, 0));
+        }
+    }
+    CHECK_CUDA_RESULT_RETURN(cu->cuCtxPopCurrent(NULL), (setSurfaceResolving(dst, false), false));
+
+done:
+    pthread_mutex_lock(&dst->mutex);
+    dst->context = src->context;
+    dst->progressiveFrame = src->progressiveFrame;
+    dst->topFieldFirst = src->topFieldFirst;
+    dst->secondField = src->secondField;
+    dst->decodeFailed = src->decodeFailed;
+    nvSurfaceCopyColorMetadata(dst, src);
+    pthread_mutex_unlock(&dst->mutex);
+
+    // Clears both the surface and its backing-image resolving flags and wakes
+    // any waiter (vaSyncSurface / a later blit that reuses this surface).
+    setSurfaceResolving(dst, false);
+
+    return true;
+}
+
 static VAStatus nvBeginPicture(
         VADriverContextP ctx,
         VAContextID context,
@@ -1322,6 +2862,12 @@ static VAStatus nvBeginPicture(
         return VA_STATUS_ERROR_INVALID_SURFACE;
     }
 
+    if (nvCtx->entrypoint == VAEntrypointVideoProc) {
+        setSurfaceResolving(surface, true);
+        nvCtx->renderTarget = surface;
+        return VA_STATUS_SUCCESS;
+    }
+
     if (surface->context != NULL && surface->context != nvCtx) {
         //this surface was last used on a different context, we need to free up the backing image (it might not be the correct size)
         if (surface->backingImage != NULL) {
@@ -1329,6 +2875,11 @@ static VAStatus nvBeginPicture(
         }
         //...and reset the pictureIdx
         surface->pictureIdx = -1;
+    }
+
+    VAStatus decoderStatus = recreateDecoderForSurface(nvCtx, surface);
+    if (decoderStatus != VA_STATUS_SUCCESS) {
+        return decoderStatus;
     }
 
     //if this surface hasn't been used before, give it a new picture index
@@ -1339,15 +2890,13 @@ static VAStatus nvBeginPicture(
         surface->pictureIdx = nvCtx->currentPictureId++;
     }
 
-    //I don't know if we actually need to lock here, nothing should be waiting
-    //until after this function returns...
-    pthread_mutex_lock(&surface->mutex);
-    surface->resolving = 1;
-    pthread_mutex_unlock(&surface->mutex);
+    setSurfaceResolving(surface, true);
 
     memset(&nvCtx->pPicParams, 0, sizeof(CUVIDPICPARAMS));
     nvCtx->renderTarget = surface;
+    nvCtx->displayTarget = surface;
     nvCtx->renderTarget->progressiveFrame = true; //assume we're producing progressive frame unless the codec says otherwise
+    nvSurfaceResetColorMetadata(nvCtx->renderTarget);
     nvCtx->pPicParams.CurrPicIdx = nvCtx->renderTarget->pictureIdx;
     if (nvCtx->codec != NULL && nvCtx->codec->beginPicture != NULL) {
         nvCtx->codec->beginPicture(nvCtx);
@@ -1368,6 +2917,35 @@ static VAStatus nvRenderPicture(
 
     if (nvCtx == NULL) {
         return VA_STATUS_ERROR_INVALID_CONTEXT;
+    }
+
+    if (nvCtx->entrypoint == VAEntrypointVideoProc) {
+        bool processed = false;
+        for (int i = 0; i < num_buffers; i++) {
+            NVBuffer *buf = (NVBuffer*) getObjectPtr(drv, OBJECT_TYPE_BUFFER, buffers[i]);
+            if (buf == NULL || buf->ptr == NULL || buf->bufferType != VAProcPipelineParameterBufferType) {
+                LOG("Invalid VideoProc buffer detected, skipping: %d", buffers[i]);
+                continue;
+            }
+
+            nvStatsIncrement(drv, NV_STAT_VIDEOPROC_REQUESTS);
+            processed = true;
+            VAProcPipelineParameterBuffer *pipeline = (VAProcPipelineParameterBuffer*) buf->ptr;
+            NVSurface *src = (NVSurface*) getObjectPtr(drv, OBJECT_TYPE_SURFACE, pipeline->surface);
+            // copySurfaceBackingImage always clears the render target's resolving
+            // flag, on both success and every failure path.
+            if (!copySurfaceBackingImage(drv, src, nvCtx->renderTarget, pipeline)) {
+                return VA_STATUS_ERROR_OPERATION_FAILED;
+            }
+        }
+
+        // If no pipeline buffer touched the render target, it was still marked
+        // resolving in nvBeginPicture; clear it so vaSyncSurface can't hang.
+        if (!processed) {
+            setSurfaceResolving(nvCtx->renderTarget, false);
+        }
+
+        return VA_STATUS_SUCCESS;
     }
 
     CUVIDPICPARAMS *picParams = &nvCtx->pPicParams;
@@ -1397,6 +2975,10 @@ static VAStatus nvEndPicture(
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
     NVContext *nvCtx = (NVContext*) getObjectPtr(drv, OBJECT_TYPE_CONTEXT, context);
 
+    if (nvCtx != NULL && nvCtx->entrypoint == VAEntrypointVideoProc) {
+        return VA_STATUS_SUCCESS;
+    }
+
     if (nvCtx == NULL || nvCtx->decoder == NULL) {
         return VA_STATUS_ERROR_INVALID_CONTEXT;
     }
@@ -1411,6 +2993,7 @@ static VAStatus nvEndPicture(
     CHECK_CUDA_RESULT_RETURN(cu->cuCtxPushCurrent(drv->cudaContext), VA_STATUS_ERROR_OPERATION_FAILED);
     CUresult result = cv->cuvidDecodePicture(nvCtx->decoder, picParams);
     CHECK_CUDA_RESULT_RETURN(cu->cuCtxPopCurrent(NULL), VA_STATUS_ERROR_OPERATION_FAILED);
+    nvStatsIncrement(drv, NV_STAT_DECODE_PICTURES);
 
     VAStatus status = VA_STATUS_SUCCESS;
 
@@ -1420,7 +3003,11 @@ static VAStatus nvEndPicture(
     }
     //LOG("Decoded frame successfully to idx: %d (%p)", picParams->CurrPicIdx, nvCtx->renderTarget);
 
-    NVSurface *surface = nvCtx->renderTarget;
+    NVSurface *surface = nvCtx->displayTarget != NULL ? nvCtx->displayTarget : nvCtx->renderTarget;
+    if (surface != nvCtx->renderTarget) {
+        setSurfaceResolving(surface, true);
+        setSurfaceResolving(nvCtx->renderTarget, false);
+    }
 
     surface->context = nvCtx;
     surface->topFieldFirst = !picParams->bottom_field_flag;
@@ -1429,7 +3016,7 @@ static VAStatus nvEndPicture(
 
     //TODO check we're not overflowing the queue
     pthread_mutex_lock(&nvCtx->resolveMutex);
-    nvCtx->surfaceQueue[nvCtx->surfaceQueueWriteIdx++] = nvCtx->renderTarget;
+    nvCtx->surfaceQueue[nvCtx->surfaceQueueWriteIdx++] = surface;
     if (nvCtx->surfaceQueueWriteIdx >= SURFACE_QUEUE_SIZE) {
         nvCtx->surfaceQueueWriteIdx = 0;
     }
@@ -1455,13 +3042,7 @@ static VAStatus nvSyncSurface(
 
     //LOG("Syncing on surface: %d (%p)", surface->pictureIdx, surface);
 
-    //wait for resolve to occur before synchronising
-    pthread_mutex_lock(&surface->mutex);
-    if (surface->resolving) {
-        //LOG("Surface %d not resolved, waiting", surface->pictureIdx);
-        pthread_cond_wait(&surface->cond, &surface->mutex);
-    }
-    pthread_mutex_unlock(&surface->mutex);
+    waitSurfaceResolved(surface);
 
     //LOG("Surface %d resolved (%p)", surface->pictureIdx, surface);
 
@@ -1882,11 +3463,74 @@ static VAStatus nvQuerySurfaceAttributes(
         return VA_STATUS_ERROR_INVALID_CONFIG;
     }
 
+    if (cfg->entrypoint == VAEntrypointVideoProc) {
+        if (num_attribs != NULL) {
+            *num_attribs = drv->supports16BitSurface ? 14 : 13;
+        }
+
+        if (attrib_list != NULL) {
+            attrib_list[0].type = VASurfaceAttribMinWidth;
+            attrib_list[0].flags = 0;
+            attrib_list[0].value.type = VAGenericValueTypeInteger;
+            attrib_list[0].value.value.i = 1;
+
+            attrib_list[1].type = VASurfaceAttribMinHeight;
+            attrib_list[1].flags = 0;
+            attrib_list[1].value.type = VAGenericValueTypeInteger;
+            attrib_list[1].value.value.i = 1;
+
+            attrib_list[2].type = VASurfaceAttribMaxWidth;
+            attrib_list[2].flags = 0;
+            attrib_list[2].value.type = VAGenericValueTypeInteger;
+            attrib_list[2].value.value.i = 16384;
+
+            attrib_list[3].type = VASurfaceAttribMaxHeight;
+            attrib_list[3].flags = 0;
+            attrib_list[3].value.type = VAGenericValueTypeInteger;
+            attrib_list[3].value.value.i = 16384;
+
+            int attrib_idx = 4;
+            attrib_list[attrib_idx].type = VASurfaceAttribPixelFormat;
+            attrib_list[attrib_idx].flags = 0;
+            attrib_list[attrib_idx].value.type = VAGenericValueTypeInteger;
+            attrib_list[attrib_idx].value.value.i = VA_FOURCC_NV12;
+            attrib_idx++;
+
+            if (drv->supports16BitSurface) {
+                attrib_list[attrib_idx].type = VASurfaceAttribPixelFormat;
+                attrib_list[attrib_idx].flags = 0;
+                attrib_list[attrib_idx].value.type = VAGenericValueTypeInteger;
+                attrib_list[attrib_idx].value.value.i = VA_FOURCC_P010;
+                attrib_idx++;
+            }
+
+            const uint32_t rgbFormats[] = {
+                VA_FOURCC_ARGB,
+                VA_FOURCC_XRGB,
+                VA_FOURCC_ABGR,
+                VA_FOURCC_XBGR,
+                VA_FOURCC_RGBA,
+                VA_FOURCC_RGBX,
+                VA_FOURCC_BGRA,
+                VA_FOURCC_BGRX
+            };
+            for (uint32_t i = 0; i < ARRAY_SIZE(rgbFormats); i++) {
+                attrib_list[attrib_idx].type = VASurfaceAttribPixelFormat;
+                attrib_list[attrib_idx].flags = 0;
+                attrib_list[attrib_idx].value.type = VAGenericValueTypeInteger;
+                attrib_list[attrib_idx].value.value.i = (int) rgbFormats[i];
+                attrib_idx++;
+            }
+        }
+
+        return VA_STATUS_SUCCESS;
+    }
+
     //LOG("with %d (%d) %p %d", cfg->cudaCodec, cfg->bitDepth, attrib_list, *num_attribs);
 
     if (cfg->chromaFormat != cudaVideoChromaFormat_420 && cfg->chromaFormat != cudaVideoChromaFormat_444) {
         //TODO not sure what pixel formats are needed for 422 formats
-        LOG("Unknown chrome format: %d", cfg->chromaFormat);
+        LOG("Unknown chroma format: %d", cfg->chromaFormat);
         return VA_STATUS_ERROR_INVALID_CONFIG;
     }
 
@@ -2154,10 +3798,13 @@ static VAStatus nvExportSurfaceHandle(
 
     //LOG("Exporting surface: %d (%p)", surface->pictureIdx, surface);
 
+    waitSurfaceResolved(surface);
+
     CHECK_CUDA_RESULT_RETURN(cu->cuCtxPushCurrent(drv->cudaContext), VA_STATUS_ERROR_OPERATION_FAILED);
 
     if (!drv->backend->realiseSurface(drv, surface)) {
         LOG("Unable to export surface");
+        CHECK_CUDA_RESULT_RETURN(cu->cuCtxPopCurrent(NULL), VA_STATUS_ERROR_OPERATION_FAILED);
         return VA_STATUS_ERROR_ALLOCATION_FAILED;
     }
 
@@ -2186,6 +3833,38 @@ static VAStatus nvTerminate( VADriverContextP ctx )
 
     deleteAllObjects(drv);
 
+    if (drv->videoProcModule != NULL) {
+        CHECK_CUDA_RESULT(cu->cuModuleUnload(drv->videoProcModule));
+        drv->videoProcModule = NULL;
+        drv->nv12ToArgbKernel = NULL;
+    }
+    if (drv->videoProcModuleP010 != NULL) {
+        CHECK_CUDA_RESULT(cu->cuModuleUnload(drv->videoProcModuleP010));
+        drv->videoProcModuleP010 = NULL;
+        drv->p010ToArgbKernel = NULL;
+    }
+    if (drv->videoProcYBuffer != 0) {
+        CHECK_CUDA_RESULT(cu->cuMemFree(drv->videoProcYBuffer));
+        drv->videoProcYBuffer = 0;
+    }
+    if (drv->videoProcUVBuffer != 0) {
+        CHECK_CUDA_RESULT(cu->cuMemFree(drv->videoProcUVBuffer));
+        drv->videoProcUVBuffer = 0;
+    }
+    if (drv->videoProcArgbBuffer != 0) {
+        CHECK_CUDA_RESULT(cu->cuMemFree(drv->videoProcArgbBuffer));
+        drv->videoProcArgbBuffer = 0;
+    }
+    free(drv->cpuVideoProcYBuffer);
+    free(drv->cpuVideoProcUVBuffer);
+    free(drv->cpuVideoProcArgbBuffer);
+    drv->cpuVideoProcYBuffer = NULL;
+    drv->cpuVideoProcUVBuffer = NULL;
+    drv->cpuVideoProcArgbBuffer = NULL;
+    drv->cpuVideoProcYBufferSize = 0;
+    drv->cpuVideoProcUVBufferSize = 0;
+    drv->cpuVideoProcArgbBufferSize = 0;
+
     drv->backend->releaseExporter(drv);
 
     CHECK_CUDA_RESULT_RETURN(cu->cuCtxPopCurrent(NULL), VA_STATUS_ERROR_OPERATION_FAILED);
@@ -2194,6 +3873,8 @@ static VAStatus nvTerminate( VADriverContextP ctx )
     instances--;
     LOG("Now have %d (%d max) instances", instances, max_instances);
     pthread_mutex_unlock(&concurrency_mutex);
+
+    nvStatsLog(drv, "final");
 
     CHECK_CUDA_RESULT_RETURN(cu->cuCtxDestroy(drv->cudaContext), VA_STATUS_ERROR_OPERATION_FAILED);
     drv->cudaContext = NULL;
@@ -2312,6 +3993,12 @@ VAStatus __vaDriverInit_1_0(VADriverContextP ctx) {
     drv->cudaGpuId = gpu;
     //make sure that we want the default GPU, and that a DRM fd that we care about is passed in
     drv->drmFd = drmFd;
+    drv->maxDetachedBackingImageBytes =
+        parseEnvU64("NVD_MAX_DETACHED_BACKING_IMAGE_BYTES", defaultMaxDetachedBackingImageBytes(drv->cudaGpuId));
+    drv->maxDetachedBackingImages =
+        (uint32_t) parseEnvU64("NVD_MAX_DETACHED_BACKING_IMAGES", DEFAULT_MAX_DETACHED_BACKING_IMAGES);
+
+    nvStatsInit(drv);
 
     if (backend == EGL) {
         LOG("Selecting EGL backend");
