@@ -4044,6 +4044,12 @@ VAStatus __vaDriverInit_1_0(VADriverContextP ctx) {
 
     nvQueryConfigProfiles2(ctx, drv->profiles, &drv->profileCount);
 
+    if (drv->profileCount == 0) {
+        LOG("Hardware doesn't seem to support profiles, bailing out");
+        free(drv);
+        return VA_STATUS_ERROR_OPERATION_FAILED;
+    }
+
     *ctx->vtable = vtable;
     return VA_STATUS_SUCCESS;
 }
