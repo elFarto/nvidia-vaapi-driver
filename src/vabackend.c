@@ -83,6 +83,7 @@ extern const NVCodec __stop_nvd_codecs[];
 static FILE *LOG_OUTPUT;
 static FILE *STATS_OUTPUT;
 static bool LOG_DEBUG_ENABLED;
+static bool SINGLE_BUFFER_FORCED;
 
 // Destination for the statistics dump: the dedicated stats log if one was opened
 // (NVD_STATS_LOG), otherwise the regular log stream. Used by the stats subsystem.
@@ -223,6 +224,9 @@ static void init() {
     }
     char *nvdLogVerbose = getenv("NVD_LOG_VERBOSE");
     LOG_DEBUG_ENABLED = nvdLogVerbose != NULL && strcmp(nvdLogVerbose, "0") != 0;
+    // Global toggle read once here (like every other NVD_* env) instead of via a
+    // getenv on each surface allocation in the direct backend.
+    SINGLE_BUFFER_FORCED = getenv("NVD_SINGLE_BUFFER") != NULL;
     char *nvdStats = getenv("NVD_STATS");
     if (nvdStats != NULL && strcmp(nvdStats, "0") != 0) {
         char *nvdStatsLog = getenv("NVD_STATS_LOG");
@@ -331,6 +335,10 @@ void logger(const char *filename, const char *function, int line, const char *ms
 
 bool nvdLogDebugEnabled(void) {
     return LOG_DEBUG_ENABLED;
+}
+
+bool nvdSingleBufferForced(void) {
+    return SINGLE_BUFFER_FORCED;
 }
 
 static uint64_t parseEnvU64(const char *name, uint64_t fallback) {

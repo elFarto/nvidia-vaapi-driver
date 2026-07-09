@@ -386,6 +386,106 @@ static void pruneDetachedBackingImagesToLimits(NVDriver *drv) {
     pthread_mutex_unlock(&drv->imagesMutex);
 }
 
+// Allocate a multi-plane YUV backing image as one dma-buf object per plane, all sharing a
+// single (max-across-planes) block-linear modifier. This satisfies Chromium's requirement
+// that every plane report the same DRM modifier while keeping each plane at offset 0 of its
+// own object, so per-plane importers (mpv/GStreamer/ffmpeg) detile the chroma plane
+// correctly -- unlike the single-buffer layout, where chroma sits at a non-zero offset
+// inside a shared tiled buffer and those importers mis-detile it.
+static BackingImage *direct_allocateBackingImage_perPlane(NVDriver *drv, NVSurface *surface) {
+    NVDriverImage driverImages[3] = { 0 };
+    BackingImage *backingImage = calloc(1, sizeof(BackingImage));
+    if (backingImage == NULL) {
+        return NULL;
+    }
+    initBackingImageSync(backingImage);
+
+    // Separate object per plane -> the multi-object export/destroy paths handle it.
+    backingImage->isSingleBuffer = false;
+    for (int i = 0; i < 4; i++) {
+        backingImage->fds[i] = -1;
+    }
+
+    backingImage->format = nvFormatForSurface(surface);
+    const NVFormatInfo *fmtInfo = &formatsInfo[backingImage->format];
+
+    // Reuse the unified layout purely to obtain the shared block height and each plane's
+    // pitch/aligned size; the packed offsets it returns are ignored (each plane is offset 0
+    // in its own buffer).
+    calculate_unified_image_layout(&drv->driverContext, driverImages, surface->width, surface->height,
+                                   fmtInfo->bppc, fmtInfo->numPlanes, fmtInfo->plane);
+    LOG_DEBUG("Allocating per-plane BackingImage: %p %ux%u", backingImage, surface->width, surface->height);
+
+    for (uint32_t i = 0; i < fmtInfo->numPlanes; i++) {
+        int memFd = -1, memFd2 = -1, drmFd = -1;
+        if (!alloc_buffer(&drv->driverContext, driverImages[i].memorySize, &driverImages[i], &memFd, &memFd2, &drmFd)) {
+            goto fail;
+        }
+
+        const CUDA_EXTERNAL_MEMORY_HANDLE_DESC extMemDesc = {
+            .type      = CU_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD,
+            .handle.fd = memFd,
+            .flags     = 0,
+            .size      = driverImages[i].memorySize
+        };
+        if (CHECK_CUDA_RESULT(drv->cu->cuImportExternalMemory(&backingImage->cudaImages[i].extMem, &extMemDesc))) {
+            close(memFd);
+            close(memFd2);
+            close(drmFd);
+            goto fail;
+        }
+        // memFd is now owned by CUDA; memFd2 must be closed here (see import_to_cuda).
+        close(memFd2);
+        backingImage->fds[i] = drmFd;
+        cacheBackingImageFdStat(backingImage, (int) i);
+
+        // Create the array at the block-aligned height (memorySize / pitch) so CUDA tiles
+        // the plane with the same block height the shared modifier advertises; otherwise a
+        // shorter plane (e.g. NV12 chroma below ~170px coded height, whose natural block is
+        // smaller than luma's) is tiled with a smaller block and the importer detiles it
+        // wrong -> green chroma.
+        const uint32_t alignedHeight = driverImages[i].pitch != 0 ?
+            driverImages[i].memorySize / driverImages[i].pitch : driverImages[i].height;
+        CUDA_EXTERNAL_MEMORY_MIPMAPPED_ARRAY_DESC mipmapArrayDesc = {
+            .arrayDesc = {
+                .Width = driverImages[i].width,
+                .Height = alignedHeight,
+                .Depth = 0,
+                .Format = fmtInfo->bppc == 1 ? CU_AD_FORMAT_UNSIGNED_INT8 : CU_AD_FORMAT_UNSIGNED_INT16,
+                .NumChannels = fmtInfo->plane[i].channelCount,
+                .Flags = 0
+            },
+            .numLevels = 1,
+            .offset = 0
+        };
+        if (CHECK_CUDA_RESULT(drv->cu->cuExternalMemoryGetMappedMipmappedArray(&backingImage->cudaImages[i].mipmapArray, backingImage->cudaImages[i].extMem, &mipmapArrayDesc))) {
+            goto fail;
+        }
+        if (CHECK_CUDA_RESULT(drv->cu->cuMipmappedArrayGetLevel(&backingImage->arrays[i], backingImage->cudaImages[i].mipmapArray, 0))) {
+            goto fail;
+        }
+
+        backingImage->strides[i] = driverImages[i].pitch;
+        backingImage->mods[i] = driverImages[i].mods;
+        backingImage->offsets[i] = 0;
+        backingImage->size[i] = driverImages[i].memorySize;
+    }
+
+    backingImage->width = surface->width;
+    backingImage->height = surface->height;
+    backingImage->fourcc = fmtInfo->fourcc;
+
+    if (!clearBackingImage(drv, backingImage)) {
+        goto fail;
+    }
+
+    return backingImage;
+
+fail:
+    destroyBackingImage(drv, backingImage);
+    return NULL;
+}
+
 static BackingImage *direct_allocateBackingImage_single(NVDriver *drv, NVSurface *surface) {
     NVDriverImage driverImages[3] = { 0 };
     BackingImage *backingImage = calloc(1, sizeof(BackingImage));
@@ -506,7 +606,17 @@ static BackingImage *direct_allocateBackingImage(NVDriver *drv, NVSurface *surfa
     // Single-plane / packed surfaces (e.g. RGB) have nothing to unify and use the
     // straightforward per-plane allocator below.
     if (!isRgbSurfaceFourcc((uint32_t) surface->fourcc)) {
-        return direct_allocateBackingImage_single(drv, surface);
+        // Multi-plane YUV: give every plane one shared block-linear modifier (required by
+        // Chromium's one-modifier-per-buffer rule) but put each plane in its OWN dma-buf
+        // object at offset 0. Packing the planes into a single buffer (chroma at a non-zero
+        // offset) is imported fine by Chromium's multi-plane path but mis-detiled by
+        // per-plane importers (mpv/GStreamer/ffmpeg), which import each layer as a
+        // standalone dma-buf and can't handle a tiled plane starting at a byte offset. The
+        // single-buffer layout is kept behind NVD_SINGLE_BUFFER for comparison/fallback.
+        if (nvdSingleBufferForced()) {
+            return direct_allocateBackingImage_single(drv, surface);
+        }
+        return direct_allocateBackingImage_perPlane(drv, surface);
     }
 
     NVDriverImage driverImages[3] = { 0 };
