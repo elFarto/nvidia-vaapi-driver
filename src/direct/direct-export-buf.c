@@ -613,7 +613,7 @@ static BackingImage *direct_allocateBackingImage(NVDriver *drv, NVSurface *surfa
         // per-plane importers (mpv/GStreamer/ffmpeg), which import each layer as a
         // standalone dma-buf and can't handle a tiled plane starting at a byte offset. The
         // single-buffer layout is kept behind NVD_SINGLE_BUFFER for comparison/fallback.
-        if (getenv("NVD_SINGLE_BUFFER") != NULL) {
+        if (nvdSingleBufferForced()) {
             return direct_allocateBackingImage_single(drv, surface);
         }
         return direct_allocateBackingImage_perPlane(drv, surface);
