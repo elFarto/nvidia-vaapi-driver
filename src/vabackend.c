@@ -517,7 +517,13 @@ static void deleteObject(NVDriver *drv, VAGenericID id) {
 static bool destroyContext(NVDriver *drv, NVContext *nvCtx) {
     CHECK_CUDA_RESULT_RETURN(cu->cuCtxPushCurrent(drv->cudaContext), false);
 
-    if (nvCtx->decoder != NULL) {
+    // Join on whether the resolve thread was actually started, not on decoder !=
+    // NULL: a decode context whose decoder was destroyed and failed to recreate
+    // (recreateDecoderForSurface) leaves decoder == NULL with the resolve thread
+    // still running. Guarding on decoder would skip the join and free nvCtx out
+    // from under the live thread. VideoProc contexts never start the thread, so
+    // the flag stays false for them.
+    if (nvCtx->resolveThreadStarted) {
         LOG("Signaling resolve thread to exit");
         struct timespec timeout;
         clock_gettime(CLOCK_REALTIME, &timeout);
@@ -1853,6 +1859,7 @@ static VAStatus nvCreateContext(
         deleteObject(drv, contextObj->id);
         return VA_STATUS_ERROR_OPERATION_FAILED;
     }
+    nvCtx->resolveThreadStarted = true;
 
     *context = contextObj->id;
 
