@@ -528,6 +528,14 @@ static void setAV1SliceOffsets(NVContext *ctx, CUVIDPICPARAMS *picParams, const 
     }
 
     ensureAV1SliceOffsetStorage(ctx, numSlices);
+    // ensureAV1SliceOffsetStorage leaves buf == NULL (and size == 0) if the
+    // allocation failed under memory pressure. Bail before the loop below writes
+    // offsets[tileIndex * 2], which would dereference NULL and crash the whole
+    // GPU process on OOM.
+    if (ctx->sliceOffsets.buf == NULL) {
+        LOG("AV1 slice offset storage unavailable, skipping %u tile offsets", count);
+        return;
+    }
     for (unsigned int i = 0; i < count; i++) {
         uint32_t tileIndex = getAV1SliceTileIndex(pps, &sliceParams[i], i);
         if (tileIndex >= numSlices) {
