@@ -1919,9 +1919,12 @@ static VAStatus recreateDecoderForSurface(NVContext *nvCtx, NVSurface *surface) 
             break;
     }
 
+    // Assign the width/height family explicitly rather than with a
+    // self-referential designated initializer (.ulWidth = vdci.ulMaxWidth =
+    // ...): reading a sibling member of the same aggregate while it is still
+    // being initialized is undefined behaviour, and it only happens to work on
+    // GCC/Clang.
     CUVIDDECODECREATEINFO vdci = {
-        .ulWidth             = vdci.ulMaxWidth  = vdci.ulTargetWidth  = nvCtx->width,
-        .ulHeight            = vdci.ulMaxHeight = vdci.ulTargetHeight = nvCtx->height,
         .CodecType           = nvCtx->cudaCodec,
         .ulCreationFlags     = cudaVideoCreate_PreferCUVID,
         .ulIntraDecodeOnly   = 0,
@@ -1934,6 +1937,8 @@ static VAStatus recreateDecoderForSurface(NVContext *nvCtx, NVSurface *surface) 
         .ulNumOutputSurfaces = 1,
         .ulNumDecodeSurfaces = nvCtx->surfaceCount,
     };
+    vdci.ulWidth = vdci.ulMaxWidth = vdci.ulTargetWidth = nvCtx->width;
+    vdci.ulHeight = vdci.ulMaxHeight = vdci.ulTargetHeight = nvCtx->height;
 
     NVDriver *drv = nvCtx->drv;
     CHECK_CUDA_RESULT_RETURN(cu->cuCtxPushCurrent(drv->cudaContext), VA_STATUS_ERROR_OPERATION_FAILED);
