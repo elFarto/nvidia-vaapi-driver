@@ -1626,8 +1626,16 @@ static VAStatus nvCreateSurfaces2(
             BackingImage *img = createImportedBackingImage(drv, &imported, width, height);
             if (img == NULL) {
                 // Roll back every surface object allocated in this call, including
-                // the current one, so a failed import doesn't leak them.
+                // the current one, so a failed import doesn't leak them. The
+                // earlier surfaces (j < i) already have a BackingImage attached;
+                // detach it first so its fds/mmap/CUDA external memory are freed
+                // and any borrowCount taken on a cached image is released --
+                // deleteObject only frees the NVSurface struct itself.
                 for (uint32_t j = 0; j <= i; j++) {
+                    NVSurface *rollbackSurface = (NVSurface*) getObjectPtr(drv, OBJECT_TYPE_SURFACE, surfaces[j]);
+                    if (rollbackSurface != NULL && rollbackSurface->backingImage != NULL) {
+                        drv->backend->detachBackingImageFromSurface(drv, rollbackSurface);
+                    }
                     deleteObject(drv, surfaces[j]);
                 }
                 CHECK_CUDA_RESULT_RETURN(cu->cuCtxPopCurrent(NULL), VA_STATUS_ERROR_OPERATION_FAILED);
