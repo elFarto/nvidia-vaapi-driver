@@ -611,25 +611,39 @@ static uint32_t calculate_log2_gobs_per_block_y(const uint32_t height) {
 }
 
 uint32_t calculate_unified_image_layout(const NVDriverContext *context, NVDriverImage images[], const uint32_t width, const uint32_t height,
-                                        const uint32_t bppc, const uint32_t numPlanes, const NVFormatPlane planes[]) {
+                                        const uint32_t bppc, const uint32_t numPlanes, const NVFormatPlane planes[],
+                                        const bool unifyBlockHeight) {
      const uint32_t log2GobsPerBlockX = 0;
      const uint32_t log2GobsPerBlockZ = 0;
 
+     // Each plane's natural block height comes from its own (subsampled) height. How
+     // we use it depends on how the planes get exported:
+     //   - Packed into one shared buffer (single-buffer export): every plane must
+     //     advertise the same DRM modifier, so unify to the largest block height.
+     //     Over-aligning a short plane wastes a little memory but is harmless;
+     //     under-aligning would corrupt it.
+     //   - One dma-buf object per plane (multi-object export): each plane carries its
+     //     own modifier, so keep the exact per-plane value and match what the decoder
+     //     actually produces. A small chroma plane (e.g. a 168x96 video, whose chroma
+     //     is short enough to need a smaller block than luma) is tiled by NVDEC with
+     //     its own block height; forcing it to luma's larger block makes the importer
+     //     detile it wrong -> green chroma.
      uint32_t perPlaneLog2Y[3] = { 0 };
      for (uint32_t i = 0; i < numPlanes; i++) {
          const uint32_t planeHeight = height >> planes[i].ss.y;
          perPlaneLog2Y[i] = calculate_log2_gobs_per_block_y(planeHeight);
      }
 
-     uint32_t log2GobsPerBlockY = perPlaneLog2Y[0];
+     uint32_t unifiedLog2Y = perPlaneLog2Y[0];
      for (uint32_t i = 1; i < numPlanes; i++) {
-         if (perPlaneLog2Y[i] > log2GobsPerBlockY) {
-             log2GobsPerBlockY = perPlaneLog2Y[i];
+         if (perPlaneLog2Y[i] > unifiedLog2Y) {
+             unifiedLog2Y = perPlaneLog2Y[i];
          }
      }
 
      uint32_t offset = 0;
      for (uint32_t i = 0; i < numPlanes; i++) {
+         const uint32_t log2GobsPerBlockY = unifyBlockHeight ? unifiedLog2Y : perPlaneLog2Y[i];
          const uint32_t planeWidth = width >> planes[i].ss.x;
          const uint32_t planeHeight = height >> planes[i].ss.y;
          const uint32_t bytesPerPixel = planes[i].channelCount * bppc;
