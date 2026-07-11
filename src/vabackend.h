@@ -240,6 +240,7 @@ typedef struct _NVContext
     int                 decoderBitDepth;
     int                 currentPictureId;
     pthread_t           resolveThread;
+    bool                resolveThreadStarted;
     pthread_mutex_t     resolveMutex;
     pthread_cond_t      resolveCondition;
     NVSurface*          surfaceQueue[SURFACE_QUEUE_SIZE];

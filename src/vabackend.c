@@ -517,7 +517,13 @@ static void deleteObject(NVDriver *drv, VAGenericID id) {
 static bool destroyContext(NVDriver *drv, NVContext *nvCtx) {
     CHECK_CUDA_RESULT_RETURN(cu->cuCtxPushCurrent(drv->cudaContext), false);
 
-    if (nvCtx->decoder != NULL) {
+    // Join on whether the resolve thread was actually started, not on decoder !=
+    // NULL: a decode context whose decoder was destroyed and failed to recreate
+    // (recreateDecoderForSurface) leaves decoder == NULL with the resolve thread
+    // still running. Guarding on decoder would skip the join and free nvCtx out
+    // from under the live thread. VideoProc contexts never start the thread, so
+    // the flag stays false for them.
+    if (nvCtx->resolveThreadStarted) {
         LOG("Signaling resolve thread to exit");
         struct timespec timeout;
         clock_gettime(CLOCK_REALTIME, &timeout);
@@ -1626,8 +1632,16 @@ static VAStatus nvCreateSurfaces2(
             BackingImage *img = createImportedBackingImage(drv, &imported, width, height);
             if (img == NULL) {
                 // Roll back every surface object allocated in this call, including
-                // the current one, so a failed import doesn't leak them.
+                // the current one, so a failed import doesn't leak them. The
+                // earlier surfaces (j < i) already have a BackingImage attached;
+                // detach it first so its fds/mmap/CUDA external memory are freed
+                // and any borrowCount taken on a cached image is released --
+                // deleteObject only frees the NVSurface struct itself.
                 for (uint32_t j = 0; j <= i; j++) {
+                    NVSurface *rollbackSurface = (NVSurface*) getObjectPtr(drv, OBJECT_TYPE_SURFACE, surfaces[j]);
+                    if (rollbackSurface != NULL && rollbackSurface->backingImage != NULL) {
+                        drv->backend->detachBackingImageFromSurface(drv, rollbackSurface);
+                    }
                     deleteObject(drv, surfaces[j]);
                 }
                 CHECK_CUDA_RESULT_RETURN(cu->cuCtxPopCurrent(NULL), VA_STATUS_ERROR_OPERATION_FAILED);
@@ -1845,6 +1859,7 @@ static VAStatus nvCreateContext(
         deleteObject(drv, contextObj->id);
         return VA_STATUS_ERROR_OPERATION_FAILED;
     }
+    nvCtx->resolveThreadStarted = true;
 
     *context = contextObj->id;
 
@@ -1904,9 +1919,12 @@ static VAStatus recreateDecoderForSurface(NVContext *nvCtx, NVSurface *surface) 
             break;
     }
 
+    // Assign the width/height family explicitly rather than with a
+    // self-referential designated initializer (.ulWidth = vdci.ulMaxWidth =
+    // ...): reading a sibling member of the same aggregate while it is still
+    // being initialized is undefined behaviour, and it only happens to work on
+    // GCC/Clang.
     CUVIDDECODECREATEINFO vdci = {
-        .ulWidth             = vdci.ulMaxWidth  = vdci.ulTargetWidth  = nvCtx->width,
-        .ulHeight            = vdci.ulMaxHeight = vdci.ulTargetHeight = nvCtx->height,
         .CodecType           = nvCtx->cudaCodec,
         .ulCreationFlags     = cudaVideoCreate_PreferCUVID,
         .ulIntraDecodeOnly   = 0,
@@ -1919,6 +1937,8 @@ static VAStatus recreateDecoderForSurface(NVContext *nvCtx, NVSurface *surface) 
         .ulNumOutputSurfaces = 1,
         .ulNumDecodeSurfaces = nvCtx->surfaceCount,
     };
+    vdci.ulWidth = vdci.ulMaxWidth = vdci.ulTargetWidth = nvCtx->width;
+    vdci.ulHeight = vdci.ulMaxHeight = vdci.ulTargetHeight = nvCtx->height;
 
     NVDriver *drv = nvCtx->drv;
     CHECK_CUDA_RESULT_RETURN(cu->cuCtxPushCurrent(drv->cudaContext), VA_STATUS_ERROR_OPERATION_FAILED);
