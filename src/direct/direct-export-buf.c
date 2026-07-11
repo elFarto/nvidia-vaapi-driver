@@ -409,11 +409,13 @@ static BackingImage *direct_allocateBackingImage_perPlane(NVDriver *drv, NVSurfa
     backingImage->format = nvFormatForSurface(surface);
     const NVFormatInfo *fmtInfo = &formatsInfo[backingImage->format];
 
-    // Reuse the unified layout purely to obtain the shared block height and each plane's
-    // pitch/aligned size; the packed offsets it returns are ignored (each plane is offset 0
-    // in its own buffer).
+    // Reuse the layout purely to obtain each plane's block height and pitch/aligned
+    // size; the packed offsets it returns are ignored (each plane is offset 0 in its
+    // own buffer). Pass unifyBlockHeight=false: each plane is its own dma-buf object
+    // with its own modifier, so it keeps its natural per-plane block height and
+    // matches what the decoder produced (see calculate_unified_image_layout).
     calculate_unified_image_layout(&drv->driverContext, driverImages, surface->width, surface->height,
-                                   fmtInfo->bppc, fmtInfo->numPlanes, fmtInfo->plane);
+                                   fmtInfo->bppc, fmtInfo->numPlanes, fmtInfo->plane, false);
     LOG_DEBUG("Allocating per-plane BackingImage: %p %ux%u", backingImage, surface->width, surface->height);
 
     for (uint32_t i = 0; i < fmtInfo->numPlanes; i++) {
@@ -439,17 +441,18 @@ static BackingImage *direct_allocateBackingImage_perPlane(NVDriver *drv, NVSurfa
         backingImage->fds[i] = drmFd;
         cacheBackingImageFdStat(backingImage, (int) i);
 
-        // Create the array at the block-aligned height (memorySize / pitch) so CUDA tiles
-        // the plane with the same block height the shared modifier advertises; otherwise a
-        // shorter plane (e.g. NV12 chroma below ~170px coded height, whose natural block is
-        // smaller than luma's) is tiled with a smaller block and the importer detiles it
-        // wrong -> green chroma.
-        const uint32_t alignedHeight = driverImages[i].pitch != 0 ?
-            driverImages[i].memorySize / driverImages[i].pitch : driverImages[i].height;
+        // Create the array at the plane's natural height. Each plane is its own object
+        // carrying its own modifier, and calculate_unified_image_layout (called with
+        // unifyBlockHeight=false) already advertised each plane's per-plane block height.
+        // Handing CUDA the natural height makes it derive that same per-plane block, so
+        // the array tiling matches the modifier. (Rounding up to the shared max block --
+        // as the single-buffer path must -- would instead make CUDA pick the larger block
+        // and disagree with the per-plane modifier -> the importer detiles wrong -> green
+        // chroma, e.g. NV12 chroma at a 256x144 coded height.)
         CUDA_EXTERNAL_MEMORY_MIPMAPPED_ARRAY_DESC mipmapArrayDesc = {
             .arrayDesc = {
                 .Width = driverImages[i].width,
-                .Height = alignedHeight,
+                .Height = driverImages[i].height,
                 .Depth = 0,
                 .Format = fmtInfo->bppc == 1 ? CU_AD_FORMAT_UNSIGNED_INT8 : CU_AD_FORMAT_UNSIGNED_INT16,
                 .NumChannels = fmtInfo->plane[i].channelCount,
@@ -503,8 +506,10 @@ static BackingImage *direct_allocateBackingImage_single(NVDriver *drv, NVSurface
 
     const NVFormatInfo *fmtInfo = &formatsInfo[backingImage->format];
 
+    // Pass unifyBlockHeight=true: all planes are packed into one shared buffer under a
+    // single DRM modifier, so they must agree on one (largest) block height.
     backingImage->totalSize = calculate_unified_image_layout(&drv->driverContext, driverImages, surface->width, surface->height,
-                                                             fmtInfo->bppc, fmtInfo->numPlanes, fmtInfo->plane);
+                                                             fmtInfo->bppc, fmtInfo->numPlanes, fmtInfo->plane, true);
     LOG_DEBUG("Allocating single BackingImage: %p %ux%u = %u bytes", backingImage, surface->width, surface->height, backingImage->totalSize);
 
     int memFd = -1;
