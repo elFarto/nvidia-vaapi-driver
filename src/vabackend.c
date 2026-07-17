@@ -1800,8 +1800,6 @@ static VAStatus nvCreateContext(
     }
 
     CUVIDDECODECREATEINFO vdci = {
-        .ulWidth             = vdci.ulMaxWidth  = vdci.ulTargetWidth  = picture_width,
-        .ulHeight            = vdci.ulMaxHeight = vdci.ulTargetHeight = picture_height,
         .CodecType           = cfg->cudaCodec,
         .ulCreationFlags     = cudaVideoCreate_PreferCUVID,
         .ulIntraDecodeOnly   = 0, //TODO (flag & VA_PROGRESSIVE) != 0
@@ -1819,6 +1817,8 @@ static VAStatus nvCreateContext(
         .ulNumDecodeSurfaces = surfaceCount,
         //.vidLock             = drv->vidLock
     };
+    vdci.ulWidth = vdci.ulMaxWidth = vdci.ulTargetWidth = picture_width;
+    vdci.ulHeight = vdci.ulMaxHeight = vdci.ulTargetHeight = picture_height;
 
     CHECK_CUDA_RESULT_RETURN(cu->cuCtxPushCurrent(drv->cudaContext), VA_STATUS_ERROR_OPERATION_FAILED);
 
