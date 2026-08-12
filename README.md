@@ -126,6 +126,7 @@ Environment variables used to control the behavior of this library.
 | `NVD_BACKEND` | Controls which backend this library uses. Either `egl`, or `direct` (default). See [direct backend](#direct-backend) for more details. |
 | `NVD_MAX_DETACHED_BACKING_IMAGE_BYTES` | Upper bound (in bytes) on the size of the detached backing-image cache used by the direct backend to recycle decode surfaces across stream switches. Lower this on low-VRAM GPUs to reduce memory usage at the cost of more re-allocation when streams change. Set to `0` to disable detached caching. Default: scales with the GPU — total VRAM / 64 (~1.6%), clamped to 64 MiB–512 MiB; falls back to `134217728` (128 MiB) if the VRAM size cannot be queried. |
 | `NVD_MAX_DETACHED_BACKING_IMAGES` | Upper bound on the number of cached detached backing images. Set to `0` to disable detached caching. Default: `16`. |
+| `NVD_NO_EXPORT` | Set to make `vaExportSurfaceHandle` fail immediately, without allocating anything or logging. Escape hatch for clients whose dma-buf import of exported surfaces misbehaves: Chromium, for example, then fails its frame-pool setup on the first export and falls back to software decoding cleanly — correct output and a single log line, instead of rendering exported surfaces as solid green (when exports succeed) or busy-retrying the export tens of thousands of times per second (when VRAM pressure makes it fail). |
 
 ## Firefox
 

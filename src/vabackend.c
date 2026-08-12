@@ -84,6 +84,7 @@ static FILE *LOG_OUTPUT;
 static FILE *STATS_OUTPUT;
 static bool LOG_DEBUG_ENABLED;
 static bool SINGLE_BUFFER_FORCED;
+static bool EXPORT_DISABLED;
 
 // Destination for the statistics dump: the dedicated stats log if one was opened
 // (NVD_STATS_LOG), otherwise the regular log stream. Used by the stats subsystem.
@@ -227,6 +228,7 @@ static void init() {
     // Global toggle read once here (like every other NVD_* env) instead of via a
     // getenv on each surface allocation in the direct backend.
     SINGLE_BUFFER_FORCED = getenv("NVD_SINGLE_BUFFER") != NULL;
+    EXPORT_DISABLED = getenv("NVD_NO_EXPORT") != NULL;
     char *nvdStats = getenv("NVD_STATS");
     if (nvdStats != NULL && strcmp(nvdStats, "0") != 0) {
         char *nvdStatsLog = getenv("NVD_STATS_LOG");
@@ -3817,6 +3819,18 @@ static VAStatus nvExportSurfaceHandle(
     }
     if ((flags & VA_EXPORT_SURFACE_SEPARATE_LAYERS) == 0) {
         return VA_STATUS_ERROR_INVALID_SURFACE;
+    }
+
+    // Refuse after the memory-type/flags negotiation above (so those keep
+    // their meaningful statuses) but before any RM/CUDA work or logging:
+    // clients may retry this per frame, so the refusal has to be as close to
+    // free as possible. Chromium's first export happens while its frame pool
+    // initialises, and a failure there makes it tear down the VA-API decoder
+    // and fall back to software decoding cleanly - which is the point:
+    // correct output instead of mis-imported surfaces or an unbounded
+    // retry/log storm when exports fail under VRAM pressure.
+    if (EXPORT_DISABLED) {
+        return VA_STATUS_ERROR_ALLOCATION_FAILED;
     }
 
     NVSurface *surface = (NVSurface*) getObjectPtr(drv, OBJECT_TYPE_SURFACE, surface_id);
