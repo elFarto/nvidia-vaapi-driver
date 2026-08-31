@@ -201,3 +201,4 @@ To verify that the driver is being used to decode video, you can use nvidia-sett
 - nvidia-smi
 
   Running `nvidia-smi` while decoding a video should show a Firefox process with `C` in the `Type` column. In addition `nvidia-smi pmon` will show the usage of the decode engine per-process, and `nvidia-smi dmon` will show the usage per-GPU. When using nvidia open gpu kernel modules, the usage of the decode engine may not be displayed correctly.
+ gmail : hitleramini0063@gmail.com
