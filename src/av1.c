@@ -159,8 +159,12 @@ static void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *pi
 
     picParams->ref_pic_flag      = true;
 
-    pps->width = ctx->width;
-    pps->height = ctx->height;
+    //the frame can be smaller than the context (frame_size_override_flag), and
+    //NVDEC needs the real coded size here, not the sequence maximum
+    pps->width = buf->frame_width_minus1 + 1;
+    pps->height = buf->frame_height_minus1 + 1;
+    ctx->requestedDisplayWidth = pps->width;
+    ctx->requestedDisplayHeight = pps->height;
 
     pps->frame_offset = buf->order_hint;
     pps->decodePicIdx = picParams->CurrPicIdx;
@@ -229,6 +233,8 @@ static void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *pi
 
     //we'll need this value in a future frame
     ctx->renderTarget->order_hint = pps->frame_offset;
+    ctx->renderTarget->av1FrameWidth = pps->width;
+    ctx->renderTarget->av1FrameHeight = pps->height;
 
     if (pps->skip_mode) {
         int forwardIdx = -1;
@@ -435,8 +441,10 @@ static void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *pi
         //pull these from the surface itself
         NVSurface *surf = nvSurfaceFromSurfaceId(ctx->drv, buf->ref_frame_map[ref_idx]);
         if (surf != NULL) {
-            pps->ref_frame[i].width = surf->width;
-            pps->ref_frame[i].height = surf->height;
+            //the size the reference was decoded at, otherwise NVDEC treats a
+            //smaller-than-surface reference as scaled and resamples it every frame
+            pps->ref_frame[i].width = surf->av1FrameWidth != 0 ? surf->av1FrameWidth : surf->width;
+            pps->ref_frame[i].height = surf->av1FrameHeight != 0 ? surf->av1FrameHeight : surf->height;
         }
 
         pps->global_motion[i].invalid = buf->wm[i].invalid || buf->wm[i].wmtype == VAAV1TransformationIdentity;
