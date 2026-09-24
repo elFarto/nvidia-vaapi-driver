@@ -151,9 +151,6 @@ static void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *pi
     VAProcColorStandardType colorStandard = nvColorStandardFromMatrixCoefficients(buf->matrix_coefficients);
     bool colorRangeFull = buf->seq_info_fields.fields.color_range != 0;
 
-    picParams->PicWidthInMbs = (ctx->width + 15)/16;
-    picParams->FrameHeightInMbs = (ctx->height + 15)/16;
-
     picParams->intra_pic_flag    = buf->pic_info_fields.bits.frame_type == 0 || //Key
                                    buf->pic_info_fields.bits.frame_type == 2; //Intra-Only
 
@@ -163,6 +160,10 @@ static void copyAV1PicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *pi
     //NVDEC needs the real coded size here, not the sequence maximum
     pps->width = buf->frame_width_minus1 + 1;
     pps->height = buf->frame_height_minus1 + 1;
+    //CUVIDPICPARAMS also describes the current coded frame, not the context
+    //maximum. Keep its macroblock dimensions in step with the AV1 parameters.
+    picParams->PicWidthInMbs = (pps->width + 15)/16;
+    picParams->FrameHeightInMbs = (pps->height + 15)/16;
     ctx->requestedDisplayWidth = pps->width;
     ctx->requestedDisplayHeight = pps->height;
 
