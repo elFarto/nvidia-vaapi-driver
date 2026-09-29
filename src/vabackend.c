@@ -585,6 +585,8 @@ static bool destroyContext(NVContext *nvCtx) {
         }
         nvCtx->resolveThreadStarted = false;
     }
+    free(nvCtx->surfaceQueue);
+    nvCtx->surfaceQueue = NULL;
 
     free(nvCtx->codecData);
     nvCtx->codecData = NULL;
@@ -723,7 +725,18 @@ static bool doesGPUSupportCodec(cudaVideoCodec codec, int bitDepth, cudaVideoChr
 static void* resolveSurfaces(void *param) {
     NVContext *ctx = (NVContext*) param;
     NVDriver *drv = ctx->drv;
-    CHECK_CUDA_RESULT_RETURN(cu->cuCtxPushCurrent(drv->cudaContext), NULL);
+    if (CHECK_CUDA_RESULT(cu->cuCtxPushCurrent(drv->cudaContext))) {
+        pthread_mutex_lock(&ctx->resolveMutex);
+        ctx->resolveThreadFailed = true;
+        while (ctx->surfaceQueueReadIdx != ctx->surfaceQueueWriteIdx) {
+            NVSurface *surface = ctx->surfaceQueue[ctx->surfaceQueueReadIdx];
+            ctx->surfaceQueueReadIdx = (ctx->surfaceQueueReadIdx + 1) % ctx->surfaceQueueCapacity;
+            setSurfaceResolving(surface, false);
+        }
+        pthread_cond_broadcast(&ctx->resolveCondition);
+        pthread_mutex_unlock(&ctx->resolveMutex);
+        return NULL;
+    }
 
     LOG("[RT] Resolve thread for %p started", ctx);
     for (;;) {
@@ -740,7 +753,7 @@ static void* resolveSurfaces(void *param) {
             goto out;
         }
         NVSurface *surface = ctx->surfaceQueue[ctx->surfaceQueueReadIdx++];
-        if (ctx->surfaceQueueReadIdx >= SURFACE_QUEUE_SIZE) {
+        if (ctx->surfaceQueueReadIdx >= ctx->surfaceQueueCapacity) {
             ctx->surfaceQueueReadIdx = 0;
         }
         pthread_mutex_unlock(&ctx->resolveMutex);
@@ -778,7 +791,7 @@ out:
     pthread_mutex_lock(&ctx->resolveMutex);
     while (ctx->surfaceQueueReadIdx != ctx->surfaceQueueWriteIdx) {
         NVSurface *surface = ctx->surfaceQueue[ctx->surfaceQueueReadIdx++];
-        if (ctx->surfaceQueueReadIdx >= SURFACE_QUEUE_SIZE) {
+        if (ctx->surfaceQueueReadIdx >= ctx->surfaceQueueCapacity) {
             ctx->surfaceQueueReadIdx = 0;
         }
         setSurfaceResolving(surface, false);
@@ -3354,12 +3367,44 @@ static VAStatus nvEndPicture(
     surface->secondField = picParams->second_field;
     surface->decodeFailed = status != VA_STATUS_SUCCESS;
 
-    //TODO check we're not overflowing the queue
+    // read == write means empty. Grow the ring before the producer catches the
+    // reader so queued surfaces cannot be overwritten or silently lost.
     pthread_mutex_lock(&nvCtx->resolveMutex);
-    nvCtx->surfaceQueue[nvCtx->surfaceQueueWriteIdx++] = surface;
-    if (nvCtx->surfaceQueueWriteIdx >= SURFACE_QUEUE_SIZE) {
-        nvCtx->surfaceQueueWriteIdx = 0;
+    if (nvCtx->resolveThreadFailed || nvCtx->exiting) {
+        pthread_mutex_unlock(&nvCtx->resolveMutex);
+        setSurfaceResolving(surface, false);
+        endDecodeCall(drv, nvCtx);
+        return VA_STATUS_ERROR_OPERATION_FAILED;
     }
+    if (nvCtx->surfaceQueueCapacity == 0 ||
+        (nvCtx->surfaceQueueWriteIdx + 1) % nvCtx->surfaceQueueCapacity == nvCtx->surfaceQueueReadIdx) {
+        size_t oldCapacity = nvCtx->surfaceQueueCapacity;
+        size_t newCapacity = oldCapacity == 0 ? SURFACE_QUEUE_SIZE : oldCapacity * 2;
+        if (newCapacity < oldCapacity || newCapacity > SIZE_MAX / sizeof(*nvCtx->surfaceQueue)) {
+            pthread_mutex_unlock(&nvCtx->resolveMutex);
+            setSurfaceResolving(surface, false);
+            endDecodeCall(drv, nvCtx);
+            return VA_STATUS_ERROR_ALLOCATION_FAILED;
+        }
+        NVSurface **expanded = calloc(newCapacity, sizeof(*expanded));
+        if (expanded == NULL) {
+            pthread_mutex_unlock(&nvCtx->resolveMutex);
+            setSurfaceResolving(surface, false);
+            endDecodeCall(drv, nvCtx);
+            return VA_STATUS_ERROR_ALLOCATION_FAILED;
+        }
+        size_t queued = oldCapacity == 0 ? 0 : oldCapacity - 1;
+        for (size_t i = 0; i < queued; i++) {
+            expanded[i] = nvCtx->surfaceQueue[(nvCtx->surfaceQueueReadIdx + i) % oldCapacity];
+        }
+        free(nvCtx->surfaceQueue);
+        nvCtx->surfaceQueue = expanded;
+        nvCtx->surfaceQueueCapacity = newCapacity;
+        nvCtx->surfaceQueueReadIdx = 0;
+        nvCtx->surfaceQueueWriteIdx = queued;
+    }
+    nvCtx->surfaceQueue[nvCtx->surfaceQueueWriteIdx] = surface;
+    nvCtx->surfaceQueueWriteIdx = (nvCtx->surfaceQueueWriteIdx + 1) % nvCtx->surfaceQueueCapacity;
     pthread_mutex_unlock(&nvCtx->resolveMutex);
 
     //Wake up the resolve thread

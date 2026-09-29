@@ -250,6 +250,7 @@ typedef struct _NVContext
     int                 currentPictureId;
     pthread_t           resolveThread;
     bool                resolveThreadStarted;
+    bool                resolveThreadFailed; // protected by resolveMutex
     pthread_mutex_t     resolveMutex;
     pthread_cond_t      resolveCondition;
     pthread_cond_t      videoProcCondition; // protected by drv->objectCreationMutex
@@ -258,9 +259,10 @@ typedef struct _NVContext
     bool                videoProcDestroying;
     unsigned int        activeDecodeCalls; // protected by drv->objectCreationMutex
     bool                decodeDestroying;
-    NVSurface*          surfaceQueue[SURFACE_QUEUE_SIZE];
-    int                 surfaceQueueReadIdx;
-    int                 surfaceQueueWriteIdx;
+    NVSurface**         surfaceQueue; // protected by resolveMutex
+    size_t              surfaceQueueCapacity;
+    size_t              surfaceQueueReadIdx;
+    size_t              surfaceQueueWriteIdx;
     volatile bool       exiting;
     pthread_mutex_t     surfaceCreationMutex;
     int                 surfaceCount;
