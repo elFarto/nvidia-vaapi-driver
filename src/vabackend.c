@@ -2220,16 +2220,6 @@ static VAStatus nvCreateBuffer(
         return VA_STATUS_ERROR_INVALID_CONTEXT;
     }
 
-    //HACK: This is an awful hack to support VP8 videos when running within FFMPEG.
-    //VA-API doesn't pass enough information for NVDEC to work with, but the information is there
-    //just before the start of the buffer that was passed to us.
-    size_t offset = 0;
-    if (nvCtx->profile == VAProfileVP8Version0_3 && type == VASliceDataBufferType) {
-        offset = ((uintptr_t) data) & 0xf;
-        data = ((char *) data) - offset;
-        size += (unsigned int)offset;
-    }
-
     //TODO should pool these as most of the time these should be the same size
     Object bufferObject = allocateObject(drv, OBJECT_TYPE_BUFFER, sizeof(NVBuffer));
     *buf_id = bufferObject->id;
@@ -2238,8 +2228,12 @@ static VAStatus nvCreateBuffer(
     buf->bufferType = type;
     buf->elements = num_elements;
     buf->size = num_elements * size;
+    // NB: the buffer always starts at the client's data. This used to walk
+    // backwards from the client's pointer to recover the VP8 frame header that
+    // lives in front of the slice data, which read unrelated memory and made
+    // NVDEC decode every VP8 frame to a single constant image.
     buf->ptr = memalign(16, buf->size);
-    buf->offset = offset;
+    buf->offset = 0;
 
     if (buf->ptr == NULL) {
         LOG("Unable to allocate buffer of %zu bytes", buf->size);
