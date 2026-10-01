@@ -70,6 +70,8 @@ typedef struct
     int                     topFieldFirst;
     int                     secondField;
     int                     order_hint; //needed for AV1
+    uint32_t                av1FrameWidth;  //AV1 frame size last decoded into this surface,
+    uint32_t                av1FrameHeight; //which can be smaller than the surface
     VAProcColorStandardType colorStandard;
     bool                    colorRangeFull;
     struct _BackingImage    *backingImage;
@@ -241,6 +243,17 @@ typedef struct _NVContext
     uint32_t            av1TileMinOffset;
     uint32_t            av1TileMaxEnd;
     bool                av1BitstreamCompacted;
+    /* AV1 frames may be coded smaller than the sequence maximum the context was
+     * created with (frame_size_override_flag). NVDEC scales the decoded frame
+     * to fill the decoder's display area, so the display area has to follow
+     * the frame size: requested is what the current picture needs, applied is
+     * what the decoder was last configured with (0 = the context size). */
+    uint32_t            requestedDisplayWidth;
+    uint32_t            requestedDisplayHeight;
+    uint32_t            appliedDisplayWidth;
+    uint32_t            appliedDisplayHeight;
+    bool                decoderHasDecoded;
+    NVSurface           *lastQueuedSurface; //most recent surface handed to the resolve thread
     CUVIDPICPARAMS      pPicParams;
     const struct _NVCodec *codec;
     cudaVideoCodec      cudaCodec;
