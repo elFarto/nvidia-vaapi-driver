@@ -105,6 +105,20 @@ if ffmpeg_prog.found()
             'LD_LIBRARY_PATH': meson.project_build_root(),
         },
     )
+
+    # Decoding into more than 32 distinct surfaces, which NVDEC can't address
+    # at once, so picture indices have to be reused (#397). Compares a hardware
+    # decode against FFmpeg's software decoder; skips itself without libx264.
+    test(
+        'picture_index_reuse',
+        find_program('tests/test_picture_index_reuse.sh'),
+        timeout : 120,
+        env : {
+            'LIBVA_DRIVER_NAME': 'nvidia',
+            'LIBVA_DRIVERS_PATH': meson.project_build_root(),
+            'LD_LIBRARY_PATH': meson.project_build_root(),
+        },
+    )
 endif
 
 meson.add_devenv(environment({
