@@ -3,6 +3,14 @@ name: ubuntu
 on: [push, pull_request]
 
 jobs:
+  chrome-launcher:
+    runs-on: ubuntu-22.04
+    steps:
+    - uses: actions/checkout@v7
+    - name: Test optional Chrome launcher configuration
+      run: |
+        bash -n install.sh
+        python3 -B tests/test-chrome-launcher.py
   ci:
     strategy:
       matrix:
