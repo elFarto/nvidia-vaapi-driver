@@ -755,7 +755,8 @@ static const VAProfile jpegSupportedProfiles[] = {
     VAProfileJPEGBaseline,
 };
 
-static void jpegBeginPicture(NVContext *ctx) {
+static void jpegBeginPicture(NVContext *ctx, VASurfaceID renderTarget) {
+    (void) renderTarget;
     resetJPEGPictureState(ctx);
 }
 
