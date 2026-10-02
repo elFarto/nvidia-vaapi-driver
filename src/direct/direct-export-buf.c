@@ -1245,7 +1245,12 @@ static bool direct_fillExportDescriptor(NVDriver *drv, NVSurface *surface, VADRM
 
     nvBackingImageStoreSurfaceColorMetadata(surface->backingImage, surface);
 
-    desc->fourcc = fmtInfo->fourcc;
+    // Describe 12-bit surfaces as P016. P012 and P016 are the same two-plane
+    // layout with 16-bit containers and MSB-aligned samples, so this is
+    // lossless for an importer, but Firefox only accepts NV12, YV12, P010 and
+    // P016 and turns P012 away. The EGL backend already exports 12-bit surfaces
+    // under a 16-bit-container format for a similar reason.
+    desc->fourcc = fmtInfo->fourcc == DRM_FORMAT_P012 ? DRM_FORMAT_P016 : fmtInfo->fourcc;
     desc->width = surface->width;
     desc->height = surface->height;
 
