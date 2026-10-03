@@ -16,6 +16,7 @@
 #include <sys/stat.h>
 
 #include <va/va_backend.h>
+#include <va/va_backend_vpp.h>
 #include <va/va_drmcommon.h>
 #include <va/va_vpp.h>
 
@@ -2999,6 +3000,134 @@ fail:
     return false;
 }
 
+// Load the embedded PTX under exportMutex, which also protects the reusable
+// resize buffers and prevents concurrent VideoProc calls from overwriting them.
+static bool loadResizeKernels(NVDriver *drv) {
+    if (drv->videoProcResizeU8Kernel != NULL &&
+        drv->videoProcResizeU16Kernel != NULL) {
+        return true;
+    }
+    if (CHECK_CUDA_RESULT(drv->cu->cuModuleLoadData(&drv->videoProcResizeModule, resizePtx)) ||
+        CHECK_CUDA_RESULT(drv->cu->cuModuleGetFunction(&drv->videoProcResizeU8Kernel,
+                                                       drv->videoProcResizeModule, "resize_plane_u8")) ||
+        CHECK_CUDA_RESULT(drv->cu->cuModuleGetFunction(&drv->videoProcResizeU16Kernel,
+                                                       drv->videoProcResizeModule, "resize_plane_u16"))) {
+        if (drv->videoProcResizeModule != NULL) {
+            CHECK_CUDA_RESULT(drv->cu->cuModuleUnload(drv->videoProcResizeModule));
+            drv->videoProcResizeModule = NULL;
+        }
+        drv->videoProcResizeU8Kernel = NULL;
+        drv->videoProcResizeU16Kernel = NULL;
+        return false;
+    }
+    return true;
+}
+
+// Scale one plane at a time using GPU memory only. The source/destination
+// arrays may be imported resources, so stage through linear CUDA buffers that
+// the kernel can address without depending on surface-write capabilities.
+static bool scaleBackingImage(NVDriver *drv, BackingImage *srcImg, BackingImage *dstImg,
+                              uint32_t srcWidth, uint32_t srcHeight,
+                              uint32_t dstWidth, uint32_t dstHeight) {
+    const NVFormatInfo *fmtInfo = &formatsInfo[srcImg->format];
+    if (fmtInfo->bppc != 1 && fmtInfo->bppc != 2) {
+        return false;
+    }
+
+    // Validate every plane before writing any of them.
+    for (uint32_t plane = 0; plane < fmtInfo->numPlanes; plane++) {
+        const NVFormatPlane *info = &fmtInfo->plane[plane];
+        const uint32_t xAlign = 1u << info->ss.x;
+        const uint32_t yAlign = 1u << info->ss.y;
+        if (srcWidth % xAlign || dstWidth % xAlign ||
+            srcHeight % yAlign || dstHeight % yAlign ||
+            srcImg->arrays[plane] == NULL || dstImg->arrays[plane] == NULL) {
+            return false;
+        }
+        const size_t sw = srcWidth / xAlign, sh = srcHeight / yAlign;
+        const size_t dw = dstWidth / xAlign, dh = dstHeight / yAlign;
+        const size_t pixelBytes = (size_t) fmtInfo->bppc * info->channelCount;
+        if (sw == 0 || sh == 0 || dw == 0 || dh == 0 || pixelBytes == 0 ||
+            sw > SIZE_MAX / pixelBytes || dw > SIZE_MAX / pixelBytes ||
+            sw * pixelBytes > SIZE_MAX / sh ||
+            dw * pixelBytes > SIZE_MAX / dh) {
+            return false;
+        }
+    }
+
+    bool success = false;
+    pthread_mutex_lock(&drv->exportMutex);
+    if (!loadResizeKernels(drv)) {
+        goto done;
+    }
+    for (uint32_t plane = 0; plane < fmtInfo->numPlanes; plane++) {
+        const NVFormatPlane *info = &fmtInfo->plane[plane];
+        uint32_t sw = srcWidth >> info->ss.x, sh = srcHeight >> info->ss.y;
+        uint32_t dw = dstWidth >> info->ss.x, dh = dstHeight >> info->ss.y;
+        uint32_t channels = info->channelCount;
+        const size_t srcPitch = (size_t) sw * fmtInfo->bppc * channels;
+        const size_t dstPitch = (size_t) dw * fmtInfo->bppc * channels;
+        if (!ensureVideoProcBuffer(drv, &drv->videoProcResizeSrcBuffer,
+                                   &drv->videoProcResizeSrcBufferSize, srcPitch * sh) ||
+            !ensureVideoProcBuffer(drv, &drv->videoProcResizeDstBuffer,
+                                   &drv->videoProcResizeDstBufferSize, dstPitch * dh)) {
+            goto done;
+        }
+
+        CUDA_MEMCPY2D input = {
+            .srcMemoryType = CU_MEMORYTYPE_ARRAY,
+            .srcArray = srcImg->arrays[plane],
+            .dstMemoryType = CU_MEMORYTYPE_DEVICE,
+            .dstDevice = drv->videoProcResizeSrcBuffer,
+            .dstPitch = srcPitch,
+            .WidthInBytes = srcPitch,
+            .Height = sh,
+        };
+        if (CHECK_CUDA_RESULT(drv->cu->cuMemcpy2D(&input))) {
+            goto done;
+        }
+
+        CUdeviceptr srcBuffer = drv->videoProcResizeSrcBuffer;
+        CUdeviceptr dstBuffer = drv->videoProcResizeDstBuffer;
+        float scaleX = (float) sw / (float) dw;
+        float scaleY = (float) sh / (float) dh;
+        void *args[] = { &srcBuffer, &dstBuffer, &sw, &sh, &dw, &dh,
+                         &channels, &scaleX, &scaleY };
+        CUfunction kernel = fmtInfo->bppc == 1 ? drv->videoProcResizeU8Kernel :
+                                                 drv->videoProcResizeU16Kernel;
+        if (CHECK_CUDA_RESULT(drv->cu->cuLaunchKernel(kernel,
+                (dw + 15) / 16, (dh + 15) / 16, 1,
+                16, 16, 1, 0, 0, args, NULL))) {
+            goto done;
+        }
+
+        CUDA_MEMCPY2D output = {
+            .srcMemoryType = CU_MEMORYTYPE_DEVICE,
+            .srcDevice = dstBuffer,
+            .srcPitch = dstPitch,
+            .dstMemoryType = CU_MEMORYTYPE_ARRAY,
+            .dstArray = dstImg->arrays[plane],
+            .WidthInBytes = dstPitch,
+            .Height = dh,
+        };
+        // A synchronous copy also waits for the preceding kernel on stream 0,
+        // so the buffers and surfaces are safe to reuse when this returns.
+        if (CHECK_CUDA_RESULT(drv->cu->cuMemcpy2D(&output))) {
+            goto done;
+        }
+    }
+    success = true;
+
+done:
+    if (!success) {
+        // Even an error after a queued launch must not release the surfaces
+        // while the GPU may still be accessing them.
+        CHECK_CUDA_RESULT(drv->cu->cuStreamSynchronize(0));
+    }
+    pthread_mutex_unlock(&drv->exportMutex);
+    return success;
+}
+
 static bool copySurfaceBackingImage(NVDriver *drv, NVSurface *src, NVSurface *dst, const VAProcPipelineParameterBuffer *pipeline) {
     if (src == NULL || dst == NULL || pipeline == NULL) {
         // The destination (render target) was marked resolving in nvBeginPicture;
@@ -3018,7 +3147,9 @@ static bool copySurfaceBackingImage(NVDriver *drv, NVSurface *src, NVSurface *ds
     }
 
     if (srcRegion.x != 0 || srcRegion.y != 0 || dstRegion.x != 0 || dstRegion.y != 0 ||
-        srcRegion.width != dstRegion.width || srcRegion.height != dstRegion.height) {
+        srcRegion.width == 0 || srcRegion.height == 0 || dstRegion.width == 0 || dstRegion.height == 0 ||
+        srcRegion.width > src->width || srcRegion.height > src->height ||
+        dstRegion.width > dst->width || dstRegion.height > dst->height) {
         LOG("Unsupported VideoProc blit: src=%dx%d+%d+%d dst=%dx%d+%d+%d",
             srcRegion.width, srcRegion.height, srcRegion.x, srcRegion.y,
             dstRegion.width, dstRegion.height, dstRegion.x, dstRegion.y);
@@ -3040,6 +3171,11 @@ static bool copySurfaceBackingImage(NVDriver *drv, NVSurface *src, NVSurface *ds
     BackingImage *dstImg = dst->backingImage;
     nvSurfaceCopyColorMetadataFromBackingImage(src, srcImg);
     if (srcImg != NULL && dstImg != NULL && (srcImg->format == NV_FORMAT_NV12 || srcImg->format == NV_FORMAT_P010 || srcImg->format == NV_FORMAT_P012) && dstImg->format == NV_FORMAT_ARGB) {
+        if (srcRegion.width != dstRegion.width || srcRegion.height != dstRegion.height) {
+            CHECK_CUDA_RESULT(cu->cuCtxPopCurrent(NULL));
+            setSurfaceResolving(dst, false);
+            return false;
+        }
         const VAProcColorStandardType colorStandard = effectiveSurfaceColorStandard(src, pipeline);
         const bool fullRange = effectiveSurfaceColorRangeFull(src, pipeline);
         const ColorMatrix *matrix = colorMatrixForStandard(colorStandard, srcRegion.width, fullRange);
@@ -3078,6 +3214,18 @@ static bool copySurfaceBackingImage(NVDriver *drv, NVSurface *src, NVSurface *ds
     }
 
     const NVFormatInfo *fmtInfo = &formatsInfo[srcImg->format];
+
+    if (srcRegion.width != dstRegion.width || srcRegion.height != dstRegion.height) {
+        bool scaled = scaleBackingImage(drv, srcImg, dstImg,
+                                        srcRegion.width, srcRegion.height,
+                                        dstRegion.width, dstRegion.height);
+        bool popFailed = CHECK_CUDA_RESULT(cu->cuCtxPopCurrent(NULL));
+        if (!scaled || popFailed) {
+            setSurfaceResolving(dst, false);
+            return false;
+        }
+        goto done;
+    }
 
     for (uint32_t i = 0; i < fmtInfo->numPlanes; i++) {
         const NVFormatPlane *p = &fmtInfo->plane[i];
@@ -4111,6 +4259,69 @@ static VAStatus nvQuerySurfaceAttributes(
 }
 
 /* used by va trace */
+// VideoProc currently supports the pipeline buffer used for copies and
+// YUV-to-RGB conversion, with no additional VAProcFilterParameterBuffer filters.
+// Clients such as FFmpeg query these hooks before submitting any pipeline.
+static bool isVideoProcContext(NVDriver *drv, VAContextID context) {
+    pthread_mutex_lock(&drv->objectCreationMutex);
+    NVContext *nvCtx = getObjectPtr(drv, OBJECT_TYPE_CONTEXT, context);
+    bool valid = nvCtx != NULL && nvCtx->entrypoint == VAEntrypointVideoProc;
+    pthread_mutex_unlock(&drv->objectCreationMutex);
+    return valid;
+}
+
+static VAStatus nvQueryVideoProcFilters(VADriverContextP ctx, VAContextID context,
+                                        VAProcFilterType *filters, unsigned int *num_filters) {
+    (void) filters;
+    if (num_filters == NULL) {
+        return VA_STATUS_ERROR_INVALID_PARAMETER;
+    }
+    if (!isVideoProcContext(ctx->pDriverData, context)) {
+        return VA_STATUS_ERROR_INVALID_CONTEXT;
+    }
+    *num_filters = 0;
+    return VA_STATUS_SUCCESS;
+}
+
+static VAStatus nvQueryVideoProcFilterCaps(VADriverContextP ctx, VAContextID context,
+                                           VAProcFilterType type, void *filter_caps,
+                                           unsigned int *num_filter_caps) {
+    (void) type;
+    (void) filter_caps;
+    if (num_filter_caps == NULL) {
+        return VA_STATUS_ERROR_INVALID_PARAMETER;
+    }
+    if (!isVideoProcContext(ctx->pDriverData, context)) {
+        return VA_STATUS_ERROR_INVALID_CONTEXT;
+    }
+    *num_filter_caps = 0;
+    return VA_STATUS_ERROR_UNSUPPORTED_FILTER;
+}
+
+static VAStatus nvQueryVideoProcPipelineCaps(VADriverContextP ctx, VAContextID context,
+                                             VABufferID *filters, unsigned int num_filters,
+                                             VAProcPipelineCaps *pipeline_caps) {
+    (void) filters;
+    if (pipeline_caps == NULL) {
+        return VA_STATUS_ERROR_INVALID_PARAMETER;
+    }
+    if (!isVideoProcContext(ctx->pDriverData, context)) {
+        return VA_STATUS_ERROR_INVALID_CONTEXT;
+    }
+    if (num_filters != 0) {
+        return VA_STATUS_ERROR_UNSUPPORTED_FILTER;
+    }
+
+    // No filter, reference, rotation or blend capabilities are advertised.
+    // Zero the entire result because some clients pass an uninitialized struct.
+    memset(pipeline_caps, 0, sizeof(*pipeline_caps));
+    pipeline_caps->min_input_width = pipeline_caps->min_output_width = 1;
+    pipeline_caps->min_input_height = pipeline_caps->min_output_height = 1;
+    pipeline_caps->max_input_width = pipeline_caps->max_output_width = 16384;
+    pipeline_caps->max_input_height = pipeline_caps->max_output_height = 16384;
+    return VA_STATUS_SUCCESS;
+}
+
 static VAStatus nvBufferInfo(
            VADriverContextP ctx,      /* in */
            VABufferID buf_id,         /* in */
@@ -4322,6 +4533,12 @@ static VAStatus nvTerminate( VADriverContextP ctx )
         drv->videoProcModuleP010 = NULL;
         drv->p010ToArgbKernel = NULL;
     }
+    if (drv->videoProcResizeModule != NULL) {
+        CHECK_CUDA_RESULT(cu->cuModuleUnload(drv->videoProcResizeModule));
+        drv->videoProcResizeModule = NULL;
+        drv->videoProcResizeU8Kernel = NULL;
+        drv->videoProcResizeU16Kernel = NULL;
+    }
     if (drv->videoProcYBuffer != 0) {
         CHECK_CUDA_RESULT(cu->cuMemFree(drv->videoProcYBuffer));
         drv->videoProcYBuffer = 0;
@@ -4333,6 +4550,14 @@ static VAStatus nvTerminate( VADriverContextP ctx )
     if (drv->videoProcArgbBuffer != 0) {
         CHECK_CUDA_RESULT(cu->cuMemFree(drv->videoProcArgbBuffer));
         drv->videoProcArgbBuffer = 0;
+    }
+    if (drv->videoProcResizeSrcBuffer != 0) {
+        CHECK_CUDA_RESULT(cu->cuMemFree(drv->videoProcResizeSrcBuffer));
+        drv->videoProcResizeSrcBuffer = 0;
+    }
+    if (drv->videoProcResizeDstBuffer != 0) {
+        CHECK_CUDA_RESULT(cu->cuMemFree(drv->videoProcResizeDstBuffer));
+        drv->videoProcResizeDstBuffer = 0;
     }
     free(drv->cpuVideoProcYBuffer);
     free(drv->cpuVideoProcUVBuffer);
@@ -4423,6 +4648,13 @@ static const struct VADriverVTable vtable = {
     VTABLE(CreateBuffer2),
     VTABLE(QueryProcessingRate),
     VTABLE(ExportSurfaceHandle),
+};
+
+static const struct VADriverVTableVPP vppVtable = {
+    .version = VA_DRIVER_VTABLE_VPP_VERSION,
+    .vaQueryVideoProcFilters = nvQueryVideoProcFilters,
+    .vaQueryVideoProcFilterCaps = nvQueryVideoProcFilterCaps,
+    .vaQueryVideoProcPipelineCaps = nvQueryVideoProcPipelineCaps,
 };
 
 __attribute__((visibility("default")))
@@ -4530,5 +4762,8 @@ VAStatus __vaDriverInit_1_0(VADriverContextP ctx) {
     }
 
     *ctx->vtable = vtable;
+    if (ctx->vtable_vpp != NULL) {
+        *ctx->vtable_vpp = vppVtable;
+    }
     return VA_STATUS_SUCCESS;
 }

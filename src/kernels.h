@@ -3,5 +3,6 @@
 
 extern const char nv12ToArgbPtx[];
 extern const char p010ToArgbPtx[];
+extern const char resizePtx[];
 
 #endif
