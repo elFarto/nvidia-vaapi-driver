@@ -3688,9 +3688,9 @@ static VAStatus nvCreateImage(
      * An array indicating the scanline pitch in bytes for each plane.
      * Each plane may have a different pitch. Maximum 3 planes for planar formats
      */
-    image->pitches[0] = width * fmtInfo->bppc;
-    image->pitches[1] = width * fmtInfo->bppc;
-    image->pitches[2] = width * fmtInfo->bppc;
+    for (uint32_t i = 0; i < 3; i++) {
+        image->pitches[i] = i < fmtInfo->numPlanes ? (width >> p[i].ss.x) * fmtInfo->bppc * p[i].channelCount : 0;
+    }
     /*
      * An array indicating the byte offset from the beginning of the image data
      * to the start of each plane.
@@ -3807,7 +3807,7 @@ static VAStatus nvGetImage(
         .dstXInBytes = 0, .dstY = 0,
         .dstMemoryType = CU_MEMORYTYPE_HOST,
         .dstHost = (char *)imageObj->imageBuffer->ptr + offset,
-        .dstPitch = width * fmtInfo->bppc,
+        .dstPitch = (width >> p->ss.x) * fmtInfo->bppc * p->channelCount,
 
         .WidthInBytes = (width >> p->ss.x) * fmtInfo->bppc * p->channelCount,
         .Height = height >> p->ss.y
