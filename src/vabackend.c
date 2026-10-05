@@ -689,12 +689,83 @@ NVSurface* nvSurfaceFromSurfaceId(NVDriver *drv, VASurfaceID surf) {
     return NULL;
 }
 
+static void touchPictureIdx(NVDriver *drv, NVSurface *surface) {
+    __atomic_store_n(&surface->pictureIdxLastUsed,
+                     __atomic_add_fetch(&drv->pictureIdxUseCounter, 1, __ATOMIC_RELAXED),
+                     __ATOMIC_RELAXED);
+}
+
 int pictureIdxFromSurfaceId(NVDriver *drv, VASurfaceID surfId) {
     NVSurface *surf = nvSurfaceFromSurfaceId(drv, surfId);
     if (surf != NULL) {
+        //a reference frame counts as a use, so it isn't the first index reclaimed
+        if (surf->pictureIdx >= 0) {
+            touchPictureIdx(drv, surf);
+        }
         return surf->pictureIdx;
     }
     return -1;
+}
+
+// Requires drv->objectCreationMutex. Hands the surface's picture index back to
+// the context that assigned it. That isn't necessarily surface->contextId: a
+// VideoProc blit into the surface moves contextId without touching the index.
+static void releasePictureIdxLocked(NVDriver *drv, NVSurface *surface) {
+    if (surface->pictureIdx < 0) {
+        return;
+    }
+    ARRAY_FOR_EACH(Object, o, &drv->objects)
+        if (o->type == OBJECT_TYPE_CONTEXT) {
+            NVContext *nvCtx = (NVContext*) o->obj;
+            if (nvCtx->pictureIdxOwners[surface->pictureIdx] == surface) {
+                nvCtx->pictureIdxOwners[surface->pictureIdx] = NULL;
+            }
+        }
+    END_FOR_EACH
+    surface->pictureIdx = -1;
+}
+
+static bool isSurfaceResolving(NVSurface *surface) {
+    pthread_mutex_lock(&surface->mutex);
+    bool resolving = surface->resolving != 0;
+    pthread_mutex_unlock(&surface->mutex);
+    return resolving;
+}
+
+// Requires drv->objectCreationMutex. Gives the surface a picture index on nvCtx:
+// a free one if there is one, otherwise the one held longest without being
+// decoded into or referenced. VA-API doesn't say which surfaces a client still
+// needs, so the least recently used index is the one least likely to be
+// referenced again. A surface whose resolve is still pending keeps its index,
+// since the resolve thread maps the frame through it.
+static bool acquirePictureIdxLocked(NVDriver *drv, NVContext *nvCtx, NVSurface *surface) {
+    int idx = -1;
+    NVSurface *victim = NULL;
+    for (int i = 0; i < nvCtx->surfaceCount; i++) {
+        NVSurface *holder = nvCtx->pictureIdxOwners[i];
+        if (holder == NULL) {
+            idx = i;
+            victim = NULL;
+            break;
+        }
+        if ((victim == NULL || holder->pictureIdxLastUsed < victim->pictureIdxLastUsed) &&
+            !isSurfaceResolving(holder)) {
+            idx = i;
+            victim = holder;
+        }
+    }
+    if (idx < 0) {
+        return false;
+    }
+    if (victim != NULL) {
+        LOG_DEBUG("Reassigning picture index %d from surface %p to %p", idx, victim, surface);
+        victim->pictureIdx = -1;
+    }
+    nvCtx->pictureIdxOwners[idx] = surface;
+    nvCtx->pictureIdxAssigned = true;
+    surface->pictureIdx = idx;
+    touchPictureIdx(drv, surface);
+    return true;
 }
 
 static void waitSurfaceResolved(NVSurface *surface);
@@ -1923,6 +1994,11 @@ static VAStatus nvDestroySurfaces(
 
         detachBackingImageFromSurface(drv, surface);
 
+        //the resolve is done, so the context can hand the picture index out again
+        pthread_mutex_lock(&drv->objectCreationMutex);
+        releasePictureIdxLocked(drv, surface);
+        pthread_mutex_unlock(&drv->objectCreationMutex);
+
         deleteObject(drv, surface_list[i]);
     }
 
@@ -2156,7 +2232,7 @@ static VAStatus recreateDecoderForSurface(NVContext *nvCtx, NVSurface *surface) 
         return VA_STATUS_SUCCESS;
     }
 
-    if (nvCtx->currentPictureId != 0) {
+    if (nvCtx->pictureIdxAssigned) {
         LOG("Decoder/surface format mismatch after decode start: decoder format=%d chroma=%d bitDepth=%d, surface format=%d chroma=%d bitDepth=%d",
             nvCtx->decoderSurfaceFormat, nvCtx->decoderChromaFormat, nvCtx->decoderBitDepth,
             surface->format, surface->chromaFormat, surface->bitDepth);
@@ -3198,8 +3274,10 @@ static VAStatus nvBeginPicture(
         if (surface->backingImage != NULL) {
             detachBackingImageFromSurface(drv, surface);
         }
-        //...and reset the pictureIdx
-        surface->pictureIdx = -1;
+        //...and hand its picture index back to the context that assigned it
+        pthread_mutex_lock(&drv->objectCreationMutex);
+        releasePictureIdxLocked(drv, surface);
+        pthread_mutex_unlock(&drv->objectCreationMutex);
     }
 
     VAStatus decoderStatus = recreateDecoderForSurface(nvCtx, surface);
@@ -3208,16 +3286,15 @@ static VAStatus nvBeginPicture(
         return decoderStatus;
     }
 
-    //if this surface hasn't been used before, give it a new picture index
-    if (surface->pictureIdx == -1) {
-        if (nvCtx->currentPictureId == nvCtx->surfaceCount) {
-            endDecodeCall(drv, nvCtx);
-            return VA_STATUS_ERROR_MAX_NUM_EXCEEDED;
-        }
-        surface->pictureIdx = nvCtx->currentPictureId++;
-    }
-
     pthread_mutex_lock(&drv->objectCreationMutex);
+    //if this surface doesn't hold a picture index, give it one
+    if (surface->pictureIdx == -1 && !acquirePictureIdxLocked(drv, nvCtx, surface)) {
+        pthread_mutex_unlock(&drv->objectCreationMutex);
+        LOG("All %d picture indices are held by surfaces that are still resolving", nvCtx->surfaceCount);
+        endDecodeCall(drv, nvCtx);
+        return VA_STATUS_ERROR_MAX_NUM_EXCEEDED;
+    }
+    touchPictureIdx(drv, surface);
     surface->contextId = context;
     pthread_mutex_unlock(&drv->objectCreationMutex);
     setSurfaceResolving(surface, true);

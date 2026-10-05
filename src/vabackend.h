@@ -65,6 +65,7 @@ typedef struct
     cudaVideoChromaFormat   chromaFormat;
     int                     bitDepth;
     int                     pictureIdx;
+    uint64_t                pictureIdxLastUsed; // drv->pictureIdxUseCounter value when last decoded into or referenced
     VAContextID             contextId; // last context to use this target; remains valid as an ID after destruction
     int                     progressiveFrame;
     int                     topFieldFirst;
@@ -175,6 +176,7 @@ typedef struct _NVDriver
     Array/*<Object>*/       objects;
     pthread_mutex_t         objectCreationMutex;
     VAGenericID             nextObjId;
+    uint64_t                pictureIdxUseCounter; // updated atomically
     bool                    useCorrectNV12Format;
     bool                    supports16BitSurface;
     bool                    supports444Surface;
@@ -260,7 +262,11 @@ typedef struct _NVContext
     cudaVideoSurfaceFormat decoderSurfaceFormat;
     cudaVideoChromaFormat decoderChromaFormat;
     int                 decoderBitDepth;
-    int                 currentPictureId;
+    // NVDEC can address at most 32 decode surfaces, but VA-API lets a client
+    // render into as many surfaces as it likes. pictureIdxOwners maps each
+    // index to the surface currently holding it.
+    NVSurface          *pictureIdxOwners[32]; // protected by drv->objectCreationMutex
+    bool                pictureIdxAssigned; // an index has been handed out, so the decoder's format is fixed
     pthread_t           resolveThread;
     bool                resolveThreadStarted;
     bool                resolveThreadFailed; // protected by resolveMutex
