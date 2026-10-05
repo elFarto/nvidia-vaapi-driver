@@ -294,7 +294,12 @@ typedef struct
 
 typedef void (*HandlerFunc)(NVContext*, NVBuffer* , CUVIDPICPARAMS*);
 typedef cudaVideoCodec (*ComputeCudaCodec)(VAProfile);
-typedef void (*CodecBeginPictureFunc)(NVContext*);
+typedef enum {
+    NV_PICTURE_BEGIN,
+    NV_PICTURE_RENDER,
+    NV_PICTURE_END,
+} NVPictureOperation;
+typedef void (*CodecBeginPictureFunc)(NVContext*, VASurfaceID);
 
 // Internals exposed for the stats subsystem (src/stats.c).
 pid_t nv_gettid(void);
@@ -308,9 +313,30 @@ struct _NVCodec {
     int                 supportedProfileCount;
     const VAProfile     *supportedProfiles;
     CodecBeginPictureFunc beginPicture;
+    // Optional lifecycle hooks. checkPicture and surfaceDestroyed run with
+    // objectCreationMutex held; the other hooks run during an active decode call.
+    // checkPicture may reject a call before the backend changes its target.
+    VAStatus (*checkPicture)(NVContext*, NVPictureOperation);
+    // Override buffer dispatch when a codec needs submission error reporting.
+    VAStatus (*renderPicture)(NVContext*, VABufferID*, int);
+    // Validate the assembled picture before CUDA submission; release any
+    // codec-owned pending output on failure before returning the error.
+    VAStatus (*prepareDecode)(NVContext*);
+    // Called after decode with default field order set. May adjust metadata;
+    // return false to defer resolution or release an incomplete failed output.
+    bool (*finishDecode)(NVContext*, VAStatus);
+    // Release codec-owned pending output when CUDA context push/pop fails.
+    void (*abortPicture)(NVContext*);
+    void (*surfaceDestroyed)(NVContext*, VASurfaceID, NVSurface*);
 };
 
 typedef struct _NVCodec NVCodec;
+
+// Codec helpers. Surface lookup must stay under objectCreationMutex while the
+// returned pointer is used; buffer lookup has the same lifetime as RenderPicture.
+NVSurface *nvGetSurface(NVDriver *drv, VASurfaceID id);
+NVBuffer *nvGetBuffer(NVDriver *drv, VABufferID id);
+void nvSetSurfaceResolving(NVSurface *surface, bool resolving);
 
 typedef struct
 {
