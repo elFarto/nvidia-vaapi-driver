@@ -3617,6 +3617,18 @@ static VAStatus nvEndPicture(
     //Wake up the resolve thread
     pthread_cond_signal(&nvCtx->resolveCondition);
 
+    // An exported dma-buf carries no fence, and NVIDIA's GL would not wait on
+    // one anyway, so a client that imports it once and never calls
+    // vaSyncSurface (Chrome) samples whatever the backing image holds the moment
+    // it composites. When it shows a frame right after decoding it, as it does
+    // when stepping through a paused video, that is still the surface's previous
+    // frame. For exported surfaces, return only once the frame is in the backing
+    // image. Surfaces that are only read through vaGetImage and friends keep the
+    // asynchronous resolve, since those calls wait for it themselves.
+    if (atomic_load(&surface->exported)) {
+        waitSurfaceResolved(surface);
+    }
+
     endDecodeCall(drv, nvCtx);
     return status;
 }
@@ -4397,6 +4409,8 @@ static VAStatus nvExportSurfaceHandle(
     }
 
     //LOG("Exporting surface: %d (%p)", surface->pictureIdx, surface);
+
+    atomic_store(&surface->exported, true);
 
     waitSurfaceResolved(surface);
 
