@@ -77,12 +77,12 @@ To install and use `nvidia-vaapi-driver`, follow the steps in installation and c
 
 - NVIDIA driver series 470 or 500+
 
-## Quick install from this fork
+## Quick install
 
-This fork's `main` branch is intended to match the locally tested AoTofu driver build. If the repository is private, clone it with a GitHub account that has access:
+You can use the installer script to install the driver:
 
 ```sh
-git clone git@github.com:AoTofu/nvidia-vaapi-driver.git
+git clone https://github.com/elFarto/nvidia-vaapi-driver.git
 cd nvidia-vaapi-driver
 ./install.sh --deps --clean
 ```
@@ -160,8 +160,10 @@ Environment variables used to control the behavior of this library.
 | `NVD_DECODE_SURFACE_COUNT` | Override the default decode surface count used when clients create a decode context without render targets. Valid range is `1` to `32`; default is `32`. |
 | `NVD_ENABLE_CLIENT_PACKED_HEADERS` | Opt into prepending client-supplied H.264/HEVC packed header data. Default disabled because NVENC-generated SPS/PPS is safer for NVENC slice output. |
 | `NVD_DISABLE_CLIENT_PACKED_HEADERS` | Deprecated compatibility spelling. Client-supplied H.264/HEVC packed header data is ignored by default while packed-header capability advertisement remains enabled. |
-| `NVD_MAX_DETACHED_BACKING_IMAGE_BYTES` | Upper bound (in bytes) on the size of the detached backing-image cache used by the direct backend to recycle decode surfaces across stream switches. Lower this on low-VRAM GPUs to reduce memory usage at the cost of more re-allocation when streams change. Set to `0` to disable detached caching. Default: scales with the GPU — total VRAM / 64 (~1.6%), clamped to 64 MiB–512 MiB; falls back to `134217728` (128 MiB) if the VRAM size cannot be queried. |
-| `NVD_MAX_DETACHED_BACKING_IMAGES` | Upper bound on the number of cached detached backing images. Set to `0` to disable detached caching. Default: `16`. |
+| `NVD_MAX_DETACHED_BACKING_IMAGE_BYTES` | Target upper bound (in bytes) on the size of the detached backing-image cache used by the direct backend to recycle decode surfaces across stream switches. Lower this on low-VRAM GPUs to reduce memory usage at the cost of more re-allocation when streams change. Set to `0` to reclaim every eligible detached image. Default: scales with the GPU — total VRAM / 64 (~1.6%), clamped to 64 MiB–512 MiB; falls back to `134217728` (128 MiB) if the VRAM size cannot be queried. |
+| `NVD_MAX_DETACHED_BACKING_IMAGES` | Target upper bound on the number of cached detached backing images. Set to `0` to reclaim every eligible detached image. Default: `16`. |
+
+On Linux, a detached image with DMA-BUF references held by the client is not eligible for reclamation. It may temporarily exceed either cache target and becomes eligible after the client closes those references.
 
 ### `NVD_ENCODE_PROBE_CACHE`
 

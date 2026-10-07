@@ -15,6 +15,8 @@
 #include <sys/sysmacros.h>
 #endif
 #include <string.h>
+#include <errno.h>
+#include <poll.h>
 #include "../backend-common.h"
 
 #include <drm.h>
@@ -301,10 +303,156 @@ static uint64_t backingImageMemorySize(const BackingImage *img) {
     return size;
 }
 
-static bool backingImageCanPrune(const BackingImage *img) {
+static bool backingImageImplicitFencesIdle(const BackingImage *img) {
+    if (img == NULL) {
+        return false;
+    }
+
+    struct pollfd pfds[4];
+    nfds_t nfds = 0;
+
+    for (int i = 0; i < 4; i++) {
+        if (img->fds[i] < 0) {
+            continue;
+        }
+
+        pfds[nfds++] = (struct pollfd) {
+            .fd = img->fds[i],
+            .events = POLLOUT,
+        };
+    }
+
+    if (nfds == 0) {
+        return true;
+    }
+
+    // POLLOUT becomes ready once all currently attached implicit
+    // DMA-BUF fences, shared and exclusive, have signaled.
+    int ret;
+    do {
+        ret = poll(pfds, nfds, 0);
+    } while (ret < 0 && errno == EINTR);
+
+    if (ret <= 0) {
+        return false;
+    }
+
+    for (nfds_t i = 0; i < nfds; i++) {
+        if (pfds[i].revents & (POLLERR | POLLHUP | POLLNVAL)) {
+            return false;
+        }
+        if ((pfds[i].revents & POLLOUT) == 0) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+#ifdef __linux__
+static bool dmaBufFdReferenceCount(int fd, uint64_t *count) {
+    char path[64];
+    int pathLength = snprintf(path, sizeof(path), "/proc/self/fdinfo/%d", fd);
+    if (pathLength < 0 || (size_t) pathLength >= sizeof(path)) {
+        return false;
+    }
+
+    FILE *fdInfo = fopen(path, "r");
+    if (fdInfo == NULL) {
+        return false;
+    }
+
+    bool found = false;
+    char line[128];
+    while (fgets(line, sizeof(line), fdInfo) != NULL) {
+        unsigned long long value;
+        if (sscanf(line, "count: %llu", &value) == 1) {
+            *count = (uint64_t) value;
+            found = true;
+            break;
+        }
+    }
+    fclose(fdInfo);
+    return found;
+}
+
+static uint32_t backingImageOwnFdReferences(const BackingImage *img, int index) {
+    uint32_t references = 0;
+    for (int i = 0; i < 4; i++) {
+        if (img->fds[i] >= 0 &&
+            img->st_dev[i] == img->st_dev[index] &&
+            img->st_ino[i] == img->st_ino[index]) {
+            references++;
+        }
+    }
+    return references;
+}
+
+static bool backingImageHasExternalDmaBufReferences(const BackingImage *img) {
+    for (int i = 0; i < 4; i++) {
+        if (img->fds[i] < 0) {
+            continue;
+        }
+
+        bool alreadyChecked = false;
+        for (int j = 0; j < i; j++) {
+            if (img->fds[j] >= 0 &&
+                img->st_dev[j] == img->st_dev[i] &&
+                img->st_ino[j] == img->st_ino[i]) {
+                alreadyChecked = true;
+                break;
+            }
+        }
+        if (alreadyChecked) {
+            continue;
+        }
+
+        uint64_t referenceCount;
+        if (!dmaBufFdReferenceCount(img->fds[i], &referenceCount)) {
+            // Reference-count visibility is part of the reclamation proof. If
+            // procfs is unavailable (for example inside a client sandbox) or
+            // its fdinfo format cannot be parsed, retain the image rather than
+            // treating an unknown reference count as no external references.
+            LOG_DEBUG("Keeping detached BackingImage %p: unable to read dma-buf fd=%d reference count",
+                img, img->fds[i]);
+            return true;
+        }
+
+        uint32_t ownReferences = backingImageOwnFdReferences(img, i);
+        if (referenceCount != ownReferences) {
+            if (referenceCount > ownReferences) {
+                LOG_DEBUG("Keeping detached BackingImage %p: dma-buf fd=%d has %llu references (%u owned)",
+                    img, img->fds[i], (unsigned long long) referenceCount, ownReferences);
+            } else {
+                // A count below the FDs tracked by this image is inconsistent;
+                // fail closed instead of using it to authorize destruction.
+                LOG_DEBUG("Keeping detached BackingImage %p: dma-buf fd=%d has inconsistent reference count %llu (%u owned)",
+                    img, img->fds[i], (unsigned long long) referenceCount, ownReferences);
+            }
+            return true;
+        }
+    }
+    return false;
+}
+#else
+static bool backingImageHasExternalDmaBufReferences(const BackingImage *img) {
+    (void) img;
+    // Without a supported reference-count query, ownership is unknown. Keep
+    // detached images rather than permitting unsafe reclamation.
+    return true;
+}
+#endif
+
+static bool backingImageIsDetachedAndUnborrowed(const BackingImage *img) {
     return img != NULL &&
            img->surface == NULL &&
            atomic_load(&img->borrowCount) == 0;
+}
+
+static bool backingImageCanPrune(const BackingImage *img) {
+    return backingImageIsDetachedAndUnborrowed(img) &&
+           !backingImageHasExternalDmaBufReferences(img) &&
+           backingImageImplicitFencesIdle(img);
 }
 
 static bool detachedBackingImagesOverLimit(uint64_t bytes, uint32_t count, const NVDriver *drv) {
@@ -318,30 +466,128 @@ static bool detachedBackingImagesOverLimit(uint64_t bytes, uint32_t count, const
            bytes > drv->maxDetachedBackingImageBytes;
 }
 
-static bool pruneOldestDetachedBackingImageLocked(NVDriver *drv, uint64_t *bytes, uint32_t *count) {
-    uint32_t pruneIndex = UINT32_MAX;
-    uint64_t oldestSerial = UINT64_MAX;
+// A candidate for reclamation, ordered by detach age so the oldest goes first.
+typedef struct
+{
+    BackingImage *img;
+    uint64_t      detachedSerial;
+} PruneCandidate;
 
+static void sortPruneCandidatesOldestFirst(PruneCandidate *candidates, uint32_t count) {
+    // Insertion sort: the candidate list is a handful of detached images, and
+    // this keeps the ordering stable and allocation-free.
+    for (uint32_t i = 1; i < count; i++) {
+        PruneCandidate candidate = candidates[i];
+        uint32_t j = i;
+        while (j > 0 && candidates[j - 1].detachedSerial > candidate.detachedSerial) {
+            candidates[j] = candidates[j - 1];
+            j--;
+        }
+        candidates[j] = candidate;
+    }
+}
+
+// Evaluate reclaimability for every image exactly once and return the eligible
+// ones ordered oldest-first.
+//
+// The eligibility test is not cheap: it opens /proc/self/fdinfo once per plane
+// and polls each plane's implicit fence. Re-running it for every image on every
+// iteration of the prune loop made a single prune pass cost O(pruned * images)
+// procfs reads, all of them serialised behind drv->imagesMutex, which every
+// surface realisation also needs. Taking the decision once and then acting on
+// it makes a pass O(images) regardless of how much has to be freed.
+//
+// The candidates are returned as pointers rather than indices because
+// remove_element_at() shifts the array down, invalidating every index we had
+// already collected.
+static uint32_t collectPruneCandidatesLocked(NVDriver *drv, PruneCandidate **out) {
+    *out = NULL;
+
+    if (drv->images.size == 0) {
+        return 0;
+    }
+
+    PruneCandidate *candidates = calloc(drv->images.size, sizeof(PruneCandidate));
+    if (candidates == NULL) {
+        return 0;
+    }
+
+    uint32_t count = 0;
     ARRAY_FOR_EACH(BackingImage*, img, &drv->images)
-        if (backingImageCanPrune(img) && img->detachedSerial < oldestSerial) {
-            pruneIndex = img_idx;
-            oldestSerial = img->detachedSerial;
+        if (backingImageCanPrune(img)) {
+            candidates[count++] = (PruneCandidate) {
+                .img = img,
+                .detachedSerial = img->detachedSerial,
+            };
         }
     END_FOR_EACH
 
-    if (pruneIndex == UINT32_MAX) {
+    sortPruneCandidatesOldestFirst(candidates, count);
+    *out = candidates;
+    return count;
+}
+
+// Remove one already-collected candidate, if it is still in the array.
+static bool pruneCandidateLocked(NVDriver *drv, BackingImage *img, uint64_t *bytes, uint32_t *count) {
+    uint32_t index = UINT32_MAX;
+    ARRAY_FOR_EACH(BackingImage*, candidate, &drv->images)
+        if (candidate == img) {
+            index = candidate_idx;
+            break;
+        }
+    END_FOR_EACH
+
+    if (index == UINT32_MAX) {
         return false;
     }
 
-    BackingImage *img = get_element_at(&drv->images, pruneIndex);
-    const uint64_t imageBytes = backingImageMemorySize(img);
+    uint64_t imageBytes = backingImageMemorySize(img);
+    LOG_DEBUG("Pruning detached BackingImage %p with no client dma-buf references", img);
     destroyBackingImage(drv, img);
-    remove_element_at(&drv->images, pruneIndex);
-    *bytes = *bytes >= imageBytes ? *bytes - imageBytes : 0;
+    remove_element_at(&drv->images, index);
+    if (*bytes >= imageBytes) {
+        *bytes -= imageBytes;
+    } else {
+        *bytes = 0;
+    }
     if (*count > 0) {
         (*count)--;
     }
     return true;
+}
+
+// Memory pressure can make candidate allocation fail precisely when the
+// allocation retry needs to free an image. Keep an allocation-free path for
+// that case; its extra scans are preferable to losing reclamation entirely.
+static bool pruneOldestWithoutCandidatesLocked(NVDriver *drv, uint64_t *bytes, uint32_t *count) {
+    BackingImage *oldest = NULL;
+    uint64_t oldestSerial = UINT64_MAX;
+    ARRAY_FOR_EACH(BackingImage*, img, &drv->images)
+        if (backingImageCanPrune(img) && img->detachedSerial < oldestSerial) {
+            oldest = img;
+            oldestSerial = img->detachedSerial;
+        }
+    END_FOR_EACH
+    return oldest != NULL && pruneCandidateLocked(drv, oldest, bytes, count);
+}
+
+static bool pruneOldestDetachedBackingImageLocked(NVDriver *drv, uint64_t *bytes, uint32_t *count) {
+    PruneCandidate *candidates = NULL;
+    const uint32_t candidateCount = collectPruneCandidatesLocked(drv, &candidates);
+    if (candidates == NULL && drv->images.size != 0) {
+        return pruneOldestWithoutCandidatesLocked(drv, bytes, count);
+    }
+
+    bool pruned = false;
+    for (uint32_t i = 0; i < candidateCount; i++) {
+        if (pruneCandidateLocked(drv, candidates[i].img, bytes, count)) {
+            pruned = true;
+            break;
+        }
+    }
+
+    free(candidates);
+    return pruned;
 }
 
 static void pruneDetachedBackingImagesToLimits(NVDriver *drv) {
@@ -350,15 +596,35 @@ static void pruneDetachedBackingImagesToLimits(NVDriver *drv) {
 
     pthread_mutex_lock(&drv->imagesMutex);
     ARRAY_FOR_EACH(BackingImage*, img, &drv->images)
-        if (backingImageCanPrune(img)) {
+        if (backingImageIsDetachedAndUnborrowed(img)) {
             bytes += backingImageMemorySize(img);
             count++;
         }
     END_FOR_EACH
 
-    while (detachedBackingImagesOverLimit(bytes, count, drv) &&
-           pruneOldestDetachedBackingImageLocked(drv, &bytes, &count)) {
+    if (!detachedBackingImagesOverLimit(bytes, count, drv)) {
+        pthread_mutex_unlock(&drv->imagesMutex);
+        return;
     }
+
+    // Reclaimability is decided once for the whole pass, then acted on in
+    // oldest-first order until the cache is back under its limits.
+    PruneCandidate *candidates = NULL;
+    const uint32_t candidateCount = collectPruneCandidatesLocked(drv, &candidates);
+    if (candidates == NULL && drv->images.size != 0) {
+        while (detachedBackingImagesOverLimit(bytes, count, drv) &&
+               pruneOldestWithoutCandidatesLocked(drv, &bytes, &count)) {}
+        pthread_mutex_unlock(&drv->imagesMutex);
+        return;
+    }
+    for (uint32_t i = 0; i < candidateCount; i++) {
+        if (!detachedBackingImagesOverLimit(bytes, count, drv)) {
+            break;
+        }
+        pruneCandidateLocked(drv, candidates[i].img, &bytes, &count);
+    }
+    free(candidates);
+
     pthread_mutex_unlock(&drv->imagesMutex);
 }
 
@@ -3328,8 +3594,12 @@ static bool direct_fillExportDescriptor(NVDriver *drv, NVSurface *surface, VADRM
     nvBackingImageStoreSurfaceColorMetadata(surface->backingImage, surface);
 
     // VADRMPRIMESurfaceDescriptor::fourcc must be VA_FOURCC_*.
-    // Per-layer DRM formats are provided in layers[].drm_format.
-    desc->fourcc = fmtInfo->vaFormat.fourcc;
+    // Per-layer DRM formats are provided in layers[].drm_format. Describe
+    // 12-bit surfaces as P016 because P012 and P016 share the same two-plane
+    // 16-bit-container layout, while some importers reject P012.
+    desc->fourcc = fmtInfo->vaFormat.fourcc == VA_FOURCC_P012
+        ? VA_FOURCC_P016
+        : fmtInfo->vaFormat.fourcc;
     desc->width = surface->width;
     desc->height = surface->height;
 

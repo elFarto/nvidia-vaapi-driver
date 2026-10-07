@@ -408,6 +408,11 @@ static const char *LOG_SIGNATURE = "NVD_DRIVER_TRACE";
 // Fallback byte ceiling for the detached backing-image cache when total VRAM
 // cannot be queried. The dynamically selected value is clamped to this range.
 static const uint64_t DEFAULT_MAX_DETACHED_BACKING_IMAGE_BYTES = 128ULL * 1024ULL * 1024ULL;
+// How many 5s windows destroyContext() waits for a resolve thread to exit. The
+// thread drains its queue before exiting, so one window can be too short on a
+// loaded GPU; giving up means nvTerminate() has to abandon the whole driver
+// instance, which is a far worse outcome than waiting a little longer.
+#define RESOLVE_THREAD_JOIN_ATTEMPTS 6
 static const uint64_t MIN_DYNAMIC_DETACHED_BACKING_IMAGE_BYTES = 64ULL * 1024ULL * 1024ULL;
 static const uint64_t MAX_DYNAMIC_DETACHED_BACKING_IMAGE_BYTES = 512ULL * 1024ULL * 1024ULL;
 static const uint32_t DEFAULT_MAX_DETACHED_BACKING_IMAGES = 16;
@@ -1897,6 +1902,14 @@ static void* getObjectPtr(NVDriver *drv, ObjectType type, VAGenericID id) {
     return NULL;
 }
 
+NVSurface *nvGetSurface(NVDriver *drv, VASurfaceID id) {
+    return getObjectPtr(drv, OBJECT_TYPE_SURFACE, id);
+}
+
+NVBuffer *nvGetBuffer(NVDriver *drv, VABufferID id) {
+    return getObjectPtr(drv, OBJECT_TYPE_BUFFER, id);
+}
+
 static Object getObjectByPtr(NVDriver *drv, ObjectType type, void *ptr) {
     Object ret = NULL;
     if (ptr != NULL) {
@@ -1910,6 +1923,29 @@ static Object getObjectByPtr(NVDriver *drv, ObjectType type, void *ptr) {
         pthread_mutex_unlock(&drv->objectCreationMutex);
     }
     return ret;
+}
+static void setSurfaceResolving(NVSurface *surface, bool resolving);
+
+// Requires drv->objectCreationMutex to be held by the caller.
+//
+// This used to take the lock itself, but every caller already held it, so the
+// nested acquisition only worked because objectCreationMutex is
+// PTHREAD_MUTEX_RECURSIVE. Make that mutex an ordinary one and the next
+// self-deadlock would hang a vaDestroyContext/vaTerminate. Naming the
+// requirement and keeping the body lock-free makes the constraint visible and
+// keeps the function usable if the mutex type is ever changed. deleteObject()
+// below has the same contract.
+static void finishContextSurfacesLocked(NVDriver *drv, VAContextID context) {
+    // A resolver can exit without publishing a frame. Once it has joined,
+    // release every remaining waiter through the normal condition broadcasts.
+    ARRAY_FOR_EACH(Object, o, &drv->objects)
+        if (o->type == OBJECT_TYPE_SURFACE) {
+            NVSurface *surface = (NVSurface*) o->obj;
+            if (surface->contextId == context) {
+                setSurfaceResolving(surface, false);
+            }
+        }
+    END_FOR_EACH
 }
 
 static void deleteObject(NVDriver *drv, VAGenericID id) {
@@ -1960,16 +1996,16 @@ static void destroyImageObject(NVDriver *drv, VAGenericID imageId, NVImage *img)
     }
 }
 
-static void destroySurfaceObject(NVDriver *drv, VAGenericID surfaceId, NVSurface *surface) {
+static __attribute__((unused)) void destroySurfaceObject(NVDriver *drv, VAGenericID surfaceId, NVSurface *surface) {
     if (surface == NULL) {
         return;
     }
 
     LOG(
-        "deleteAllObjects destroying surface %d (%p) context=%p size=%ux%u rt_format=0x%x resolving=%d decode_failed=%d",
+        "deleteAllObjects destroying surface %d (%p) context_id=%u size=%ux%u rt_format=0x%x resolving=%d decode_failed=%d",
         surface->pictureIdx,
         surface,
-        surface->context,
+        surface->contextId,
         surface->width,
         surface->height,
         surface->rtFormat,
@@ -4605,85 +4641,164 @@ static bool destroyContext(NVDriver *drv, NVContext *nvCtx) {
         return destroyEncodeSession(nvCtx);
     }
 
-    if (isVideoProcEntrypoint(nvCtx->entrypoint)) {
-        return true;
+    const bool needsCudaContext = !isVideoProcEntrypoint(nvCtx->entrypoint);
+    if (needsCudaContext) {
+        CHECK_CUDA_RESULT_RETURN(cu->cuCtxPushCurrent(drv->cudaContext), false);
     }
 
-    CHECK_CUDA_RESULT_RETURN(cu->cuCtxPushCurrent(drv->cudaContext), false);
-
+    // Join on whether the resolve thread was actually started, not on decoder !=
+    // NULL: a decode context whose decoder was destroyed and failed to recreate
+    // (recreateDecoderForSurface) leaves decoder == NULL with the resolve thread
+    // still running. Guarding on decoder would skip the join and free nvCtx out
+    // from under the live thread. VideoProc contexts never start the thread, so
+    // the flag stays false for them.
     if (nvCtx->resolveThreadStarted) {
         LOG("Signaling resolve thread to exit");
         struct timespec timeout;
         clock_gettime(CLOCK_REALTIME, &timeout);
         timeout.tv_sec += 5;
+        pthread_mutex_lock(&nvCtx->resolveMutex);
         nvCtx->exiting = true;
         pthread_cond_signal(&nvCtx->resolveCondition);
-        LOG("Waiting for resolve thread to exit");
-        int ret = pthread_timedjoin_np(nvCtx->resolveThread, NULL, &timeout);
-        LOG("Finished waiting for resolve thread with %d", ret);
+        pthread_mutex_unlock(&nvCtx->resolveMutex);
+
+        // The thread now drains whatever is still queued before it exits, so a
+        // single 5s wait can be shorter than the remaining work on a loaded
+        // GPU. Give it several attempts: bailing out here is expensive, because
+        // nvTerminate() cannot free anything while the thread is still running
+        // and has to abandon the whole driver instance instead.
+        int ret;
+        int attempts = 0;
+        do {
+            LOG("Waiting for resolve thread to exit");
+            ret = pthread_timedjoin_np(nvCtx->resolveThread, NULL, &timeout);
+            if (ret != 0) {
+                clock_gettime(CLOCK_REALTIME, &timeout);
+                timeout.tv_sec += 5;
+            }
+            attempts++;
+        } while (ret != 0 && attempts < RESOLVE_THREAD_JOIN_ATTEMPTS);
+
+        LOG("Finished waiting for resolve thread with %d after %d attempt(s)", ret, attempts);
+        if (ret != 0) {
+            // Keep the context and its buffers alive while the resolver may
+            // still be using them. A later destroy attempt can retry the join.
+            return false;
+        }
+        nvCtx->resolveThreadStarted = false;
     }
+    free(nvCtx->surfaceQueue);
+    nvCtx->surfaceQueue = NULL;
 
     free(nvCtx->codecData);
     nvCtx->codecData = NULL;
 
     freeBuffer(&nvCtx->sliceOffsets);
     freeBuffer(&nvCtx->bitstreamBuffer);
+    // videoProcCondition is initialised for every context, so destroy it for
+    // every context. Destroying it only for VideoProc entries leaked one
+    // condition variable per decode context.
+    pthread_cond_destroy(&nvCtx->videoProcCondition);
 
-    CHECK_CUDA_RESULT_RETURN(cu->cuCtxPopCurrent(NULL), false);
+    if (needsCudaContext) {
+        CHECK_CUDA_RESULT_RETURN(cu->cuCtxPopCurrent(NULL), false);
+    }
 
     return true;
 }
 
-static void deleteAllObjects(NVDriver *drv) {
-    for (;;) {
-        VAGenericID id = VA_INVALID_ID;
-        ObjectType type = OBJECT_TYPE_CONFIG;
-
-        pthread_mutex_lock(&drv->objectCreationMutex);
-        if (drv->objects.size > 0) {
-            Object obj = (Object) drv->objects.buf[0];
-            id = obj->id;
-            type = obj->type;
-        }
-        pthread_mutex_unlock(&drv->objectCreationMutex);
-
-        if (id == VA_INVALID_ID) {
-            break;
-        }
-
-        LOG("deleteAllObjects handling object %d type %d", id, type);
-
-        switch (type) {
-            case OBJECT_TYPE_CONFIG:
-                deleteObject(drv, id);
-                break;
-            case OBJECT_TYPE_CONTEXT: {
-                NVContext *nvCtx = (NVContext *) getObjectPtr(drv, OBJECT_TYPE_CONTEXT, id);
-                if (nvCtx != NULL) {
-                    destroyContext(drv, nvCtx);
-                }
-                deleteObject(drv, id);
-                break;
-            }
-            case OBJECT_TYPE_SURFACE: {
-                NVSurface *surface = (NVSurface *) getObjectPtr(drv, OBJECT_TYPE_SURFACE, id);
-                destroySurfaceObject(drv, id, surface);
-                break;
-            }
-            case OBJECT_TYPE_BUFFER: {
-                NVBuffer *buf = (NVBuffer *) getObjectPtr(drv, OBJECT_TYPE_BUFFER, id);
-                destroyBufferObject(buf);
-                deleteObject(drv, id);
-                break;
-            }
-            case OBJECT_TYPE_IMAGE: {
-                NVImage *img = (NVImage *) getObjectPtr(drv, OBJECT_TYPE_IMAGE, id);
-                destroyImageObject(drv, id, img);
-                deleteObject(drv, id);
-                break;
-            }
-        }
+// Called with objectCreationMutex held. A VideoProc call can wait for a source
+// produced by another context, so it must not hold that mutex while running.
+static void finishVideoProcCalls(NVDriver *drv, NVContext *nvCtx, VAContextID context) {
+    if (nvCtx->entrypoint != VAEntrypointVideoProc) {
+        return;
     }
+    nvCtx->videoProcDestroying = true;
+    // Let an active blit finish before clearing its target. Then wake any
+    // BeginPicture call waiting for an earlier, unrendered VideoProc picture.
+    while (nvCtx->activeVideoProcRenders != 0) {
+        pthread_cond_wait(&nvCtx->videoProcCondition, &drv->objectCreationMutex);
+    }
+    finishContextSurfacesLocked(drv, context);
+    while (nvCtx->activeVideoProcCalls != 0) {
+        pthread_cond_wait(&nvCtx->videoProcCondition, &drv->objectCreationMutex);
+    }
+}
+
+static void endVideoProcCall(NVDriver *drv, NVContext *nvCtx, bool rendered) {
+    pthread_mutex_lock(&drv->objectCreationMutex);
+    if (rendered) {
+        nvCtx->activeVideoProcRenders--;
+    }
+    nvCtx->activeVideoProcCalls--;
+    pthread_cond_broadcast(&nvCtx->videoProcCondition);
+    pthread_mutex_unlock(&drv->objectCreationMutex);
+}
+
+static void finishDecodeCalls(NVDriver *drv, NVContext *nvCtx) {
+    nvCtx->decodeDestroying = true;
+    while (nvCtx->activeDecodeCalls != 0) {
+        pthread_cond_wait(&nvCtx->videoProcCondition, &drv->objectCreationMutex);
+    }
+}
+
+static void endDecodeCall(NVDriver *drv, NVContext *nvCtx) {
+    pthread_mutex_lock(&drv->objectCreationMutex);
+    nvCtx->activeDecodeCalls--;
+    pthread_cond_broadcast(&nvCtx->videoProcCondition);
+    pthread_mutex_unlock(&drv->objectCreationMutex);
+}
+
+static void destroyObjectPayload(NVDriver *drv, Object o) {
+    if (o == NULL) {
+        return;
+    }
+
+    switch (o->type) {
+        case OBJECT_TYPE_BUFFER:
+            destroyBufferObject((NVBuffer *) o->obj);
+            break;
+        case OBJECT_TYPE_IMAGE:
+            destroyImageObject(drv, o->id, (NVImage *) o->obj);
+            break;
+        case OBJECT_TYPE_SURFACE:
+            // Backing images were already released by destroyAllBackingImage().
+            break;
+        case OBJECT_TYPE_CONTEXT:
+        case OBJECT_TYPE_CONFIG:
+            break;
+    }
+}
+
+static bool deleteAllObjects(NVDriver *drv) {
+    pthread_mutex_lock(&drv->objectCreationMutex);
+    ARRAY_FOR_EACH(Object, o, &drv->objects)
+        if (o->type == OBJECT_TYPE_CONTEXT) {
+            NVContext *nvCtx = (NVContext*) o->obj;
+            finishVideoProcCalls(drv, nvCtx, o->id);
+            if (nvCtx->entrypoint != VAEntrypointVideoProc) {
+                finishDecodeCalls(drv, nvCtx);
+            }
+            if (!destroyContext(drv, nvCtx)) {
+                pthread_mutex_unlock(&drv->objectCreationMutex);
+                return false;
+            }
+            if (nvCtx->entrypoint != VAEntrypointVideoProc) {
+                finishContextSurfacesLocked(drv, o->id);
+            }
+        }
+    END_FOR_EACH
+
+    // Backing images still point to their surfaces. Release them only after all
+    // resolver threads have stopped, and before freeing the surface objects.
+    drv->backend->destroyAllBackingImage(drv);
+    while (drv->objects.size > 0) {
+        Object o = get_element_at(&drv->objects, 0);
+        destroyObjectPayload(drv, o);
+        deleteObject(drv, o->id);
+    }
+    pthread_mutex_unlock(&drv->objectCreationMutex);
+    return true;
 }
 
 NVSurface* nvSurfaceFromSurfaceId(NVDriver *drv, VASurfaceID surf) {
@@ -4695,15 +4810,85 @@ NVSurface* nvSurfaceFromSurfaceId(NVDriver *drv, VASurfaceID surf) {
     return NULL;
 }
 
+static void touchPictureIdx(NVDriver *drv, NVSurface *surface) {
+    __atomic_store_n(&surface->pictureIdxLastUsed,
+                     __atomic_add_fetch(&drv->pictureIdxUseCounter, 1, __ATOMIC_RELAXED),
+                     __ATOMIC_RELAXED);
+}
+
 int pictureIdxFromSurfaceId(NVDriver *drv, VASurfaceID surfId) {
     NVSurface *surf = nvSurfaceFromSurfaceId(drv, surfId);
     if (surf != NULL) {
+        //a reference frame counts as a use, so it isn't the first index reclaimed
+        if (surf->pictureIdx >= 0) {
+            touchPictureIdx(drv, surf);
+        }
         return surf->pictureIdx;
     }
     return -1;
 }
 
-static void setSurfaceResolving(NVSurface *surface, bool resolving);
+// Requires drv->objectCreationMutex. Hands the surface's picture index back to
+// the context that assigned it. That isn't necessarily surface->contextId: a
+// VideoProc blit into the surface moves contextId without touching the index.
+static void releasePictureIdxLocked(NVDriver *drv, NVSurface *surface) {
+    if (surface->pictureIdx < 0) {
+        return;
+    }
+    ARRAY_FOR_EACH(Object, o, &drv->objects)
+        if (o->type == OBJECT_TYPE_CONTEXT) {
+            NVContext *nvCtx = (NVContext*) o->obj;
+            if (nvCtx->pictureIdxOwners[surface->pictureIdx] == surface) {
+                nvCtx->pictureIdxOwners[surface->pictureIdx] = NULL;
+            }
+        }
+    END_FOR_EACH
+    surface->pictureIdx = -1;
+}
+
+static bool isSurfaceResolving(NVSurface *surface) {
+    pthread_mutex_lock(&surface->mutex);
+    bool resolving = surface->resolving != 0;
+    pthread_mutex_unlock(&surface->mutex);
+    return resolving;
+}
+
+// Requires drv->objectCreationMutex. Gives the surface a picture index on nvCtx:
+// a free one if there is one, otherwise the one held longest without being
+// decoded into or referenced. VA-API doesn't say which surfaces a client still
+// needs, so the least recently used index is the one least likely to be
+// referenced again. A surface whose resolve is still pending keeps its index,
+// since the resolve thread maps the frame through it.
+static bool acquirePictureIdxLocked(NVDriver *drv, NVContext *nvCtx, NVSurface *surface) {
+    int idx = -1;
+    NVSurface *victim = NULL;
+    for (int i = 0; i < nvCtx->surfaceCount; i++) {
+        NVSurface *holder = nvCtx->pictureIdxOwners[i];
+        if (holder == NULL) {
+            idx = i;
+            victim = NULL;
+            break;
+        }
+        if ((victim == NULL || holder->pictureIdxLastUsed < victim->pictureIdxLastUsed) &&
+            !isSurfaceResolving(holder)) {
+            idx = i;
+            victim = holder;
+        }
+    }
+    if (idx < 0) {
+        return false;
+    }
+    if (victim != NULL) {
+        LOG_DEBUG("Reassigning picture index %d from surface %p to %p", idx, victim, surface);
+        victim->pictureIdx = -1;
+    }
+    nvCtx->pictureIdxOwners[idx] = surface;
+    nvCtx->pictureIdxAssigned = true;
+    surface->pictureIdx = idx;
+    touchPictureIdx(drv, surface);
+    return true;
+}
+
 static void waitSurfaceResolved(NVSurface *surface);
 
 static cudaVideoCodec vaToCuCodec(VAProfile profile) {
@@ -5145,28 +5330,40 @@ static bool doesGPUSupportCodec(cudaVideoCodec codec, int bitDepth, cudaVideoChr
 static void* resolveSurfaces(void *param) {
     NVContext *ctx = (NVContext*) param;
     NVDriver *drv = ctx->drv;
-    CHECK_CUDA_RESULT_RETURN(cu->cuCtxPushCurrent(drv->cudaContext), NULL);
+    if (CHECK_CUDA_RESULT(cu->cuCtxPushCurrent(drv->cudaContext))) {
+        pthread_mutex_lock(&ctx->resolveMutex);
+        ctx->resolveThreadFailed = true;
+        while (ctx->surfaceQueueReadIdx != ctx->surfaceQueueWriteIdx) {
+            NVSurface *surface = ctx->surfaceQueue[ctx->surfaceQueueReadIdx];
+            ctx->surfaceQueueReadIdx = (ctx->surfaceQueueReadIdx + 1) % ctx->surfaceQueueCapacity;
+            setSurfaceResolving(surface, false);
+        }
+        pthread_cond_broadcast(&ctx->resolveCondition);
+        pthread_mutex_unlock(&ctx->resolveMutex);
+        return NULL;
+    }
 
     LOG("[RT] Resolve thread for %p started", ctx);
-    while (!ctx->exiting) {
+    for (;;) {
         //wait for frame on queue
         pthread_mutex_lock(&ctx->resolveMutex);
-        while (ctx->surfaceQueueReadIdx == ctx->surfaceQueueWriteIdx) {
+        while (ctx->surfaceQueueReadIdx == ctx->surfaceQueueWriteIdx && !ctx->exiting) {
             pthread_cond_wait(&ctx->resolveCondition, &ctx->resolveMutex);
-            if (ctx->exiting) {
-                pthread_mutex_unlock(&ctx->resolveMutex);
-                goto out;
-            }
         }
-        pthread_mutex_unlock(&ctx->resolveMutex);
-        //find the last item
-        //LOG("Reading from queue: %d %d", ctx->surfaceQueueReadIdx, ctx->surfaceQueueWriteIdx);
+        //A context can be destroyed while FFmpeg still holds decoded frames.
+        //Resolve every queued surface before the decoder is destroyed so those
+        //frames retain their backing images for a later vaGetImage call.
+        if (ctx->surfaceQueueReadIdx == ctx->surfaceQueueWriteIdx) {
+            pthread_mutex_unlock(&ctx->resolveMutex);
+            goto out;
+        }
         NVSurface *surface = ctx->surfaceQueue[ctx->surfaceQueueReadIdx++];
-        if (ctx->surfaceQueueReadIdx >= SURFACE_QUEUE_SIZE) {
+        if (ctx->surfaceQueueReadIdx >= ctx->surfaceQueueCapacity) {
             ctx->surfaceQueueReadIdx = 0;
         }
+        pthread_mutex_unlock(&ctx->resolveMutex);
         LOG(
-            "[DECODE][RT] dequeued surface=%p pictureIdx=%d read_idx=%d write_idx=%d decode_failed=%d",
+            "[DECODE][RT] dequeued surface=%p pictureIdx=%d read_idx=%zu write_idx=%zu decode_failed=%d",
             (void*)surface,
             surface != NULL ? surface->pictureIdx : -1,
             ctx->surfaceQueueReadIdx,
@@ -5239,6 +5436,20 @@ static void* resolveSurfaces(void *param) {
         }
     }
 out:
+    // Clear resolving flag on any surfaces still in the queue so that
+    // waitSurfaceResolved() doesn't hang if called after this thread exits.
+    // This can happen when the context is destroyed while surfaces are still
+    // in the resolve queue, then those surfaces are destroyed afterward.
+    pthread_mutex_lock(&ctx->resolveMutex);
+    while (ctx->surfaceQueueReadIdx != ctx->surfaceQueueWriteIdx) {
+        NVSurface *surface = ctx->surfaceQueue[ctx->surfaceQueueReadIdx++];
+        if (ctx->surfaceQueueReadIdx >= ctx->surfaceQueueCapacity) {
+            ctx->surfaceQueueReadIdx = 0;
+        }
+        setSurfaceResolving(surface, false);
+    }
+    pthread_mutex_unlock(&ctx->resolveMutex);
+
     //release the decoder here to prevent multiple threads attempting it
     if (ctx->decoder != NULL) {
         CUresult result = cv->cuvidDestroyDecoder(ctx->decoder);
@@ -6448,6 +6659,10 @@ static void setSurfaceResolving(NVSurface *surface, bool resolving) {
     pthread_mutex_unlock(&surface->mutex);
 }
 
+void nvSetSurfaceResolving(NVSurface *surface, bool resolving) {
+    setSurfaceResolving(surface, resolving);
+}
+
 static void waitSurfaceResolved(NVSurface *surface) {
     if (surface == NULL) {
         return;
@@ -6469,6 +6684,50 @@ static void waitSurfaceResolved(NVSurface *surface) {
         pthread_cond_wait(&img->cond, &img->mutex);
     }
     pthread_mutex_unlock(&img->mutex);
+}
+
+static void detachBackingImageFromSurface(NVDriver *drv, NVSurface *surface) {
+    waitSurfaceResolved(surface);
+    drv->backend->detachBackingImageFromSurface(drv, surface);
+}
+
+// The activeVideoProcCalls counter keeps a VideoProc *context* alive across
+// vaDestroyContext(), but nothing kept its *surfaces* alive: nvRenderPicture()
+// resolves pipeline->surface to an NVSurface and copySurfaceBackingImage() then
+// dereferences it (src->backingImage, src->progressiveFrame, the colour metadata,
+// and a full CUDA copy) with no pin. A vaDestroySurfaces() racing that blit
+// freed the surface and detached the backing image the copy was reading.
+// Call with objectCreationMutex held, so lookup, the destroy check and the
+// reference acquisition are atomic with respect to vaDestroySurfaces().
+static bool surfaceAcquireVideoProcRead(NVSurface *surface) {
+    if (surface == NULL || surface->destroying) {
+        return false;
+    }
+    atomic_fetch_add(&surface->videoProcReads, 1);
+    return true;
+}
+
+static void surfaceReleaseVideoProcRead(NVSurface *surface) {
+    if (surface == NULL) {
+        return;
+    }
+    if (atomic_fetch_sub(&surface->videoProcReads, 1) == 1) {
+        pthread_mutex_lock(&surface->mutex);
+        pthread_cond_broadcast(&surface->cond);
+        pthread_mutex_unlock(&surface->mutex);
+    }
+}
+
+static void waitSurfaceUnusedByVideoProc(NVSurface *surface) {
+    if (surface == NULL) {
+        return;
+    }
+
+    pthread_mutex_lock(&surface->mutex);
+    while (atomic_load(&surface->videoProcReads) != 0) {
+        pthread_cond_wait(&surface->cond, &surface->mutex);
+    }
+    pthread_mutex_unlock(&surface->mutex);
 }
 
 static VAStatus nvCreateSurfaces2(
@@ -6691,7 +6950,7 @@ static VAStatus nvCreateSurfaces2(
         suf->pictureIdx = -1;
         suf->bitDepth = bitdepth;
         suf->rtFormat = format;
-        suf->context = NULL;
+        suf->contextId = VA_INVALID_ID;
         suf->chromaFormat = chromaFormat;
         pthread_mutex_init(&suf->mutex, NULL);
         pthread_cond_init(&suf->cond, NULL);
@@ -6809,25 +7068,53 @@ static VAStatus nvDestroySurfaces(
     CHECK_CUDA_RESULT_RETURN(cu->cuCtxPushCurrent(drv->cudaContext), VA_STATUS_ERROR_OPERATION_FAILED);
 
     for (int i = 0; i < num_surfaces; i++) {
+        pthread_mutex_lock(&drv->objectCreationMutex);
         NVSurface *surface = (NVSurface*) getObjectPtr(drv, OBJECT_TYPE_SURFACE, surface_list[i]);
-        if (!surface) {
+        if (surface == NULL || surface->destroying) {
+            pthread_mutex_unlock(&drv->objectCreationMutex);
             status = VA_STATUS_ERROR_INVALID_SURFACE;
             break;
         }
 
-        LOG(
-            "Destroying surface %d (%p) context=%p size=%ux%u rt_format=0x%x resolving=%d decode_failed=%d",
-            surface->pictureIdx,
-            surface,
-            surface->context,
-            surface->width,
-            surface->height,
-            surface->rtFormat,
-            surface->resolving,
-            surface->decodeFailed
-        );
+        // Close the lookup-to-pin window before waiting. A VideoProc context
+        // can retain this pointer between BeginPicture and RenderPicture.
+        surface->destroying = true;
+        ARRAY_FOR_EACH(Object, o, &drv->objects)
+            if (o->type == OBJECT_TYPE_CONTEXT) {
+                NVContext *nvCtx = (NVContext*) o->obj;
+                if (nvCtx->codec != NULL && nvCtx->codec->surfaceDestroyed != NULL) {
+                    nvCtx->codec->surfaceDestroyed(nvCtx, surface_list[i], surface);
+                }
+                // nvEndPicture may wait on the most recently queued surface before
+                // resizing the decoder's display area; don't let it point at a
+                // surface that is going away.
+                if (nvCtx->lastQueuedSurface == surface) {
+                    nvCtx->lastQueuedSurface = NULL;
+                }
+                if (nvCtx->entrypoint == VAEntrypointVideoProc && nvCtx->renderTarget == surface) {
+                    // BeginPicture can leave a target resolving until RenderPicture.
+                    // Once the target is retired, no new render can clear it.
+                    if (nvCtx->activeVideoProcRenders == 0) {
+                        setSurfaceResolving(surface, false);
+                    }
+                    nvCtx->renderTarget = NULL;
+                }
+            }
+        END_FOR_EACH
+        pthread_mutex_unlock(&drv->objectCreationMutex);
 
-        drv->backend->detachBackingImageFromSurface(drv, surface);
+        LOG_DEBUG("Destroying surface %d (%p)", surface->pictureIdx, surface);
+
+        // A VideoProc blit may still be reading this surface; let it finish
+        // before the backing image is detached.
+        waitSurfaceUnusedByVideoProc(surface);
+
+        detachBackingImageFromSurface(drv, surface);
+
+        //the resolve is done, so the context can hand the picture index out again
+        pthread_mutex_lock(&drv->objectCreationMutex);
+        releasePictureIdxLocked(drv, surface);
+        pthread_mutex_unlock(&drv->objectCreationMutex);
 
         deleteObject(drv, surface_list[i]);
     }
@@ -6861,12 +7148,16 @@ static VAStatus nvCreateContext(
 
         NVContext *nvCtx = (NVContext*) contextObj->obj;
         nvCtx->drv = drv;
+        nvCtx->contextId = contextObj->id;
         nvCtx->decoder = NULL;
         nvCtx->profile = cfg->profile;
         nvCtx->entrypoint = cfg->entrypoint;
         nvCtx->width = picture_width;
         nvCtx->height = picture_height;
         nvCtx->codec = NULL;
+        nvCtx->resolveThreadStarted = false;
+        nvCtx->vppPipelineSet = false;
+        nvCtx->renderTarget = NULL;
 
         pthread_mutexattr_t attrib;
         pthread_mutexattr_init(&attrib);
@@ -6876,6 +7167,7 @@ static VAStatus nvCreateContext(
 
         pthread_mutex_init(&nvCtx->resolveMutex, NULL);
         pthread_cond_init(&nvCtx->resolveCondition, NULL);
+        pthread_cond_init(&nvCtx->videoProcCondition, NULL);
 
         *context = contextObj->id;
         return VA_STATUS_SUCCESS;
@@ -6933,22 +7225,6 @@ static VAStatus nvCreateContext(
             num_render_targets
         );
 
-        *context = contextObj->id;
-        return VA_STATUS_SUCCESS;
-    }
-
-    if (isVideoProcEntrypoint(cfg->entrypoint)) {
-        Object contextObj = allocateObject(drv, OBJECT_TYPE_CONTEXT, sizeof(NVContext));
-        NVContext *nvCtx = (NVContext*) contextObj->obj;
-        nvCtx->drv = drv;
-        nvCtx->contextId = contextObj->id;
-        nvCtx->profile = cfg->profile;
-        nvCtx->entrypoint = cfg->entrypoint;
-        nvCtx->width = picture_width;
-        nvCtx->height = picture_height;
-        nvCtx->resolveThreadStarted = false;
-        nvCtx->vppPipelineSet = false;
-        nvCtx->renderTarget = NULL;
         *context = contextObj->id;
         return VA_STATUS_SUCCESS;
     }
@@ -7061,9 +7337,11 @@ static VAStatus nvCreateContext(
     pthread_mutexattr_init(&attrib);
     pthread_mutexattr_settype(&attrib, PTHREAD_MUTEX_RECURSIVE);
     pthread_mutex_init(&nvCtx->surfaceCreationMutex, &attrib);
+    pthread_mutexattr_destroy(&attrib);
 
     pthread_mutex_init(&nvCtx->resolveMutex, NULL);
     pthread_cond_init(&nvCtx->resolveCondition, NULL);
+    pthread_cond_init(&nvCtx->videoProcCondition, NULL);
     int err = pthread_create(&nvCtx->resolveThread, NULL, &resolveSurfaces, nvCtx);
     if (err != 0) {
         LOG("Unable to create resolve thread: %d", err);
@@ -7084,9 +7362,18 @@ static VAStatus nvDestroyContext(
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
     LOG("Destroying context: %d", context);
 
+    // The lock is held across the whole teardown, for both entrypoints. A
+    // decode context used to drop it before destroyContext(), which left a
+    // window in which a concurrent nvBeginPicture()/nvRenderPicture() could
+    // look the context up and start using it while destroyContext() was freeing
+    // codecData, bitstreamBuffer and sliceOffsets underneath it. The resolve
+    // thread takes resolveMutex but never objectCreationMutex, so joining it
+    // with the lock held cannot deadlock.
+    pthread_mutex_lock(&drv->objectCreationMutex);
     NVContext *nvCtx = (NVContext*) getObjectPtr(drv, OBJECT_TYPE_CONTEXT, context);
 
     if (nvCtx == NULL) {
+        pthread_mutex_unlock(&drv->objectCreationMutex);
         return VA_STATUS_ERROR_INVALID_CONTEXT;
     }
 
@@ -7106,15 +7393,34 @@ static VAStatus nvDestroyContext(
         (void *) nvCtx->encodeInputBuffer
     );
 
-    VAStatus ret = VA_STATUS_SUCCESS;
+    if (nvCtx->entrypoint != VAEntrypointVideoProc) {
+        finishDecodeCalls(drv, nvCtx);
+        if (!destroyContext(drv, nvCtx)) {
+            pthread_mutex_unlock(&drv->objectCreationMutex);
+            return VA_STATUS_ERROR_OPERATION_FAILED;
+        }
+        // The resolver has joined, so nothing can be mid-resolve on these
+        // surfaces any more; release anyone still waiting on them.
+        finishContextSurfacesLocked(drv, context);
+        deleteObject(drv, context);
+        pthread_mutex_unlock(&drv->objectCreationMutex);
+        return VA_STATUS_SUCCESS;
+    }
 
+    if (nvCtx->videoProcDestroying) {
+        pthread_mutex_unlock(&drv->objectCreationMutex);
+        return VA_STATUS_ERROR_INVALID_CONTEXT;
+    }
+    finishVideoProcCalls(drv, nvCtx, context);
     if (!destroyContext(drv, nvCtx)) {
-        ret = VA_STATUS_ERROR_OPERATION_FAILED;
+        pthread_mutex_unlock(&drv->objectCreationMutex);
+        return VA_STATUS_ERROR_OPERATION_FAILED;
     }
 
     deleteObject(drv, context);
+    pthread_mutex_unlock(&drv->objectCreationMutex);
 
-    return ret;
+    return VA_STATUS_SUCCESS;
 }
 
 static VAStatus recreateDecoderForSurface(NVContext *nvCtx, NVSurface *surface) {
@@ -7124,7 +7430,7 @@ static VAStatus recreateDecoderForSurface(NVContext *nvCtx, NVSurface *surface) 
         return VA_STATUS_SUCCESS;
     }
 
-    if (nvCtx->currentPictureId != 0) {
+    if (nvCtx->pictureIdxAssigned) {
         LOG("Decoder/surface format mismatch after decode start: decoder format=%d chroma=%d bitDepth=%d, surface format=%d chroma=%d bitDepth=%d",
             nvCtx->decoderSurfaceFormat, nvCtx->decoderChromaFormat, nvCtx->decoderBitDepth,
             surface->format, surface->chromaFormat, surface->bitDepth);
@@ -7186,6 +7492,10 @@ static VAStatus recreateDecoderForSurface(NVContext *nvCtx, NVSurface *surface) 
     nvCtx->decoderSurfaceFormat = surface->format;
     nvCtx->decoderChromaFormat = surface->chromaFormat;
     nvCtx->decoderBitDepth = surface->bitDepth;
+    //a new decoder starts out with the context-sized display area
+    nvCtx->appliedDisplayWidth = 0;
+    nvCtx->appliedDisplayHeight = 0;
+    nvCtx->decoderHasDecoded = false;
     nvStatsIncrement(drv, NV_STAT_DECODER_CREATES);
     return VA_STATUS_SUCCESS;
 }
@@ -7208,16 +7518,6 @@ static VAStatus nvCreateBuffer(
         return VA_STATUS_ERROR_INVALID_CONTEXT;
     }
 
-    //HACK: This is an awful hack to support VP8 videos when running within FFMPEG.
-    //VA-API doesn't pass enough information for NVDEC to work with, but the information is there
-    //just before the start of the buffer that was passed to us.
-    size_t offset = 0;
-    if (nvCtx->profile == VAProfileVP8Version0_3 && type == VASliceDataBufferType) {
-        offset = ((uintptr_t) data) & 0xf;
-        data = ((char *) data) - offset;
-        size += (unsigned int)offset;
-    }
-
     //TODO should pool these as most of the time these should be the same size
     Object bufferObject = allocateObject(drv, OBJECT_TYPE_BUFFER, sizeof(NVBuffer));
     *buf_id = bufferObject->id;
@@ -7226,7 +7526,11 @@ static VAStatus nvCreateBuffer(
     buf->bufferType = type;
     buf->elements = num_elements;
     buf->size = num_elements * size;
-    buf->offset = offset;
+    // NB: the buffer always starts at the client's data. This used to walk
+    // backwards from the client's pointer to recover the VP8 frame header that
+    // lives in front of the slice data, which read unrelated memory and made
+    // NVDEC decode every VP8 frame to a single constant image.
+    buf->offset = 0;
 
     if (type == VAEncCodedBufferType) {
         if (!ensureCodedDataBuffer(buf, buf->size)) {
@@ -8112,7 +8416,6 @@ static __attribute__((unused)) bool copySurfaceBackingImage(NVDriver *drv, NVSur
 
 done:
     pthread_mutex_lock(&dst->mutex);
-    dst->context = src->context;
     dst->progressiveFrame = src->progressiveFrame;
     dst->topFieldFirst = src->topFieldFirst;
     dst->secondField = src->secondField;
@@ -8134,23 +8437,44 @@ static VAStatus nvBeginPicture(
     )
 {
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
+    pthread_mutex_lock(&drv->objectCreationMutex);
     NVContext *nvCtx = (NVContext*) getObjectPtr(drv, OBJECT_TYPE_CONTEXT, context);
     NVSurface *surface = (NVSurface*) getObjectPtr(drv, OBJECT_TYPE_SURFACE, render_target);
 
     if (nvCtx == NULL) {
+        pthread_mutex_unlock(&drv->objectCreationMutex);
         return VA_STATUS_ERROR_INVALID_CONTEXT;
     }
 
     if (surface == NULL) {
+        pthread_mutex_unlock(&drv->objectCreationMutex);
         return VA_STATUS_ERROR_INVALID_SURFACE;
     }
+    VAContextID previousContext = surface->contextId;
 
-    if (isVideoProcEntrypoint(nvCtx->entrypoint)) {
+    if (nvCtx->entrypoint == VAEntrypointVideoProc) {
+        bool destroying = nvCtx->videoProcDestroying;
+        if (destroying || !surfaceAcquireVideoProcRead(surface)) {
+            pthread_mutex_unlock(&drv->objectCreationMutex);
+            return destroying ? VA_STATUS_ERROR_INVALID_CONTEXT : VA_STATUS_ERROR_INVALID_SURFACE;
+        }
+        nvCtx->activeVideoProcCalls++;
+        pthread_mutex_unlock(&drv->objectCreationMutex);
+        waitSurfaceResolved(surface);
+        pthread_mutex_lock(&drv->objectCreationMutex);
+        if (nvCtx->videoProcDestroying || surface->destroying) {
+            bool destroying = nvCtx->videoProcDestroying;
+            pthread_mutex_unlock(&drv->objectCreationMutex);
+            surfaceReleaseVideoProcRead(surface);
+            endVideoProcCall(drv, nvCtx, false);
+            return destroying ? VA_STATUS_ERROR_INVALID_CONTEXT : VA_STATUS_ERROR_INVALID_SURFACE;
+        }
+        surface->contextId = context;
+        setSurfaceResolving(surface, true);
         nvCtx->renderTarget = surface;
-        nvCtx->vppPipelineSet = false;
-        nvCtx->vppSurfaceRegionSet = false;
-        nvCtx->vppOutputRegionSet = false;
-        memset(&nvCtx->vppPipeline, 0, sizeof(nvCtx->vppPipeline));
+        pthread_mutex_unlock(&drv->objectCreationMutex);
+        surfaceReleaseVideoProcRead(surface);
+        endVideoProcCall(drv, nvCtx, false);
         return VA_STATUS_SUCCESS;
     }
 
@@ -8173,33 +8497,55 @@ static VAStatus nvBeginPicture(
             surface->format,
             (void *) surface->backingImage
         );
+        pthread_mutex_unlock(&drv->objectCreationMutex);
         return VA_STATUS_SUCCESS;
     }
+    if (nvCtx->decodeDestroying || nvCtx->codec == NULL) {
+        pthread_mutex_unlock(&drv->objectCreationMutex);
+        return VA_STATUS_ERROR_INVALID_CONTEXT;
+    }
+    if (nvCtx->codec != NULL && nvCtx->codec->checkPicture != NULL) {
+        VAStatus status = nvCtx->codec->checkPicture(nvCtx, NV_PICTURE_BEGIN);
+        if (status != VA_STATUS_SUCCESS) {
+            pthread_mutex_unlock(&drv->objectCreationMutex);
+            return status;
+        }
+    }
+    nvCtx->activeDecodeCalls++;
+    pthread_mutex_unlock(&drv->objectCreationMutex);
 
-    if (surface->context != NULL && surface->context != nvCtx) {
+    if (previousContext != VA_INVALID_ID && previousContext != context) {
+        // The old resolver may still be using the surface even if it has not
+        // allocated a backing image yet. Wait before changing its picture index
+        // or assigning it to another decoder.
+        waitSurfaceResolved(surface);
         //this surface was last used on a different context, we need to free up the backing image (it might not be the correct size)
         if (surface->backingImage != NULL) {
-            CHECK_CUDA_RESULT_RETURN(cu->cuCtxPushCurrent(drv->cudaContext), VA_STATUS_ERROR_OPERATION_FAILED);
-            drv->backend->detachBackingImageFromSurface(drv, surface);
-            CHECK_CUDA_RESULT_RETURN(cu->cuCtxPopCurrent(NULL), VA_STATUS_ERROR_OPERATION_FAILED);
+            detachBackingImageFromSurface(drv, surface);
         }
-        //...and reset the pictureIdx
-        surface->pictureIdx = -1;
+        //...and hand its picture index back to the context that assigned it
+        pthread_mutex_lock(&drv->objectCreationMutex);
+        releasePictureIdxLocked(drv, surface);
+        pthread_mutex_unlock(&drv->objectCreationMutex);
     }
 
     VAStatus decoderStatus = recreateDecoderForSurface(nvCtx, surface);
     if (decoderStatus != VA_STATUS_SUCCESS) {
+        endDecodeCall(drv, nvCtx);
         return decoderStatus;
     }
 
-    //if this surface hasn't been used before, give it a new picture index
-    if (surface->pictureIdx == -1) {
-        if (nvCtx->currentPictureId == nvCtx->surfaceCount) {
-            return VA_STATUS_ERROR_MAX_NUM_EXCEEDED;
-        }
-        surface->pictureIdx = nvCtx->currentPictureId++;
+    pthread_mutex_lock(&drv->objectCreationMutex);
+    //if this surface doesn't hold a picture index, give it one
+    if (surface->pictureIdx == -1 && !acquirePictureIdxLocked(drv, nvCtx, surface)) {
+        pthread_mutex_unlock(&drv->objectCreationMutex);
+        LOG("All %d picture indices are held by surfaces that are still resolving", nvCtx->surfaceCount);
+        endDecodeCall(drv, nvCtx);
+        return VA_STATUS_ERROR_MAX_NUM_EXCEEDED;
     }
-
+    touchPictureIdx(drv, surface);
+    surface->contextId = context;
+    pthread_mutex_unlock(&drv->objectCreationMutex);
     setSurfaceResolving(surface, true);
 
     memset(&nvCtx->pPicParams, 0, sizeof(CUVIDPICPARAMS));
@@ -8209,13 +8555,14 @@ static VAStatus nvBeginPicture(
     nvSurfaceResetColorMetadata(nvCtx->renderTarget);
     nvCtx->pPicParams.CurrPicIdx = nvCtx->renderTarget->pictureIdx;
     if (nvCtx->codec != NULL && nvCtx->codec->beginPicture != NULL) {
-        nvCtx->codec->beginPicture(nvCtx);
+        nvCtx->codec->beginPicture(nvCtx, render_target);
     }
 
+    endDecodeCall(drv, nvCtx);
     return VA_STATUS_SUCCESS;
 }
 
-static VAStatus nvStoreVideoProcPipelineParameters(
+static __attribute__((unused)) VAStatus nvStoreVideoProcPipelineParameters(
         NVDriver *drv,
         NVContext *nvCtx,
         VABufferID *buffers,
@@ -8301,14 +8648,64 @@ static VAStatus nvRenderPicture(
     )
 {
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
+    pthread_mutex_lock(&drv->objectCreationMutex);
     NVContext *nvCtx = (NVContext*) getObjectPtr(drv, OBJECT_TYPE_CONTEXT, context);
 
     if (nvCtx == NULL) {
+        pthread_mutex_unlock(&drv->objectCreationMutex);
         return VA_STATUS_ERROR_INVALID_CONTEXT;
     }
 
-    if (isVideoProcEntrypoint(nvCtx->entrypoint)) {
-        return nvStoreVideoProcPipelineParameters(drv, nvCtx, buffers, num_buffers);
+    if (nvCtx->entrypoint == VAEntrypointVideoProc) {
+        if (nvCtx->videoProcDestroying) {
+            pthread_mutex_unlock(&drv->objectCreationMutex);
+            return VA_STATUS_ERROR_INVALID_CONTEXT;
+        }
+        NVSurface *renderTarget = nvCtx->renderTarget;
+        if (!surfaceAcquireVideoProcRead(renderTarget)) {
+            pthread_mutex_unlock(&drv->objectCreationMutex);
+            return VA_STATUS_ERROR_INVALID_SURFACE;
+        }
+        nvCtx->activeVideoProcCalls++;
+        nvCtx->activeVideoProcRenders++;
+        pthread_mutex_unlock(&drv->objectCreationMutex);
+        VAStatus status = VA_STATUS_SUCCESS;
+        bool processed = false;
+        for (int i = 0; i < num_buffers; i++) {
+            NVBuffer *buf = (NVBuffer*) getObjectPtr(drv, OBJECT_TYPE_BUFFER, buffers[i]);
+            if (buf == NULL || buf->ptr == NULL || buf->bufferType != VAProcPipelineParameterBufferType) {
+                LOG("Invalid VideoProc buffer detected, skipping: %d", buffers[i]);
+                continue;
+            }
+
+            nvStatsIncrement(drv, NV_STAT_VIDEOPROC_REQUESTS);
+            processed = true;
+            VAProcPipelineParameterBuffer *pipeline = (VAProcPipelineParameterBuffer*) buf->ptr;
+            pthread_mutex_lock(&drv->objectCreationMutex);
+            NVSurface *src = (NVSurface*) getObjectPtr(drv, OBJECT_TYPE_SURFACE, pipeline->surface);
+            if (!surfaceAcquireVideoProcRead(src)) {
+                src = NULL;
+            }
+            pthread_mutex_unlock(&drv->objectCreationMutex);
+            // copySurfaceBackingImage always clears the render target's resolving
+            // flag, on both success and every failure path.
+            const bool copied = copySurfaceBackingImage(drv, src, renderTarget, pipeline);
+            surfaceReleaseVideoProcRead(src);
+            if (!copied) {
+                status = VA_STATUS_ERROR_OPERATION_FAILED;
+                break;
+            }
+        }
+
+        // If no pipeline buffer touched the render target, it was still marked
+        // resolving in nvBeginPicture; clear it so vaSyncSurface can't hang.
+        if (!processed) {
+            setSurfaceResolving(renderTarget, false);
+        }
+
+        surfaceReleaseVideoProcRead(renderTarget);
+        endVideoProcCall(drv, nvCtx, true);
+        return status;
     }
 
     if (isEncodeEntrypoint(nvCtx->entrypoint)) {
@@ -8651,14 +9048,33 @@ static VAStatus nvRenderPicture(
             nvCtx->encodeMinQp,
             nvCtx->encodeMaxQp
         );
+        pthread_mutex_unlock(&drv->objectCreationMutex);
         return VA_STATUS_SUCCESS;
     }
+    if (nvCtx->decodeDestroying || nvCtx->codec == NULL) {
+        pthread_mutex_unlock(&drv->objectCreationMutex);
+        return VA_STATUS_ERROR_INVALID_CONTEXT;
+    }
+    if (nvCtx->codec != NULL && nvCtx->codec->checkPicture != NULL) {
+        VAStatus status = nvCtx->codec->checkPicture(nvCtx, NV_PICTURE_RENDER);
+        if (status != VA_STATUS_SUCCESS) {
+            pthread_mutex_unlock(&drv->objectCreationMutex);
+            return status;
+        }
+    }
+    nvCtx->activeDecodeCalls++;
+    pthread_mutex_unlock(&drv->objectCreationMutex);
 
     CUVIDPICPARAMS *picParams = &nvCtx->pPicParams;
 
+    if (nvCtx->codec != NULL && nvCtx->codec->renderPicture != NULL) {
+        VAStatus status = nvCtx->codec->renderPicture(nvCtx, buffers, num_buffers);
+        endDecodeCall(drv, nvCtx);
+        return status;
+    }
     for (int i = 0; i < num_buffers; i++) {
         NVBuffer *buf = (NVBuffer*) getObjectPtr(drv, OBJECT_TYPE_BUFFER, buffers[i]);
-        if (buf == NULL || buf->ptr == NULL) {
+        if (buf == NULL || buf->ptr == NULL || (unsigned int) buf->bufferType >= VABufferTypeMax) {
             LOG("Invalid buffer detected, skipping: %d", buffers[i]);
             continue;
         }
@@ -8670,6 +9086,7 @@ static VAStatus nvRenderPicture(
         }
     }
 
+    endDecodeCall(drv, nvCtx);
     return VA_STATUS_SUCCESS;
 }
 
@@ -9445,7 +9862,7 @@ static VAStatus nvCopyVideoProcSurfaceRegion(
     return VA_STATUS_SUCCESS;
 }
 
-static VAStatus nvVideoProcEndPicture(VADriverContextP ctx, NVContext *nvCtx) {
+static __attribute__((unused)) VAStatus nvVideoProcEndPicture(VADriverContextP ctx, NVContext *nvCtx) {
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
     NVSurface *targetSurface = nvCtx->renderTarget;
     if (targetSurface == NULL) {
@@ -9518,7 +9935,7 @@ static VAStatus nvVideoProcEndPicture(VADriverContextP ctx, NVContext *nvCtx) {
         pipeline->output_region
     );
     if (status == VA_STATUS_SUCCESS) {
-        targetSurface->context = nvCtx;
+        targetSurface->contextId = nvCtx->contextId;
         targetSurface->decodeFailed = false;
     }
     nvCtx->vppPipelineSet = false;
@@ -9531,31 +9948,102 @@ out:
     return status;
 }
 
+/* Whether the decoder's display area differs from the size of the frame that
+ * is about to be decoded. Only AV1 requests a size; other codecs leave it 0. */
+static bool nvDisplayAreaNeedsUpdate(const NVContext *nvCtx) {
+    if (nvCtx->requestedDisplayWidth == 0 || nvCtx->requestedDisplayHeight == 0) {
+        return false;
+    }
+    const uint32_t appliedWidth = nvCtx->appliedDisplayWidth != 0 ? nvCtx->appliedDisplayWidth : nvCtx->width;
+    const uint32_t appliedHeight = nvCtx->appliedDisplayHeight != 0 ? nvCtx->appliedDisplayHeight : nvCtx->height;
+    return nvCtx->requestedDisplayWidth != appliedWidth || nvCtx->requestedDisplayHeight != appliedHeight;
+}
+
+/* Point the decoder's display area at the size of the frame being decoded.
+ *
+ * An AV1 frame can be coded smaller than the sequence maximum that the context
+ * and its surfaces were created with (frame_size_override_flag). NVDEC does not
+ * crop such a frame, it stretches it to fill the display area. So crop the
+ * display area to the real frame size and place it unscaled in the top-left
+ * corner of the unchanged, surface-sized target; the backend copy then keeps
+ * working with the layout it already expects.
+ *
+ * Must be called with the CUDA context pushed. NVDEC refuses this before the
+ * decoder has decoded a picture, which is why nvEndPicture applies the first
+ * change right after the first decode. The applied size is only recorded on
+ * success, so a refused change is simply tried again on the next picture. */
+static void nvApplyRequestedDisplayArea(NVContext *nvCtx) {
+    uint32_t width = nvCtx->requestedDisplayWidth;
+    uint32_t height = nvCtx->requestedDisplayHeight;
+
+    //match the chroma alignment nvCreateContext applies to the display area
+    if (nvCtx->decoderChromaFormat == cudaVideoChromaFormat_420 ||
+        nvCtx->decoderChromaFormat == cudaVideoChromaFormat_422) {
+        width = (width + 1) & ~1u;
+    }
+    if (nvCtx->decoderChromaFormat == cudaVideoChromaFormat_420) {
+        height = (height + 1) & ~1u;
+    }
+
+    CUVIDRECONFIGUREDECODERINFO info = {
+        .ulWidth = nvCtx->width,
+        .ulHeight = nvCtx->height,
+        .ulTargetWidth = nvCtx->width,
+        .ulTargetHeight = nvCtx->height,
+        .ulNumDecodeSurfaces = nvCtx->surfaceCount,
+        .display_area = { .left = 0, .top = 0, .right = (short) width, .bottom = (short) height },
+        .target_rect = { .left = 0, .top = 0, .right = (short) width, .bottom = (short) height },
+    };
+    if (CHECK_CUDA_RESULT(cv->cuvidReconfigureDecoder(nvCtx->decoder, &info))) {
+        LOG("Unable to set decoder display area to %ux%u", width, height);
+        return;
+    }
+
+    LOG_DEBUG("Decoder display area set to %ux%u (surfaces %ux%u)", width, height, nvCtx->width, nvCtx->height);
+    nvCtx->appliedDisplayWidth = nvCtx->requestedDisplayWidth;
+    nvCtx->appliedDisplayHeight = nvCtx->requestedDisplayHeight;
+}
+
 static VAStatus nvEndPicture(
         VADriverContextP ctx,
         VAContextID context
     )
 {
     NVDriver *drv = (NVDriver*) ctx->pDriverData;
+    pthread_mutex_lock(&drv->objectCreationMutex);
     NVContext *nvCtx = (NVContext*) getObjectPtr(drv, OBJECT_TYPE_CONTEXT, context);
 
     if (nvCtx == NULL) {
+        pthread_mutex_unlock(&drv->objectCreationMutex);
         return VA_STATUS_ERROR_INVALID_CONTEXT;
     }
 
-    if (isVideoProcEntrypoint(nvCtx->entrypoint)) {
-        return nvVideoProcEndPicture(ctx, nvCtx);
+    if (nvCtx->entrypoint == VAEntrypointVideoProc) {
+        bool destroying = nvCtx->videoProcDestroying;
+        pthread_mutex_unlock(&drv->objectCreationMutex);
+        return destroying ? VA_STATUS_ERROR_INVALID_CONTEXT : VA_STATUS_SUCCESS;
     }
 
     if (isEncodeEntrypoint(nvCtx->entrypoint)) {
         VAStatus status = nvEncodeEndPicture(ctx, nvCtx);
+        pthread_mutex_unlock(&drv->objectCreationMutex);
         LOG("encode completed with status=%d", status);
         return status;
     }
 
-    if (nvCtx->decoder == NULL) {
+    if (nvCtx == NULL || nvCtx->decodeDestroying || nvCtx->decoder == NULL || nvCtx->codec == NULL) {
+        pthread_mutex_unlock(&drv->objectCreationMutex);
         return VA_STATUS_ERROR_INVALID_CONTEXT;
     }
+    if (nvCtx->codec != NULL && nvCtx->codec->checkPicture != NULL) {
+        VAStatus status = nvCtx->codec->checkPicture(nvCtx, NV_PICTURE_END);
+        if (status != VA_STATUS_SUCCESS) {
+            pthread_mutex_unlock(&drv->objectCreationMutex);
+            return status;
+        }
+    }
+    nvCtx->activeDecodeCalls++;
+    pthread_mutex_unlock(&drv->objectCreationMutex);
 
     CUVIDPICPARAMS *picParams = &nvCtx->pPicParams;
     const unsigned long long decodeSubmitStartUs = nv_getmonotonic_us();
@@ -9568,14 +10056,44 @@ static VAStatus nvEndPicture(
         (unsigned long long)nvCtx->sliceOffsets.size
     );
 
+    if (nvCtx->codec != NULL && nvCtx->codec->prepareDecode != NULL) {
+        VAStatus status = nvCtx->codec->prepareDecode(nvCtx);
+        if (status != VA_STATUS_SUCCESS) {
+            endDecodeCall(drv, nvCtx);
+            return status;
+        }
+    }
+
     picParams->pBitstreamData = nvCtx->bitstreamBuffer.buf;
     picParams->pSliceDataOffsets = nvCtx->sliceOffsets.buf;
     nvCtx->bitstreamBuffer.size = 0;
     nvCtx->sliceOffsets.size = 0;
 
-    CHECK_CUDA_RESULT_RETURN(cu->cuCtxPushCurrent(drv->cudaContext), VA_STATUS_ERROR_OPERATION_FAILED);
+    if (CHECK_CUDA_RESULT(cu->cuCtxPushCurrent(drv->cudaContext))) {
+        if (nvCtx->codec != NULL && nvCtx->codec->abortPicture != NULL) nvCtx->codec->abortPicture(nvCtx);
+        endDecodeCall(drv, nvCtx);
+        return VA_STATUS_ERROR_OPERATION_FAILED;
+    }
+    if (nvCtx->decoderHasDecoded && nvDisplayAreaNeedsUpdate(nvCtx)) {
+        //frames already queued were decoded for the old size and are cropped
+        //when they are mapped, so let them finish before changing the display area
+        waitSurfaceResolved(nvCtx->lastQueuedSurface);
+        nvApplyRequestedDisplayArea(nvCtx);
+    }
     CUresult result = cv->cuvidDecodePicture(nvCtx->decoder, picParams);
-    CHECK_CUDA_RESULT_RETURN(cu->cuCtxPopCurrent(NULL), VA_STATUS_ERROR_OPERATION_FAILED);
+    if (result == CUDA_SUCCESS) {
+        if (!nvCtx->decoderHasDecoded && nvDisplayAreaNeedsUpdate(nvCtx)) {
+            //the first reconfigure is only accepted once something has been decoded,
+            //and has to land before this picture reaches the resolve thread
+            nvApplyRequestedDisplayArea(nvCtx);
+        }
+        nvCtx->decoderHasDecoded = true;
+    }
+    if (CHECK_CUDA_RESULT(cu->cuCtxPopCurrent(NULL))) {
+        if (nvCtx->codec != NULL && nvCtx->codec->abortPicture != NULL) nvCtx->codec->abortPicture(nvCtx);
+        endDecodeCall(drv, nvCtx);
+        return VA_STATUS_ERROR_OPERATION_FAILED;
+    }
     nvStatsIncrement(drv, NV_STAT_DECODE_PICTURES);
 
     VAStatus status = VA_STATUS_SUCCESS;
@@ -9598,29 +10116,71 @@ static VAStatus nvEndPicture(
     }
     //LOG("Decoded frame successfully to idx: %d (%p)", picParams->CurrPicIdx, nvCtx->renderTarget);
 
+    // Codecs can defer publication until a complete output picture is available.
     NVSurface *surface = nvCtx->displayTarget != NULL ? nvCtx->displayTarget : nvCtx->renderTarget;
+    surface->topFieldFirst = !picParams->bottom_field_flag;
+    if (nvCtx->codec != NULL && nvCtx->codec->finishDecode != NULL && !nvCtx->codec->finishDecode(nvCtx, status)) {
+        endDecodeCall(drv, nvCtx);
+        return status;
+    }
     if (surface != nvCtx->renderTarget) {
         setSurfaceResolving(surface, true);
         setSurfaceResolving(nvCtx->renderTarget, false);
     }
 
-    surface->context = nvCtx;
-    surface->topFieldFirst = !picParams->bottom_field_flag;
+    // Keep the context ID update synchronized with context teardown and the
+    // next BeginPicture's read of the prior owner.
+    pthread_mutex_lock(&drv->objectCreationMutex);
+    surface->contextId = context;
+    pthread_mutex_unlock(&drv->objectCreationMutex);
     surface->secondField = picParams->second_field;
     surface->decodeFailed = status != VA_STATUS_SUCCESS;
 
-    //TODO check we're not overflowing the queue
+    // read == write means empty. Grow the ring before the producer catches the
+    // reader so queued surfaces cannot be overwritten or silently lost.
     pthread_mutex_lock(&nvCtx->resolveMutex);
-    const int queueWriteIdxBefore = nvCtx->surfaceQueueWriteIdx;
-    const int queueReadIdxSnapshot = nvCtx->surfaceQueueReadIdx;
-    nvCtx->surfaceQueue[nvCtx->surfaceQueueWriteIdx++] = nvCtx->renderTarget;
-    if (nvCtx->surfaceQueueWriteIdx >= SURFACE_QUEUE_SIZE) {
-        nvCtx->surfaceQueueWriteIdx = 0;
+    const size_t queueWriteIdxBefore = nvCtx->surfaceQueueWriteIdx;
+    const size_t queueReadIdxSnapshot = nvCtx->surfaceQueueReadIdx;
+    if (nvCtx->resolveThreadFailed || nvCtx->exiting) {
+        pthread_mutex_unlock(&nvCtx->resolveMutex);
+        setSurfaceResolving(surface, false);
+        endDecodeCall(drv, nvCtx);
+        return VA_STATUS_ERROR_OPERATION_FAILED;
     }
-    const int queueWriteIdxAfter = nvCtx->surfaceQueueWriteIdx;
+    if (nvCtx->surfaceQueueCapacity == 0 ||
+        (nvCtx->surfaceQueueWriteIdx + 1) % nvCtx->surfaceQueueCapacity == nvCtx->surfaceQueueReadIdx) {
+        size_t oldCapacity = nvCtx->surfaceQueueCapacity;
+        size_t newCapacity = oldCapacity == 0 ? SURFACE_QUEUE_SIZE : oldCapacity * 2;
+        if (newCapacity < oldCapacity || newCapacity > SIZE_MAX / sizeof(*nvCtx->surfaceQueue)) {
+            pthread_mutex_unlock(&nvCtx->resolveMutex);
+            setSurfaceResolving(surface, false);
+            endDecodeCall(drv, nvCtx);
+            return VA_STATUS_ERROR_ALLOCATION_FAILED;
+        }
+        NVSurface **expanded = calloc(newCapacity, sizeof(*expanded));
+        if (expanded == NULL) {
+            pthread_mutex_unlock(&nvCtx->resolveMutex);
+            setSurfaceResolving(surface, false);
+            endDecodeCall(drv, nvCtx);
+            return VA_STATUS_ERROR_ALLOCATION_FAILED;
+        }
+        size_t queued = oldCapacity == 0 ? 0 : oldCapacity - 1;
+        for (size_t i = 0; i < queued; i++) {
+            expanded[i] = nvCtx->surfaceQueue[(nvCtx->surfaceQueueReadIdx + i) % oldCapacity];
+        }
+        free(nvCtx->surfaceQueue);
+        nvCtx->surfaceQueue = expanded;
+        nvCtx->surfaceQueueCapacity = newCapacity;
+        nvCtx->surfaceQueueReadIdx = 0;
+        nvCtx->surfaceQueueWriteIdx = queued;
+    }
+    nvCtx->surfaceQueue[nvCtx->surfaceQueueWriteIdx] = surface;
+    nvCtx->surfaceQueueWriteIdx = (nvCtx->surfaceQueueWriteIdx + 1) % nvCtx->surfaceQueueCapacity;
+    nvCtx->lastQueuedSurface = surface;
+    const size_t queueWriteIdxAfter = nvCtx->surfaceQueueWriteIdx;
     pthread_mutex_unlock(&nvCtx->resolveMutex);
     LOG(
-        "[DECODE] queue push pictureIdx=%d decode_failed=%d read_idx=%d write_idx_before=%d write_idx_after=%d",
+        "[DECODE] queue push pictureIdx=%d decode_failed=%d read_idx=%zu write_idx_before=%zu write_idx_after=%zu",
         surface != NULL ? surface->pictureIdx : -1,
         surface != NULL ? surface->decodeFailed : 1,
         queueReadIdxSnapshot,
@@ -9635,6 +10195,7 @@ static VAStatus nvEndPicture(
         surface != NULL ? surface->pictureIdx : -1
     );
 
+    endDecodeCall(drv, nvCtx);
     return status;
 }
 
@@ -9903,19 +10464,22 @@ static VAStatus nvGetImage(
         return VA_STATUS_ERROR_INVALID_IMAGE;
     }
 
-    NVContext *context = (NVContext*) surfaceObj->context;
     const NVFormatInfo *fmtInfo = &formatsInfo[imageObj->format];
     uint32_t offset = 0;
 
-    //wait for the surface to be decoded when bound to decode context
-    if (context != NULL) {
-        nvSyncSurface(ctx, surface);
+    // The context may already have been destroyed; the resolved image still
+    // belongs to the surface and can be read without the context object.
+    if (surfaceObj->contextId == VA_INVALID_ID) {
+        return VA_STATUS_ERROR_INVALID_CONTEXT;
     }
-    if (surfaceObj->backingImage == NULL && !drv->backend->realiseSurface(drv, surfaceObj)) {
-        return VA_STATUS_ERROR_ALLOCATION_FAILED;
-    }
+
+    //wait for the surface to be decoded
+    nvSyncSurface(ctx, surface);
+
+    //A failed resolve may leave a surface without an image. Report the decode
+    //failure instead of dereferencing a null backing image in the copy below.
     if (surfaceObj->backingImage == NULL) {
-        return VA_STATUS_ERROR_ALLOCATION_FAILED;
+        return VA_STATUS_ERROR_DECODING_ERROR;
     }
 
     CHECK_CUDA_RESULT_RETURN(cu->cuCtxPushCurrent(drv->cudaContext), VA_STATUS_ERROR_OPERATION_FAILED);
@@ -10899,11 +11463,52 @@ static VAStatus nvTerminate( VADriverContextP ctx )
     LOG("Terminating %p", ctx);
     CHECK_CUDA_RESULT_RETURN(cu->cuCtxPushCurrent(drv->cudaContext), VA_STATUS_ERROR_OPERATION_FAILED);
 
-    // Let object teardown detach and destroy owned backings first. Any leftover
-    // images are cleaned up by the backend afterwards.
-    deleteAllObjects(drv);
+    // A resolver thread that refuses to join leaves live objects behind. We
+    // must NOT continue into the cleanup below: the thread still dereferences
+    // drv->cudaContext, drv->backend, drv->images and the exporter's DRM FD, so
+    // releaseExporter()/cuCtxDestroy()/free(drv) would be a use-after-free.
+    // Abandoning the instance is the safe outcome; destroyContext() retries the
+    // join so that reaching this is not a transient-drain accident. The cost is
+    // that `instances` is not decremented, so the process eventually stops
+    // being able to initialise a new driver instance.
+    if (!deleteAllObjects(drv)) {
+        LOG("Abandoning driver instance: a resolve thread did not shut down, "
+            "%zu object(s) still live", (size_t) drv->objects.size);
+        CHECK_CUDA_RESULT(cu->cuCtxPopCurrent(NULL));
+        return VA_STATUS_ERROR_OPERATION_FAILED;
+    }
 
-    drv->backend->destroyAllBackingImage(drv);
+    if (drv->videoProcModule != NULL) {
+        CHECK_CUDA_RESULT(cu->cuModuleUnload(drv->videoProcModule));
+        drv->videoProcModule = NULL;
+        drv->nv12ToArgbKernel = NULL;
+    }
+    if (drv->videoProcModuleP010 != NULL) {
+        CHECK_CUDA_RESULT(cu->cuModuleUnload(drv->videoProcModuleP010));
+        drv->videoProcModuleP010 = NULL;
+        drv->p010ToArgbKernel = NULL;
+    }
+    if (drv->videoProcYBuffer != 0) {
+        CHECK_CUDA_RESULT(cu->cuMemFree(drv->videoProcYBuffer));
+        drv->videoProcYBuffer = 0;
+    }
+    if (drv->videoProcUVBuffer != 0) {
+        CHECK_CUDA_RESULT(cu->cuMemFree(drv->videoProcUVBuffer));
+        drv->videoProcUVBuffer = 0;
+    }
+    if (drv->videoProcArgbBuffer != 0) {
+        CHECK_CUDA_RESULT(cu->cuMemFree(drv->videoProcArgbBuffer));
+        drv->videoProcArgbBuffer = 0;
+    }
+    free(drv->cpuVideoProcYBuffer);
+    free(drv->cpuVideoProcUVBuffer);
+    free(drv->cpuVideoProcArgbBuffer);
+    drv->cpuVideoProcYBuffer = NULL;
+    drv->cpuVideoProcUVBuffer = NULL;
+    drv->cpuVideoProcArgbBuffer = NULL;
+    drv->cpuVideoProcYBufferSize = 0;
+    drv->cpuVideoProcUVBufferSize = 0;
+    drv->cpuVideoProcArgbBufferSize = 0;
 
     drv->backend->releaseExporter(drv);
 

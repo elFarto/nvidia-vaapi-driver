@@ -10,6 +10,7 @@
 #include <unistd.h>
 #include <string.h>
 #include <stdint.h>
+#include <stddef.h>
 #include <errno.h>
 
 #include <drm_fourcc.h>
@@ -33,6 +34,25 @@
 #define GOB_WIDTH_IN_BYTES  64
 #define GOB_HEIGHT_IN_BYTES 8
 #define SINGLE_BUFFER_PLANE_ALIGNMENT 65536
+
+// NVIDIA 545 appended numaNode to NV_MEMORY_ALLOCATION_PARAMS.  The vendored
+// definition predates that change, but RM derives the copy size from the memory
+// class and therefore copies the larger structure on newer drivers regardless
+// of the size supplied in NVOS64_PARAMETERS.  Keep storage for the appended
+// field so RM cannot read from and write past the end of the userspace object.
+typedef struct {
+    NV_MEMORY_ALLOCATION_PARAMS params;
+    NvS32 numaNode;
+} NV_MEMORY_ALLOCATION_PARAMS_545;
+
+// Check the wire layout explicitly so a vendored header update cannot silently
+// move numaNode or change the parameter size sent to older drivers.
+_Static_assert(sizeof(NV_MEMORY_ALLOCATION_PARAMS) == 120,
+               "pre-545 NVIDIA allocation parameters must be 120 bytes");
+_Static_assert(offsetof(NV_MEMORY_ALLOCATION_PARAMS_545, numaNode) == 120,
+               "NVIDIA 545 numaNode must be at byte 120");
+_Static_assert(sizeof(NV_MEMORY_ALLOCATION_PARAMS_545) == 128,
+               "NVIDIA 545 allocation parameters must be 128 bytes");
 
 static const NvHandle NULL_OBJECT;
 
@@ -310,15 +330,15 @@ bool get_device_uuid(const NVDriverContext *context, uint8_t uuid[16]) {
                  NV0000_CTRL_CMD_GPU_GET_UUID_FROM_GPU_ID_FLAGS_TYPE_SHA1
     };
     const int ret = nv_rm_control(context->nvctlFd, context->clientObject, context->clientObject, NV0000_CTRL_CMD_GPU_GET_UUID_FROM_GPU_ID, 0, sizeof(uuidParams), &uuidParams);
-    if (ret) {
-        return false;
+    if (ret == 1) {
+        for (int i = 0; i < 16; i++) {
+            uuid[i] = uuidParams.gpuUuid[i];
+        }
+
+        return true;
     }
 
-    for (int i = 0; i < 16; i++) {
-        uuid[i] = uuidParams.gpuUuid[i];
-    }
-
-    return true;
+    return false;
 }
 
 // Query memory architecture via RM control.
@@ -377,7 +397,11 @@ bool init_nvdriver(NVDriverContext *context, const int drmFd) {
 
     //query the version of the api
     char *ver = NULL;
-    nv_get_versions(nvctlFd, &ver);
+    if (!nv_get_versions(nvctlFd, &ver) || ver == NULL) {
+        LOG("Failed to query NVIDIA kernel driver version")
+        free(ver);
+        goto err;
+    }
     context->driverMajorVersion = atoi(ver);
     context->driverMinorVersion = atoi(ver+4);
     LOG("NVIDIA kernel driver version: %s, major version: %d, minor version: %d", ver, context->driverMajorVersion, context->driverMinorVersion)
@@ -487,41 +511,49 @@ bool alloc_memory(const NVDriverContext *context, const uint32_t size, int *fd) 
 
     // Choose memory class based on system type
     NvU32 memoryClass;
-    NV_MEMORY_ALLOCATION_PARAMS memParams = {
-        .owner = context->clientObject,
-        .type = NVOS32_TYPE_IMAGE,
-        .format = 0,
-        .width = 0,
-        .height = 0,
-        .size = size,
-        .alignment = 0,
-        .attr2 = DRF_DEF(OS32, _ATTR2, _ZBC, _PREFER_NO_ZBC) |
-                 DRF_DEF(OS32, _ATTR2, _GPU_CACHEABLE, _YES)
+    NV_MEMORY_ALLOCATION_PARAMS_545 memParams = {
+        .params = {
+            .owner = context->clientObject,
+            .type = NVOS32_TYPE_IMAGE,
+            .format = 0,
+            .width = 0,
+            .height = 0,
+            .size = size,
+            .alignment = 0,
+            .attr2 = DRF_DEF(OS32, _ATTR2, _ZBC, _PREFER_NO_ZBC) |
+                     DRF_DEF(OS32, _ATTR2, _GPU_CACHEABLE, _YES)
+        },
+        .numaNode = NV0000_CTRL_NO_NUMA_NODE
     };
 
     if (context->useSystemMemory) {
         // Unified memory system (Grace-Blackwell/Grace-Hopper)
         memoryClass = NV01_MEMORY_SYSTEM;
-        memParams.flags = NVOS32_ALLOC_FLAGS_IGNORE_BANK_PLACEMENT |
-                          NVOS32_ALLOC_FLAGS_MAP_NOT_REQUIRED;
-        memParams.attr = DRF_DEF(OS32, _ATTR, _LOCATION, _PCI) |
-                         DRF_DEF(OS32, _ATTR, _PAGE_SIZE, _BIG) |
-                         DRF_DEF(OS32, _ATTR, _DEPTH, _UNKNOWN) |
-                         DRF_DEF(OS32, _ATTR, _FORMAT, _BLOCK_LINEAR) |
-                         DRF_DEF(OS32, _ATTR, _PHYSICALITY, _CONTIGUOUS);
+        memParams.params.flags = NVOS32_ALLOC_FLAGS_IGNORE_BANK_PLACEMENT |
+                                 NVOS32_ALLOC_FLAGS_MAP_NOT_REQUIRED;
+        memParams.params.attr = DRF_DEF(OS32, _ATTR, _LOCATION, _PCI) |
+                                DRF_DEF(OS32, _ATTR, _PAGE_SIZE, _BIG) |
+                                DRF_DEF(OS32, _ATTR, _DEPTH, _UNKNOWN) |
+                                DRF_DEF(OS32, _ATTR, _FORMAT, _BLOCK_LINEAR) |
+                                DRF_DEF(OS32, _ATTR, _PHYSICALITY, _CONTIGUOUS);
     } else {
         // Discrete GPU with local video memory
         memoryClass = NV01_MEMORY_LOCAL_USER;
-        memParams.flags = NVOS32_ALLOC_FLAGS_IGNORE_BANK_PLACEMENT |
-                          NVOS32_ALLOC_FLAGS_MAP_NOT_REQUIRED |
-                          NVOS32_ALLOC_FLAGS_PERSISTENT_VIDMEM;
-        memParams.attr = DRF_DEF(OS32, _ATTR, _PAGE_SIZE, _BIG) |
-                         DRF_DEF(OS32, _ATTR, _DEPTH, _UNKNOWN) |
-                         DRF_DEF(OS32, _ATTR, _FORMAT, _BLOCK_LINEAR) |
-                         DRF_DEF(OS32, _ATTR, _PHYSICALITY, _CONTIGUOUS);
+        memParams.params.flags = NVOS32_ALLOC_FLAGS_IGNORE_BANK_PLACEMENT |
+                                 NVOS32_ALLOC_FLAGS_MAP_NOT_REQUIRED |
+                                 NVOS32_ALLOC_FLAGS_PERSISTENT_VIDMEM;
+        memParams.params.attr = DRF_DEF(OS32, _ATTR, _PAGE_SIZE, _BIG) |
+                                DRF_DEF(OS32, _ATTR, _DEPTH, _UNKNOWN) |
+                                DRF_DEF(OS32, _ATTR, _FORMAT, _BLOCK_LINEAR) |
+                                DRF_DEF(OS32, _ATTR, _PHYSICALITY, _CONTIGUOUS);
     }
-    
-    bool ret = nv_alloc_object(context->nvctlFd, context->driverMajorVersion, context->clientObject, context->deviceObject, &bufferObject, memoryClass, sizeof(memParams), &memParams);
+
+    const uint32_t memParamsSize = context->driverMajorVersion >= 545 ?
+        sizeof(memParams) : sizeof(memParams.params);
+    bool ret = nv_alloc_object(context->nvctlFd, context->driverMajorVersion,
+                               context->clientObject, context->deviceObject,
+                               &bufferObject, memoryClass, memParamsSize,
+                               &memParams);
     if (!ret) {
         LOG("nv_alloc_object failed for memory class 0x%X", memoryClass)
         return false;

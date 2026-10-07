@@ -86,6 +86,41 @@ nvidia_drv_video = shared_library(
     gnu_symbol_visibility: 'hidden',
 )
 
+# AV1 streams can code their frames smaller than the sequence maximum
+# (frame_size_override_flag), which is what hardware encoders emit for 1080p
+# and 2160p since they pad to 16-pixel blocks. The driver has to hand NVDEC the
+# real frame size, and each reference's real size, or everything after a
+# keyframe decodes wrong. The test generates its own fixture and compares a
+# hardware decode against libdav1d; it skips itself when ffmpeg lacks the
+# SVT-AV1 encoder or the dav1d decoder.
+ffmpeg_prog = find_program('ffmpeg', required : false)
+if ffmpeg_prog.found()
+    test(
+        'av1_frame_size_override',
+        find_program('tests/test_av1_frame_size_override.sh'),
+        timeout : 120,
+        env : {
+            'LIBVA_DRIVER_NAME': 'nvidia',
+            'LIBVA_DRIVERS_PATH': meson.project_build_root(),
+            'LD_LIBRARY_PATH': meson.project_build_root(),
+        },
+    )
+
+    # Decoding into more than 32 distinct surfaces, which NVDEC can't address
+    # at once, so picture indices have to be reused (#397). Compares a hardware
+    # decode against FFmpeg's software decoder; skips itself without libx264.
+    test(
+        'picture_index_reuse',
+        find_program('tests/test_picture_index_reuse.sh'),
+        timeout : 120,
+        env : {
+            'LIBVA_DRIVER_NAME': 'nvidia',
+            'LIBVA_DRIVERS_PATH': meson.project_build_root(),
+            'LD_LIBRARY_PATH': meson.project_build_root(),
+        },
+    )
+endif
+
 meson.add_devenv(environment({
     'NVD_LOG': '1',
     'LIBVA_DRIVER_NAME': 'nvidia',

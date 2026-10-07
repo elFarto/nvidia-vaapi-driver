@@ -77,15 +77,27 @@ typedef struct
     uint32_t                rtFormat;
     int                     bitDepth;
     int                     pictureIdx;
-    struct _NVContext       *context;
+    uint64_t                pictureIdxLastUsed; // drv->pictureIdxUseCounter value when last decoded into or referenced
+    VAContextID             contextId; // last context to use this target; remains valid as an ID after destruction
     int                     progressiveFrame;
     int                     topFieldFirst;
     int                     secondField;
     int                     order_hint; //needed for AV1
+    uint32_t                av1FrameWidth;  //AV1 frame size last decoded into this surface,
+    uint32_t                av1FrameHeight; //which can be smaller than the surface
     VAProcColorStandardType colorStandard;
     bool                    colorRangeFull;
     struct _BackingImage    *backingImage;
     int                     resolving;
+    // Number of in-flight vaRenderPicture() blits currently reading this
+    // surface as a source or writing it as the render target. vaDestroySurfaces()
+    // waits for this to drain before detaching the backing image, so a client
+    // that destroys a surface while a VideoProc blit is still using it cannot
+    // pull the memory out from under the copy.
+    atomic_uint             videoProcReads;
+    // Protected by drv->objectCreationMutex. Once set, VideoProc calls may
+    // no longer take a new read reference to this surface.
+    bool                    destroying;
     int                     fourcc;
     pthread_mutex_t         mutex;
     pthread_cond_t          cond;
@@ -200,6 +212,7 @@ typedef struct _NVDriver
     Array/*<Object>*/       objects;
     pthread_mutex_t         objectCreationMutex;
     VAGenericID             nextObjId;
+    uint64_t                pictureIdxUseCounter; // updated atomically
     bool                    useCorrectNV12Format;
     bool                    allowDirectDmabufCudaImport;
     bool                    preferExternalImportGpuCopy;
@@ -304,20 +317,43 @@ typedef struct _NVContext
     uint32_t            av1TileMinOffset;
     uint32_t            av1TileMaxEnd;
     bool                av1BitstreamCompacted;
+    /* AV1 frames may be coded smaller than the sequence maximum the context was
+     * created with (frame_size_override_flag). NVDEC scales the decoded frame
+     * to fill the decoder's display area, so the display area has to follow
+     * the frame size: requested is what the current picture needs, applied is
+     * what the decoder was last configured with (0 = the context size). */
+    uint32_t            requestedDisplayWidth;
+    uint32_t            requestedDisplayHeight;
+    uint32_t            appliedDisplayWidth;
+    uint32_t            appliedDisplayHeight;
+    bool                decoderHasDecoded;
+    NVSurface           *lastQueuedSurface; //most recent surface handed to the resolve thread
     CUVIDPICPARAMS      pPicParams;
     const struct _NVCodec *codec;
     cudaVideoCodec      cudaCodec;
     cudaVideoSurfaceFormat decoderSurfaceFormat;
     cudaVideoChromaFormat decoderChromaFormat;
     int                 decoderBitDepth;
-    int                 currentPictureId;
+    // NVDEC can address at most 32 decode surfaces, but VA-API lets a client
+    // render into as many surfaces as it likes. pictureIdxOwners maps each
+    // index to the surface currently holding it.
+    NVSurface          *pictureIdxOwners[32]; // protected by drv->objectCreationMutex
+    bool                pictureIdxAssigned; // an index has been handed out, so the decoder's format is fixed
     pthread_t           resolveThread;
     bool                resolveThreadStarted;
+    bool                resolveThreadFailed; // protected by resolveMutex
     pthread_mutex_t     resolveMutex;
     pthread_cond_t      resolveCondition;
-    NVSurface*          surfaceQueue[SURFACE_QUEUE_SIZE];
-    int                 surfaceQueueReadIdx;
-    int                 surfaceQueueWriteIdx;
+    pthread_cond_t      videoProcCondition; // protected by drv->objectCreationMutex
+    unsigned int        activeVideoProcCalls;
+    unsigned int        activeVideoProcRenders;
+    bool                videoProcDestroying;
+    unsigned int        activeDecodeCalls; // protected by drv->objectCreationMutex
+    bool                decodeDestroying;
+    NVSurface**         surfaceQueue; // protected by resolveMutex
+    size_t              surfaceQueueCapacity;
+    size_t              surfaceQueueReadIdx;
+    size_t              surfaceQueueWriteIdx;
     volatile bool       exiting;
     pthread_mutex_t     surfaceCreationMutex;
     int                 surfaceCount;
@@ -379,7 +415,12 @@ typedef struct
 
 typedef void (*HandlerFunc)(NVContext*, NVBuffer* , CUVIDPICPARAMS*);
 typedef cudaVideoCodec (*ComputeCudaCodec)(VAProfile);
-typedef void (*CodecBeginPictureFunc)(NVContext*);
+typedef enum {
+    NV_PICTURE_BEGIN,
+    NV_PICTURE_RENDER,
+    NV_PICTURE_END,
+} NVPictureOperation;
+typedef void (*CodecBeginPictureFunc)(NVContext*, VASurfaceID);
 
 // Internals exposed for the stats subsystem (src/stats.c).
 pid_t nv_gettid(void);
@@ -393,9 +434,30 @@ struct _NVCodec {
     int                 supportedProfileCount;
     const VAProfile     *supportedProfiles;
     CodecBeginPictureFunc beginPicture;
+    // Optional lifecycle hooks. checkPicture and surfaceDestroyed run with
+    // objectCreationMutex held; the other hooks run during an active decode call.
+    // checkPicture may reject a call before the backend changes its target.
+    VAStatus (*checkPicture)(NVContext*, NVPictureOperation);
+    // Override buffer dispatch when a codec needs submission error reporting.
+    VAStatus (*renderPicture)(NVContext*, VABufferID*, int);
+    // Validate the assembled picture before CUDA submission; release any
+    // codec-owned pending output on failure before returning the error.
+    VAStatus (*prepareDecode)(NVContext*);
+    // Called after decode with default field order set. May adjust metadata;
+    // return false to defer resolution or release an incomplete failed output.
+    bool (*finishDecode)(NVContext*, VAStatus);
+    // Release codec-owned pending output when CUDA context push/pop fails.
+    void (*abortPicture)(NVContext*);
+    void (*surfaceDestroyed)(NVContext*, VASurfaceID, NVSurface*);
 };
 
 typedef struct _NVCodec NVCodec;
+
+// Codec helpers. Surface lookup must stay under objectCreationMutex while the
+// returned pointer is used; buffer lookup has the same lifetime as RenderPicture.
+NVSurface *nvGetSurface(NVDriver *drv, VASurfaceID id);
+NVBuffer *nvGetBuffer(NVDriver *drv, VABufferID id);
+void nvSetSurfaceResolving(NVSurface *surface, bool resolving);
 
 typedef struct
 {
