@@ -1,0 +1,7 @@
+option(
+  'runtime_tests',
+  type: 'boolean',
+  value: false,
+  description: 'Enable runtime VAAPI tests requiring NVIDIA GPU, vainfo and ffmpeg'
+)
+
