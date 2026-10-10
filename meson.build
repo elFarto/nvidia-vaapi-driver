@@ -119,6 +119,22 @@ if ffmpeg_prog.found()
             'LD_LIBRARY_PATH': meson.project_build_root(),
         },
     )
+
+    # VP9 loop-filter deltas and segment features persist across frames until
+    # a header updates them. Compares a hardware decode against FFmpeg's
+    # software decoder; skips itself without libvpx-vp9.
+    if gst_codecs_deps.found()
+        test(
+            'vp9_loop_filter_deltas',
+            find_program('tests/test_vp9_loop_filter_deltas.sh'),
+            timeout : 120,
+            env : {
+                'LIBVA_DRIVER_NAME': 'nvidia',
+                'LIBVA_DRIVERS_PATH': meson.project_build_root(),
+                'LD_LIBRARY_PATH': meson.project_build_root(),
+            },
+        )
+    endif
 endif
 
 meson.add_devenv(environment({
