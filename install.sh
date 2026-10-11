@@ -8,6 +8,8 @@ INSTALL_DEPS=0
 CLEAN_BUILD=0
 RUN_TEST=1
 BACKUP_PATH=""
+CHROME_LAUNCHER=""
+RESTORE_CHROME_LAUNCHER=0
 
 usage() {
     cat <<'EOF'
@@ -22,11 +24,19 @@ Options:
   --render-device D Use a custom render node for the vainfo smoke test.
                     Default: /dev/dri/renderD128
   --no-test         Skip the vainfo smoke test after installation.
+  --configure-chrome-launcher NAME
+                    Create a user desktop entry from the system template with
+                    NVIDIA VA-API settings, then exit without installing.
+  --restore-chrome-launcher NAME
+                    Replace an existing user desktop entry from the system
+                    template (backup first), then exit without installing.
+                    Example NAME: google-chrome.desktop
   -h, --help        Show this help.
 
 Environment:
   BUILD_DIR         Same as --build-dir.
   RENDER_DEVICE    Same as --render-device.
+  NVD_DRIVER_DIR    Driver directory for the optional Chrome launcher commands.
 EOF
 }
 
@@ -120,6 +130,18 @@ while [ "$#" -gt 0 ]; do
         --no-test)
             RUN_TEST=0
             ;;
+        --configure-chrome-launcher|--restore-chrome-launcher)
+            option="$1"
+            shift
+            if [ "$#" -eq 0 ] || [ -z "$1" ] || [ -n "$CHROME_LAUNCHER" ]; then
+                echo "$option requires one desktop filename; choose only one launcher mode." >&2
+                exit 2
+            fi
+            CHROME_LAUNCHER="$1"
+            if [ "$option" = --restore-chrome-launcher ]; then
+                RESTORE_CHROME_LAUNCHER=1
+            fi
+            ;;
         -h|--help)
             usage
             exit 0
@@ -132,6 +154,22 @@ while [ "$#" -gt 0 ]; do
     esac
     shift
 done
+
+if [ -n "$CHROME_LAUNCHER" ]; then
+    if [ "$INSTALL_DEPS" -eq 1 ] || [ "$CLEAN_BUILD" -eq 1 ]; then
+        echo "Launcher commands cannot be combined with --deps or --clean." >&2
+        exit 2
+    fi
+    if ! command -v python3 >/dev/null 2>&1; then
+        echo "Chrome launcher configuration requires Python 3." >&2
+        exit 1
+    fi
+    launcher_args=("$CHROME_LAUNCHER" --driver-dir "${NVD_DRIVER_DIR:-$(driver_dir)}")
+    if [ "$RESTORE_CHROME_LAUNCHER" -eq 1 ]; then
+        launcher_args+=(--restore)
+    fi
+    exec python3 "$ROOT_DIR/scripts/chrome-launcher.py" "${launcher_args[@]}"
+fi
 
 cd "$ROOT_DIR"
 

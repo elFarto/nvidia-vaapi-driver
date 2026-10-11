@@ -174,6 +174,46 @@ On Wayland, also try `--ozone-platform=wayland` or `--ozone-platform-hint=auto`.
 
 Multi-plane YUV surfaces are always exported as a single buffer with all planes sharing one DRM modifier, which is what Chromium's `vaapi_wrapper` requires; no configuration is needed.
 
+### Optional desktop launcher configuration
+
+To apply the documented Chrome flags to a menu entry, run the installer as your
+desktop user (without `sudo`):
+
+```sh
+./install.sh --configure-chrome-launcher google-chrome.desktop
+```
+
+This command requires Python 3 and exits without building or installing the
+driver. It copies the matching native browser template from `XDG_DATA_DIRS` to
+`$XDG_DATA_HOME/applications` (normally `~/.local/share/applications`) and sets
+`LIBVA_DRIVER_NAME=nvidia`, `LIBVA_DRIVERS_PATH`, `NVD_BACKEND=direct`, and the
+flags above for the main entry and its desktop actions. Localized names and
+incognito actions are preserved. Normal `./install.sh` runs do not modify
+browser launchers. Fully close Chrome before launching it from the new entry.
+
+If a user entry already exists, configuration stops without changing it. To
+recover a broken custom wrapper after a browser update, explicitly restore the
+entry from the system template instead:
+
+```sh
+./install.sh --restore-chrome-launcher google-chrome.desktop
+```
+
+Restoration backs up the previous file contents to a uniquely named file next
+to the entry, then replaces its custom commands and settings with the template
+and VA-API configuration. Copy the printed backup over the user entry to undo
+restoration; remove a newly created override to return to the system entry.
+Browser profiles, other launchers and system desktop files are untouched.
+Missing or unsupported templates and backup failures leave the entry unchanged.
+
+Supported filenames also include `google-chrome-stable.desktop`,
+`com.google.Chrome.desktop`, `chromium.desktop`, and `chromium-browser.desktop`.
+Templates must invoke a native browser directly; Flatpak, Snap and wrapper
+commands are not supported. To select a previously built driver, prefix either
+command with `NVD_DRIVER_DIR=/absolute/path/to/build`; keep that directory
+available while the launcher references it. These options configure decoding;
+they do not install or repair separate Chrome binary patches for encoding.
+
 ## MPV
 
 Currently this only works with a recent MPV version (at least 0.36.0).
