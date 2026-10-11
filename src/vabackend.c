@@ -1497,7 +1497,9 @@ static bool importExternalBackingToCuda(NVDriver *drv, BackingImage *img) {
     };
     LOG_DEBUG("Importing external memory to CUDA: fd=%d size=%u", importFd, img->totalSize);
     if (CHECK_CUDA_RESULT(drv->cu->cuImportExternalMemory(&img->extMem, &extMemDesc))) {
-        close(importFd);
+        // libcuda takes ownership of importFd and closes it even when the import
+        // fails (observed with 615.71.09). Closing it again here races with other
+        // threads that may already have reused the descriptor number.
         return false;
     }
     img->isSingleBuffer = true;
@@ -1561,7 +1563,9 @@ static bool importExternalBufferToCuda(NVDriver *drv, BackingImage *img) {
         .size = img->totalSize
     };
     if (CHECK_CUDA_RESULT(drv->cu->cuImportExternalMemory(&img->extMem, &extMemDesc))) {
-        close(importFd);
+        // libcuda takes ownership of importFd and closes it even when the import
+        // fails (observed with 615.71.09). Closing it again here races with other
+        // threads that may already have reused the descriptor number.
         return false;
     }
 

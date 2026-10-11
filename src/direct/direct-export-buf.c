@@ -91,7 +91,10 @@ static bool import_to_cuda(NVDriver *drv, NVDriverImage *image, int bpc, int cha
 
     //LOG("importing memory size: %dx%d = %x", image->width, image->height, image->memorySize);
 
-    CHECK_CUDA_RESULT_RETURN(drv->cu->cuImportExternalMemory(&cudaImage->extMem, &extMemDesc), false);
+    if (CHECK_CUDA_RESULT(drv->cu->cuImportExternalMemory(&cudaImage->extMem, &extMemDesc))) {
+        image->nvFd = 0; // consumed (and closed) by libcuda; bail must not close it again
+        return false;
+    }
 
     //For some reason, this close *must* be *here*, otherwise we will get random visual glitches.
     close(image->nvFd2);
@@ -690,7 +693,7 @@ static BackingImage *direct_allocateBackingImage_perPlane(NVDriver *drv, NVSurfa
             .size      = driverImages[i].memorySize
         };
         if (CHECK_CUDA_RESULT(drv->cu->cuImportExternalMemory(&backingImage->cudaImages[i].extMem, &extMemDesc))) {
-            close(memFd);
+            // memFd was consumed (and closed) by libcuda, even on failure.
             close(memFd2);
             close(drmFd);
             goto fail;
@@ -788,6 +791,7 @@ static BackingImage *direct_allocateBackingImage_single(NVDriver *drv, NVSurface
 
     LOG_DEBUG("Importing single memory to CUDA");
     if (CHECK_CUDA_RESULT(drv->cu->cuImportExternalMemory(&backingImage->extMem, &extMemDesc))) {
+        memFd = -1; // consumed (and closed) by libcuda, even on failure
         goto fail;
     }
 
