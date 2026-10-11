@@ -1,5 +1,9 @@
 #include "kernels.h"
 
+const char resizePtx[] =
+#include "resize-ptx.inc"
+;
+
 const char nv12ToArgbPtx[] =
 ".version 3.2\n"
 ".target sm_30\n"
