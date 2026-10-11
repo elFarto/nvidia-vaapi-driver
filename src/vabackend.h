@@ -90,6 +90,9 @@ typedef struct
     pthread_mutex_t         mutex;
     pthread_cond_t          cond;
     bool                    decodeFailed;
+    // Set once the surface has been handed out as a dma-buf. The client can
+    // then read the frame without a driver call that would wait for it.
+    atomic_bool             exported;
 } NVSurface;
 
 typedef enum
