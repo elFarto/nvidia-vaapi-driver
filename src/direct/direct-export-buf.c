@@ -996,12 +996,21 @@ static bool import_to_cuda(NVDriver *drv, NVDriverImage *image, int bpc, int cha
     };
 
     CUresult importResult = drv->cu->cuImportExternalMemory(&cudaImage->extMem, &extMemDesc);
-    CHECK_CUDA_RESULT_RETURN(importResult, false);
+    if (CHECK_CUDA_RESULT(importResult)) {
+        backendReleaseTrackedNvKmsFd(
+            importedFd,
+            "import_to_cuda_import_failed_consumed_by_cuda"
+        );
+        image->nvFd = 0;
+        if (image->nvFd2 == importedFd) {
+            image->nvFd2 = 0;
+        }
+        return false;
+    }
     directInitCudaImage(cudaImage, importedFd);
 
-    // Successful cuImportExternalMemory() transfers OPAQUE_FD ownership to
-    // CUDA. Do not close |importedFd| locally after cuDestroyExternalMemory(),
-    // or Chromium's FD ownership checks can observe a stale/double close.
+    // cuImportExternalMemory() transfers OPAQUE_FD ownership to CUDA, including
+    // failure paths. Do not close |importedFd| locally after this point.
     image->nvFd = 0;
     if (image->nvFd2 == importedFd) {
         image->nvFd2 = 0;
@@ -1113,7 +1122,10 @@ static bool import_to_cuda_buffer(
                 importResult,
                 errStr
             );
-            backendCloseTrackedNvKmsFd(importAttemptFd, "import_to_cuda_buffer_import_failed");
+            backendReleaseTrackedNvKmsFd(
+                importAttemptFd,
+                "import_to_cuda_buffer_import_failed_consumed_by_cuda"
+            );
             continue;
         }
 
@@ -3475,10 +3487,8 @@ static bool direct_importExternalSurfaceImpl(NVDriver *drv, NVSurface *surface, 
 
         if (!importedPlane &&
             !import_to_cuda(drv, &importImage, 8 * fmtInfo->bppc, plane->channelCount, &backingImage->cudaImages[i], &backingImage->arrays[i])) {
-            // import_to_cuda() transfers FD ownership to CUDA on successful
-            // cuImportExternalMemory(). In that case it clears image->nvFd.
-            // Closing |importFd| here would double-close an FD now owned by
-            // CUDA and may trigger Chromium's FD ownership checks.
+            // import_to_cuda() clears image->nvFd once cuImportExternalMemory()
+            // takes ownership. If it is still set, the import did not consume it.
             if (importImage.nvFd != 0) {
                 directCloseImportedPlaneFd(importImage.nvFd, "direct_import_plane_import_failed");
             }

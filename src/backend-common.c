@@ -453,7 +453,10 @@ bool copy_external_plane_to_cuda_array(
                 importResult,
                 errStr
             );
-            backendCloseTrackedNvKmsFd(importAttemptFd, "copy_external_import_failed");
+            backendReleaseTrackedNvKmsFd(
+                importAttemptFd,
+                "copy_external_import_failed_consumed_by_cuda"
+            );
             continue;
         }
         LOG(
@@ -463,8 +466,8 @@ bool copy_external_plane_to_cuda_array(
             attempt + 1,
             handleTypeCount
         );
-        // Successful cuImportExternalMemory() transfers FD ownership to CUDA.
-        // Do not close |importAttemptFd| locally after this point.
+        // cuImportExternalMemory() transfers FD ownership to CUDA, including
+        // failure paths. Do not close |importAttemptFd| locally after this point.
 
         CUDA_EXTERNAL_MEMORY_BUFFER_DESC bufferDesc = {
             .offset = 0,
