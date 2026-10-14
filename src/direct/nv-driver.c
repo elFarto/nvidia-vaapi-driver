@@ -20,6 +20,7 @@
 #include <ctrl/ctrl2080/ctrl2080fb.h>
 
 #include "../vabackend.h"
+#include "../backend-common.h"
 
 #if !defined(_IOC_READ) && defined(IOC_OUT)
 #define _IOC_READ IOC_OUT
@@ -233,7 +234,7 @@ static bool nv_get_versions(const int fd, char **versionString) {
         if (procFd > 0) {
             char buf[257];
             ssize_t readBytes = read(procFd, buf, 256);
-            close(procFd);
+            backendCloseFd(procFd, "nv_driver_probe_proc_fd");
 
             //The first line should look something like this. We just need to extract the version, which seems to be surrounded by 2 spaces
             //NVRM version: NVIDIA UNIX x86_64 Kernel Module  560.31.02  Tue Jul 30 21:02:43 UTC 2024
@@ -477,10 +478,10 @@ err:
 
     LOG("Got error initing")
     if (nvctlFd != -1) {
-        close(nvctlFd);
+        backendCloseFd(nvctlFd, "nv_driver_context_create_nvctl_fail");
     }
     if (nv0Fd != -1) {
-        close(nv0Fd);
+        backendCloseFd(nv0Fd, "nv_driver_context_create_nv0_fail");
     }
     return false;
 }
@@ -491,13 +492,13 @@ bool free_nvdriver(NVDriverContext *context) {
     nv_free_object(context->nvctlFd, context->clientObject, context->clientObject);
 
     if (context->nvctlFd > 0) {
-        close(context->nvctlFd);
+        backendCloseFd(context->nvctlFd, "nv_driver_context_destroy_nvctl");
     }
     if (context->drmFd > 0) {
-        close(context->drmFd);
+        backendCloseFd(context->drmFd, "nv_driver_context_destroy_drm");
     }
     if (context->nv0Fd > 0) {
-        close(context->nv0Fd);
+        backendCloseFd(context->nv0Fd, "nv_driver_context_destroy_nv0");
     }
 
     memset(context, 0, sizeof(NVDriverContext));
@@ -591,7 +592,7 @@ bool alloc_memory(const NVDriverContext *context, const uint32_t size, int *fd) 
  err:
     LOG("error")
     if (nvctlFd2 > 0) {
-        close(nvctlFd2);
+        backendCloseFd(nvctlFd2, "alloc_memory_fail_nvctl");
     }
 
     ret = nv_free_object(context->nvctlFd, context->clientObject, bufferObject);
@@ -841,13 +842,13 @@ bool alloc_buffer(NVDriverContext *context, const uint32_t totalSize, const NVDr
      uint32_t imageSizeInBytes = widthInBytes * alignedHeight;
      uint32_t size = imageSizeInBytes;
 
-     //this gets us some memory, and the fd to import into cuda
-     int memFd = -1;
-     bool ret = alloc_memory(context, size, &memFd);
-     if (!ret) {
-         LOG("alloc_memory failed");
-         return false;
-     }
+    //this gets us some memory, and the fd to import into cuda
+    int memFd = -1;
+    bool ret = alloc_memory(context, size, &memFd);
+    if (!ret) {
+        LOG("alloc_memory failed");
+        return false;
+    }
 
      //now export the dma-buf
      uint32_t pitchInBlocks = widthInBytes / gobWidthInBytes;
@@ -868,6 +869,7 @@ bool alloc_buffer(NVDriverContext *context, const uint32_t totalSize, const NVDr
      image->nvFd = memFd;
      image->nvFd2 = memFd2; //not sure why we can't close this one, we shouldn't need it after importing the image
      image->drmFd = primeFd;
+     image->useDmaBufHandle = false;
      image->mods = DRM_FORMAT_MOD_NVIDIA_BLOCK_LINEAR_2D(0, context->sector_layout, context->page_kind_generation, context->generic_page_kind, log2GobsPerBlockY);
      image->offset = 0;
      image->pitch = widthInBytes;
@@ -877,7 +879,5 @@ bool alloc_buffer(NVDriverContext *context, const uint32_t totalSize, const NVDr
      image->log2GobsPerBlockY = log2GobsPerBlockY;
      image->log2GobsPerBlockZ = log2GobsPerBlockZ;
 
-     //LOG("created image: %dx%d %lx %d %x", width, height, image->mods, widthInBytes, imageSizeInBytes);
-
      return true;
- }
+}
