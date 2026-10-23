@@ -14,6 +14,10 @@
 
 #define ROUND_UP(N, S) ((((N) + (S) - 1) / (S)) * (S))
 
+//Technically these can vary per architecture, but all the ones we support have the same values
+#define GOB_WIDTH_IN_BYTES  64
+#define GOB_HEIGHT_IN_BYTES 8
+
 typedef struct {
     int nvctlFd;
     int nv0Fd;

@@ -29,9 +29,6 @@
 #define _IOC_WRITE IOC_IN
 #endif
 
-//Technically these can vary per architecture, but all the ones we support have the same values
-#define GOB_WIDTH_IN_BYTES  64
-#define GOB_HEIGHT_IN_BYTES 8
 #define SINGLE_BUFFER_PLANE_ALIGNMENT 65536
 
 // NVIDIA 545 appended numaNode to NV_MEMORY_ALLOCATION_PARAMS.  The vendored

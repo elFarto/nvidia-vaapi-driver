@@ -673,14 +673,33 @@ static BackingImage *direct_allocateBackingImage_perPlane(NVDriver *drv, NVSurfa
 
     // Reuse the layout purely to obtain each plane's block height and pitch/aligned
     // size; the packed offsets it returns are ignored (each plane is offset 0 in its
-    // own buffer). Pass unifyBlockHeight=false: each plane is its own dma-buf object
-    // with its own modifier, so it keeps its natural per-plane block height and
-    // matches what the decoder produced (see calculate_unified_image_layout).
-    calculate_unified_image_layout(&drv->driverContext, driverImages, surface->width, surface->height,
+    // own buffer). Pass unifyBlockHeight=true: Chromium's vaapi_wrapper CHECKs that every
+    // object of a surface carries the same modifier, even when each plane is its own
+    // object. With per-plane block heights, a surface whose chroma plane is short enough
+    // to need a smaller block than luma (any coded height up to ~256px, e.g. Twitch's
+    // 160p rendition) exports two modifiers and aborts the GPU process.
+    NVDriverImage naturalImages[3] = { 0 };
+    calculate_unified_image_layout(&drv->driverContext, naturalImages, surface->width, surface->height,
                                    fmtInfo->bppc, fmtInfo->numPlanes, fmtInfo->plane, false);
+    calculate_unified_image_layout(&drv->driverContext, driverImages, surface->width, surface->height,
+                                   fmtInfo->bppc, fmtInfo->numPlanes, fmtInfo->plane, true);
     LOG_DEBUG("Allocating per-plane BackingImage: %p %ux%u", backingImage, surface->width, surface->height);
 
     for (uint32_t i = 0; i < fmtInfo->numPlanes; i++) {
+        // CUDA derives a plane's block height from the array height it is handed, so a
+        // plane forced up to the shared block is created at its block-aligned height to
+        // make CUDA tile it with that block, as the single-buffer path does. Importers
+        // clamp a modifier's block height to the plane, though: once the shared block is
+        // at least twice the plane's height in whole gobs (NV12 chroma at 168x96 or
+        // 176x128), they detile it with the plane's own smaller block, so such a plane
+        // keeps its natural height and CUDA tiles it the way it will be read.
+        uint32_t arrayHeight = driverImages[i].height;
+        const uint32_t blockHeight = GOB_HEIGHT_IN_BYTES << driverImages[i].log2GobsPerBlockY;
+        if (naturalImages[i].log2GobsPerBlockY != driverImages[i].log2GobsPerBlockY &&
+            ROUND_UP(driverImages[i].height, GOB_HEIGHT_IN_BYTES) > blockHeight / 2) {
+            arrayHeight = driverImages[i].memorySize / driverImages[i].pitch;
+        }
+
         int memFd = -1, memFd2 = -1, drmFd = -1;
         if (!alloc_buffer(&drv->driverContext, driverImages[i].memorySize, &driverImages[i], &memFd, &memFd2, &drmFd)) {
             goto fail;
@@ -703,18 +722,10 @@ static BackingImage *direct_allocateBackingImage_perPlane(NVDriver *drv, NVSurfa
         backingImage->fds[i] = drmFd;
         cacheBackingImageFdStat(backingImage, (int) i);
 
-        // Create the array at the plane's natural height. Each plane is its own object
-        // carrying its own modifier, and calculate_unified_image_layout (called with
-        // unifyBlockHeight=false) already advertised each plane's per-plane block height.
-        // Handing CUDA the natural height makes it derive that same per-plane block, so
-        // the array tiling matches the modifier. (Rounding up to the shared max block --
-        // as the single-buffer path must -- would instead make CUDA pick the larger block
-        // and disagree with the per-plane modifier -> the importer detiles wrong -> green
-        // chroma, e.g. NV12 chroma at a 256x144 coded height.)
         CUDA_EXTERNAL_MEMORY_MIPMAPPED_ARRAY_DESC mipmapArrayDesc = {
             .arrayDesc = {
                 .Width = driverImages[i].width,
-                .Height = driverImages[i].height,
+                .Height = arrayHeight,
                 .Depth = 0,
                 .Format = fmtInfo->bppc == 1 ? CU_AD_FORMAT_UNSIGNED_INT8 : CU_AD_FORMAT_UNSIGNED_INT16,
                 .NumChannels = fmtInfo->plane[i].channelCount,
