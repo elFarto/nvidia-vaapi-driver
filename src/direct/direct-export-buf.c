@@ -1130,14 +1130,6 @@ static bool import_to_cuda_buffer(
         }
 
         directInitCudaImage(cudaImage, importAttemptFd);
-        if (sourceFd != 0) {
-            directCloseImportedPlaneFd(sourceFd, "import_to_cuda_buffer_source_fd_replaced_by_dup");
-            image->nvFd = 0;
-            if (image->nvFd2 == sourceFd) {
-                image->nvFd2 = 0;
-            }
-        }
-
         if (!map_external_memory_to_cuda_buffer(
                 drv,
                 cudaImage->extMem,
@@ -1150,6 +1142,15 @@ static bool import_to_cuda_buffer(
             continue;
         }
 
+        // Keep the source available until mapping succeeds: a later handle-type
+        // attempt, or the caller's array fallback, may still need it.
+        if (sourceFd != 0) {
+            directCloseImportedPlaneFd(sourceFd, "import_to_cuda_buffer_source_fd_replaced_by_dup");
+            image->nvFd = 0;
+            if (image->nvFd2 == sourceFd) {
+                image->nvFd2 = 0;
+            }
+        }
         cudaImage->mappedBufferSize = image->memorySize;
         LOG(
             "import_to_cuda_buffer success buffer=%p handleType=%d",

@@ -130,6 +130,18 @@ meson.add_devenv(environment({
 sh_prog = find_program('sh')
 nvidia_drv_video_path = join_paths(meson.project_build_root(), 'nvidia_drv_video.so')
 
+if host_machine.system() == 'linux'
+    direct_import_test = executable(
+        'test-direct-import',
+        'tests/test-direct-import.c',
+        dependencies: deps,
+        include_directories: nvidia_incdir,
+        c_args: ['-ffunction-sections', '-fdata-sections'],
+        link_args: ['-Wl,--gc-sections'],
+    )
+    test('direct-import-ownership', direct_import_test)
+endif
+
 test(
     'driver-artifact-smoke',
     sh_prog,
