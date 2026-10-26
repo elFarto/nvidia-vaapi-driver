@@ -354,6 +354,7 @@ run_encode_decode_case() {
     output_file="$tmpdir/${va_profile}_${rc_mode}.mkv"
     encode_log="$tmpdir/${va_profile}_${rc_mode}_encode.log"
     decode_log="$tmpdir/${va_profile}_${rc_mode}_decode.log"
+    software_decode_log="$tmpdir/${va_profile}_${rc_mode}_software_decode.log"
 
     set -- ffmpeg -hide_banner -nostdin -loglevel warning \
         -vaapi_device "$VAAPI_DEVICE" \
@@ -389,11 +390,16 @@ run_encode_decode_case() {
         return 1
     fi
 
-    if ! ffmpeg -hide_banner -nostdin -loglevel warning \
+    if ! ffmpeg -hide_banner -nostdin -loglevel warning -xerror -err_detect explode \
         -hwaccel vaapi -hwaccel_output_format vaapi \
         -vaapi_device "$VAAPI_DEVICE" \
         -i "$output_file" -f null - >"$decode_log" 2>&1; then
         return 3
+    fi
+
+    if ! ffmpeg -hide_banner -nostdin -loglevel warning -xerror -err_detect explode \
+        -i "$output_file" -f null - >"$software_decode_log" 2>&1; then
+        return 4
     fi
 
     return 0
@@ -452,6 +458,11 @@ while IFS="$(printf '\t')" read -r row_id codec va_profile rc_mode encoder ff_pr
             encode_status="OK"
             decode_status="FAIL"
             reason_text="decode_failed"
+            ;;
+        4)
+            encode_status="OK"
+            decode_status="FAIL"
+            reason_text="software_decode_failed"
             ;;
         *)
             reason_text="unexpected_error"

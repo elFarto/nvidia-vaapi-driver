@@ -161,6 +161,42 @@ test(
 )
 
 if get_option('runtime_tests')
+    encode_reconfigure_test = executable(
+        'test-encode-reconfigure',
+        'tests/test-encode-reconfigure.c',
+        dependencies: [dependency('libva'), dependency('libva-drm')],
+        c_args: ['-D_GNU_SOURCE'],
+    )
+    foreach codec : ['h264', 'hevc']
+        test(
+            'encode-reconfigure-' + codec,
+            encode_reconfigure_test,
+            args: [codec],
+            env: environment({
+                'LIBVA_DRIVER_NAME': 'nvidia',
+                'LIBVA_DRIVERS_PATH': meson.project_build_root(),
+                'NVD_BACKEND': 'direct',
+            }),
+            suite: ['runtime'],
+            timeout: 120,
+            is_parallel: false,
+        )
+    endforeach
+    test(
+        'packed-headers-disabled',
+        encode_reconfigure_test,
+        args: ['h264', '--packed-headers-disabled'],
+        env: environment({
+            'LIBVA_DRIVER_NAME': 'nvidia',
+            'LIBVA_DRIVERS_PATH': meson.project_build_root(),
+            'NVD_BACKEND': 'direct',
+            'NVD_DISABLE_CLIENT_PACKED_HEADERS': '1',
+            'NVD_ENABLE_CLIENT_PACKED_HEADERS': '0',
+        }),
+        suite: ['runtime'],
+        timeout: 30,
+        is_parallel: false,
+    )
     test(
         'driver-runtime-vaapi-smoke',
         sh_prog,

@@ -123,13 +123,7 @@ static bool nvDisableClientPackedHeaders(void)
         return false;
     }
 
-    /*
-     * VA-API clients can provide codec packed headers, but NVENC still encodes
-     * the slice stream from its own session config.  Mixing client SPS/PPS with
-     * NVENC slices is fragile, so prefer NVENC-generated codec headers unless a
-     * caller explicitly opts into the compatibility path.
-     */
-    return true;
+    return isTruthyEnv(getenv("NVD_DISABLE_CLIENT_PACKED_HEADERS"));
 }
 
 static const char *nvClientPackedHeadersPolicy(void)
@@ -140,7 +134,7 @@ static const char *nvClientPackedHeadersPolicy(void)
     if (isTruthyEnv(getenv("NVD_DISABLE_CLIENT_PACKED_HEADERS"))) {
         return "nvenc-forced";
     }
-    return "nvenc-default";
+    return "client-default";
 }
 
 static int nvDefaultDecodeSurfaceCount(void)
@@ -2477,10 +2471,10 @@ static bool configureEncodeConfigForRtFormat(
 }
 
 static uint32_t encodeProfileToPackedHeaderMask(VAProfile profile) {
-    if (isH264EncodeProfile(profile) || isHEVCEncodeProfile(profile)) {
+    if (!nvDisableClientPackedHeaders() &&
+        (isH264EncodeProfile(profile) || isHEVCEncodeProfile(profile))) {
         return VA_ENC_PACKED_HEADER_SEQUENCE |
                VA_ENC_PACKED_HEADER_PICTURE |
-               VA_ENC_PACKED_HEADER_SLICE |
                VA_ENC_PACKED_HEADER_RAW_DATA;
     }
     return VA_ENC_PACKED_HEADER_NONE;
@@ -2727,6 +2721,27 @@ static void configureQpBoundsForRateControl(NVContext *nvCtx, NV_ENC_RC_PARAMS *
         minQp,
         maxQp
     );
+}
+
+static void configureEncodeRateControl(NVContext *nvCtx, NV_ENC_RC_PARAMS *rcParams) {
+    rcParams->rateControlMode = vaRateControlToNvencRateControl(nvCtx->encodeRateControl);
+    if (rcParams->rateControlMode == NV_ENC_PARAMS_RC_CONSTQP) {
+        configureConstQpForEncode(nvCtx, rcParams);
+        return;
+    }
+
+    const uint32_t bitrate = nvCtx->encodeBitrate > 0 ? nvCtx->encodeBitrate : 4000000;
+    uint32_t targetPercentage = nvCtx->encodeTargetPercentage;
+    if (targetPercentage == 0 || targetPercentage > 100) {
+        targetPercentage = 100;
+    }
+    rcParams->maxBitRate = bitrate;
+    rcParams->averageBitRate = bitrate;
+    if (rcParams->rateControlMode == NV_ENC_PARAMS_RC_VBR) {
+        const uint32_t average = (uint32_t)(((uint64_t)bitrate * targetPercentage) / 100);
+        rcParams->averageBitRate = average > 0 ? average : bitrate;
+    }
+    configureQpBoundsForRateControl(nvCtx, rcParams);
 }
 
 static void setH264ConfigBitDepth(NV_ENC_CONFIG_H264 *h264Cfg, uint32_t bitDepthMinus8) {
@@ -4221,6 +4236,7 @@ static bool destroyEncodeSession(NVContext *nvCtx) {
     memset(&nvCtx->encodeApi, 0, sizeof(nvCtx->encodeApi));
     nvCtx->encodeNvencApiVersion = 0;
     nvCtx->encodeSessionInitialized = false;
+    nvCtx->encodeConfigDirty = false;
 
     LOG("encode session destroyed context_id=%d", (int) nvCtx->contextId);
     const uint64_t liveEncodeSessions =
@@ -4325,10 +4341,51 @@ static bool destroyEncodeSession(NVContext *nvCtx) {
     return !hadError;
 }
 
+static bool reconfigureEncodeSession(NVContext *nvCtx) {
+    if (!nvCtx->encodeConfigDirty) {
+        return true;
+    }
+
+    NV_ENC_CONFIG config = nvCtx->encodeConfig;
+    NV_ENC_INITIALIZE_PARAMS params = nvCtx->encodeInitParams;
+    configureEncodeRateControl(nvCtx, &config.rcParams);
+    params.encodeConfig = &config;
+    params.frameRateNum = nvCtx->encodeFrameRateNum > 0 ? nvCtx->encodeFrameRateNum : 30;
+    params.frameRateDen = nvCtx->encodeFrameRateDen > 0 ? nvCtx->encodeFrameRateDen : 1;
+    if (memcmp(&config.rcParams, &nvCtx->encodeConfig.rcParams, sizeof(config.rcParams)) == 0 &&
+        params.frameRateNum == nvCtx->encodeInitParams.frameRateNum &&
+        params.frameRateDen == nvCtx->encodeInitParams.frameRateDen) {
+        nvCtx->encodeConfigDirty = false;
+        return true;
+    }
+
+    if (nvCtx->encodeApi.nvEncReconfigureEncoder == NULL) {
+        LOG("NVENC cannot apply updated rate-control parameters: reconfigure API unavailable");
+        return false;
+    }
+    NV_ENC_RECONFIGURE_PARAMS reconfigure = {0};
+    reconfigure.version = nvencStructVersionForApi(
+        NV_ENC_RECONFIGURE_PARAMS_VER, nvCtx->encodeNvencApiVersion);
+    reconfigure.reInitEncodeParams = params;
+    if (!checkNvencStatus(
+            nvCtx->encodeApi.nvEncReconfigureEncoder(nvCtx->encoder, &reconfigure),
+            "nvEncReconfigureEncoder")) {
+        return false;
+    }
+
+    nvCtx->encodeConfig = config;
+    nvCtx->encodeInitParams = params;
+    nvCtx->encodeInitParams.encodeConfig = &nvCtx->encodeConfig;
+    nvCtx->encodeConfigDirty = false;
+    LOG("reconfigured encoder: bitrate=%u maxBitrate=%u fps=%u/%u",
+        config.rcParams.averageBitRate, config.rcParams.maxBitRate,
+        params.frameRateNum, params.frameRateDen);
+    return true;
+}
+
 static bool initEncodeSession(NVContext *nvCtx) {
     if (nvCtx->encodeSessionInitialized) {
-        LOG("encode session already initialized");
-        return true;
+        return reconfigureEncodeSession(nvCtx);
     }
 
     NVDriver *drv = nvCtx->drv;
@@ -4476,38 +4533,7 @@ static bool initEncodeSession(NVContext *nvCtx) {
     encodeConfig.gopLength = nvCtx->encodeIntraPeriod > 0 ? nvCtx->encodeIntraPeriod : NVENC_INFINITE_GOPLENGTH;
     encodeConfig.frameIntervalP = 1;
     encodeConfig.frameFieldMode = NV_ENC_PARAMS_FRAME_FIELD_MODE_FRAME;
-    encodeConfig.rcParams.rateControlMode = vaRateControlToNvencRateControl(nvCtx->encodeRateControl);
-    uint32_t bitrate = nvCtx->encodeBitrate;
-    uint32_t targetPercentage = nvCtx->encodeTargetPercentage;
-    if (targetPercentage == 0 || targetPercentage > 100) {
-        targetPercentage = 100;
-    }
-    if (encodeConfig.rcParams.rateControlMode == NV_ENC_PARAMS_RC_CONSTQP) {
-        configureConstQpForEncode(nvCtx, &encodeConfig.rcParams);
-    } else {
-        if (bitrate == 0) {
-            bitrate = 4 * 1000 * 1000;
-        }
-        if (encodeConfig.rcParams.rateControlMode == NV_ENC_PARAMS_RC_VBR) {
-            encodeConfig.rcParams.maxBitRate = bitrate;
-            uint64_t averageBitrate = ((uint64_t) bitrate * targetPercentage) / 100;
-            if (averageBitrate == 0) {
-                averageBitrate = bitrate;
-            }
-            encodeConfig.rcParams.averageBitRate = (uint32_t) averageBitrate;
-        } else {
-            encodeConfig.rcParams.averageBitRate = bitrate;
-            encodeConfig.rcParams.maxBitRate = bitrate;
-        }
-        configureQpBoundsForRateControl(nvCtx, &encodeConfig.rcParams);
-        LOG(
-            "configured bitrate RC: mode=%d maxBitrate=%u averageBitrate=%u targetPercentage=%u",
-            encodeConfig.rcParams.rateControlMode,
-            encodeConfig.rcParams.maxBitRate,
-            encodeConfig.rcParams.averageBitRate,
-            targetPercentage
-        );
-    }
+    configureEncodeRateControl(nvCtx, &encodeConfig.rcParams);
 
     uint32_t codecIdrPeriod = nvCtx->encodeIntraIDRPeriod > 0 ? nvCtx->encodeIntraIDRPeriod : encodeConfig.gopLength;
     if (isH264EncodeProfile(nvCtx->profile)) {
@@ -4631,6 +4657,10 @@ static bool initEncodeSession(NVContext *nvCtx) {
         );
     }
 
+    nvCtx->encodeConfig = encodeConfig;
+    nvCtx->encodeInitParams = initParams;
+    nvCtx->encodeInitParams.encodeConfig = &nvCtx->encodeConfig;
+    nvCtx->encodeConfigDirty = false;
     nvCtx->encodeSessionInitialized = true;
     LOG("encode session initialized successfully context_id=%d", (int) nvCtx->contextId);
     return true;
@@ -5996,6 +6026,7 @@ static VAStatus nvCreateConfig(
         cfg->surfaceFormat = cudaVideoSurfaceFormat_NV12;
         cfg->bitDepth = 8;
         cfg->rateControl = VA_RC_CBR;
+        cfg->packedHeaders = VA_ENC_PACKED_HEADER_NONE;
         const uint32_t supportedRtFormatMask = encodeProfileToRtFormatMask(drv, profile);
         uint32_t requestedRtMask = supportedRtFormatMask;
         uint32_t selectedRtFormat = pickEncodeRtFormatFromMask(
@@ -6016,6 +6047,13 @@ static VAStatus nvCreateConfig(
                     return VA_STATUS_ERROR_ATTR_NOT_SUPPORTED;
                 }
                 cfg->rateControl = requestedRC;
+            } else if (attrib_list[i].type == VAConfigAttribEncPackedHeaders) {
+                const uint32_t requested = attrib_list[i].value;
+                if (requested & ~encodeProfileToPackedHeaderMask(profile)) {
+                    deleteObject(drv, obj->id);
+                    return VA_STATUS_ERROR_ATTR_NOT_SUPPORTED;
+                }
+                cfg->packedHeaders = requested;
             } else if (attrib_list[i].type == VAConfigAttribRTFormat) {
                 requestedRtMask = attrib_list[i].value & supportedRtFormatMask;
                 selectedRtFormat = pickEncodeRtFormatFromMask(profile, requestedRtMask);
@@ -6245,7 +6283,7 @@ static VAStatus nvQueryConfigAttributes(
         attrib_list[i].value = cfg->rateControl ? cfg->rateControl : (VA_RC_CBR | VA_RC_VBR | VA_RC_CQP);
         attrib_list[i].type = VAConfigAttribRateControl;
         i++;
-        attrib_list[i].value = encodeProfileToPackedHeaderMask(cfg->profile);
+        attrib_list[i].value = cfg->packedHeaders;
         attrib_list[i].type = VAConfigAttribEncPackedHeaders;
         i++;
         if (isHEVCEncodeProfile(cfg->profile)) {
@@ -7201,6 +7239,7 @@ static VAStatus nvCreateContext(
         nvCtx->encodeFrameRateDen = 1;
         nvCtx->encodeBitrate = 0;
         nvCtx->encodeRateControl = cfg->rateControl ? cfg->rateControl : VA_RC_CBR;
+        nvCtx->encodePackedHeaderMask = cfg->packedHeaders;
         nvCtx->encodeTargetPercentage = 100;
         nvCtx->encodeInitialQp = 0;
         nvCtx->encodeMinQp = 0;
@@ -8731,6 +8770,7 @@ static VAStatus nvRenderPicture(
             );
 
             if (buf->bufferType == VAEncSequenceParameterBufferType) {
+                nvCtx->encodeConfigDirty = true;
                 if (isH264EncodeProfile(nvCtx->profile) &&
                     buf->size >= sizeof(VAEncSequenceParameterBufferH264)) {
                     VAEncSequenceParameterBufferH264 *seq = (VAEncSequenceParameterBufferH264 *) buf->ptr;
@@ -8895,6 +8935,17 @@ static VAStatus nvRenderPicture(
                        buf->size >= sizeof(VAEncPackedHeaderParameterBuffer)) {
                 VAEncPackedHeaderParameterBuffer *packed =
                     (VAEncPackedHeaderParameterBuffer *) buf->ptr;
+                uint32_t mask = 0;
+                switch (packed->type) {
+                case VAEncPackedHeaderSequence: mask = VA_ENC_PACKED_HEADER_SEQUENCE; break;
+                case VAEncPackedHeaderPicture: mask = VA_ENC_PACKED_HEADER_PICTURE; break;
+                case VAEncPackedHeaderRawData: mask = VA_ENC_PACKED_HEADER_RAW_DATA; break;
+                default: break;
+                }
+                if (mask == 0 || (nvCtx->encodePackedHeaderMask & mask) == 0) {
+                    pthread_mutex_unlock(&drv->objectCreationMutex);
+                    return VA_STATUS_ERROR_INVALID_PARAMETER;
+                }
                 if (!nvDisableClientPackedHeaders() &&
                     (isH264EncodeProfile(nvCtx->profile) ||
                      isHEVCEncodeProfile(nvCtx->profile))) {
@@ -8987,6 +9038,7 @@ static VAStatus nvRenderPicture(
                 if (misc->type == VAEncMiscParameterTypeRateControl &&
                     buf->size >= sizeof(VAEncMiscParameterBuffer) + sizeof(VAEncMiscParameterRateControl)) {
                     VAEncMiscParameterRateControl *rc = (VAEncMiscParameterRateControl *) misc->data;
+                    nvCtx->encodeConfigDirty = true;
                     if (rc->bits_per_second > 0) {
                         nvCtx->encodeBitrate = rc->bits_per_second;
                     }
@@ -9017,6 +9069,7 @@ static VAStatus nvRenderPicture(
                 } else if (misc->type == VAEncMiscParameterTypeFrameRate &&
                            buf->size >= sizeof(VAEncMiscParameterBuffer) + sizeof(VAEncMiscParameterFrameRate)) {
                     VAEncMiscParameterFrameRate *fr = (VAEncMiscParameterFrameRate *) misc->data;
+                    nvCtx->encodeConfigDirty = true;
                     uint32_t den = (fr->framerate >> 16) & 0xffff;
                     uint32_t num = fr->framerate & 0xffff;
                     if (den == 0) {
@@ -9448,7 +9501,7 @@ prepare_input:
     }
     codedBuffer->codedSegment.size = totalBitstreamBytes;
     codedBuffer->codedSegment.bit_offset = 0;
-    codedBuffer->codedSegment.status = VA_CODED_BUF_STATUS_SINGLE_NALU;
+    codedBuffer->codedSegment.status = 0;
     codedBuffer->codedSegment.reserved = 0;
     codedBuffer->codedSegment.buf = codedBuffer->codedData;
     codedBuffer->codedSegment.next = NULL;

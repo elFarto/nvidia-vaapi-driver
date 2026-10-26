@@ -359,8 +359,11 @@ typedef struct _NVContext
     int                 surfaceCount;
     bool                firstKeyframeValid;
     bool                encodeSessionInitialized;
+    bool                encodeConfigDirty;
     void                *encoder;
     NV_ENCODE_API_FUNCTION_LIST encodeApi;
+    NV_ENC_CONFIG       encodeConfig;
+    NV_ENC_INITIALIZE_PARAMS encodeInitParams;
     uint32_t            encodeNvencApiVersion;
     CUdeviceptr         encodeInputBuffer;
     size_t              encodeInputBytes;
@@ -381,6 +384,7 @@ typedef struct _NVContext
     uint32_t            encodeIntraIDRPeriod;
     uint32_t            encodeIPPeriod;
     uint32_t            encodeRateControl;
+    uint32_t            encodePackedHeaderMask;
     uint32_t            encodeTargetPercentage;
     uint32_t            encodeInitialQp;
     uint32_t            encodeMinQp;
@@ -411,6 +415,7 @@ typedef struct
     int                     bitDepth;
     cudaVideoCodec          cudaCodec;
     uint32_t                rateControl;
+    uint32_t                packedHeaders;
 } NVConfig;
 
 typedef void (*HandlerFunc)(NVContext*, NVBuffer* , CUVIDPICPARAMS*);

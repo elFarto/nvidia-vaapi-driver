@@ -158,8 +158,8 @@ Environment variables used to control the behavior of this library.
 | `NVD_USE_PRIMARY_CUDA_CONTEXT` | Prefer CUDA primary context (`cuDevicePrimaryCtxRetain`) instead of creating a private context. If unset, the driver still auto-retries with primary context when `cuCtxCreate` fails. |
 | `NVD_DRM_PRIME_ASSUME_LINEAR` | Opt-in compatibility mode for plain `DRM_PRIME` external imports that do not carry explicit modifiers. When set to `1`, the driver admits plain `DRM_PRIME` input and reconstructs it as `DRM_FORMAT_MOD_LINEAR`. Default disabled. |
 | `NVD_DECODE_SURFACE_COUNT` | Override the default decode surface count used when clients create a decode context without render targets. Valid range is `1` to `32`; default is `32`. |
-| `NVD_ENABLE_CLIENT_PACKED_HEADERS` | Opt into prepending client-supplied H.264/HEVC packed header data. Default disabled because NVENC-generated SPS/PPS is safer for NVENC slice output. |
-| `NVD_DISABLE_CLIENT_PACKED_HEADERS` | Deprecated compatibility spelling. Client-supplied H.264/HEVC packed header data is ignored by default while packed-header capability advertisement remains enabled. |
+| `NVD_ENABLE_CLIENT_PACKED_HEADERS` | Explicitly enable H.264/HEVC client sequence, picture and raw-data headers (the default). Client slice headers are not supported because NVENC generates them. |
+| `NVD_DISABLE_CLIENT_PACKED_HEADERS` | Disable client packed headers and advertise no packed-header support. Clients requiring sequence headers for container extradata, including FFmpeg Matroska output, may reject this mode. The enable override takes precedence. |
 | `NVD_MAX_DETACHED_BACKING_IMAGE_BYTES` | Target upper bound (in bytes) on the size of the detached backing-image cache used by the direct backend to recycle decode surfaces across stream switches. Lower this on low-VRAM GPUs to reduce memory usage at the cost of more re-allocation when streams change. Set to `0` to reclaim every eligible detached image. Default: scales with the GPU — total VRAM / 64 (~1.6%), clamped to 64 MiB–512 MiB; falls back to `134217728` (128 MiB) if the VRAM size cannot be queried. |
 | `NVD_MAX_DETACHED_BACKING_IMAGES` | Target upper bound on the number of cached detached backing images. Set to `0` to reclaim every eligible detached image. Default: `16`. |
 
@@ -395,6 +395,24 @@ Meson runtime matrix (codec/profile progress + per-case result):
 meson setup build --reconfigure -Druntime_tests=true
 meson test -C build driver-runtime-vaapi-smoke --print-errorlogs --no-rebuild -v
 ```
+
+The matrix checks both VA-API and software decoding of each encoded stream,
+with decoder errors treated as failures. It does not establish image quality
+or verify that a client preserved the requested high-bit-depth pixel format.
+
+GPU-independent CUDA import ownership tests run with the default `meson test`.
+With runtime tests enabled, `encode-reconfigure-h264` and
+`encode-reconfigure-hevc` change bitrate and frame rate within one session,
+check that encoded output sizes follow the changes, and verify negotiated
+packed-header attributes and client SEI delivery:
+
+```sh
+meson test -C build encode-reconfigure-h264 encode-reconfigure-hevc --print-errorlogs -v
+```
+
+CBR/VBR/QP bounds and frame-rate updates are applied through NVENC's
+reconfigure API. Dynamic resolution, GOP, chroma-format and bit-depth changes
+are not implemented by this path.
 
 `meson test` default mode captures test output. Use `-v` to stream runtime progress.
 
