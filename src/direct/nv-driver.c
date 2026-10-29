@@ -172,6 +172,7 @@ static NvU64 nv_sys_params(int fd) {
 
     return obj.memblock_size;
 }
+#endif
 
 static bool nv_card_info(int fd, nv_ioctl_card_info_t (*card_info)[32]) {
     int ret = ioctl(fd, _IOC(_IOC_READ|_IOC_WRITE, NV_IOCTL_MAGIC, NV_ESC_CARD_INFO, sizeof(nv_ioctl_card_info_t) * 32), card_info);
@@ -183,7 +184,6 @@ static bool nv_card_info(int fd, nv_ioctl_card_info_t (*card_info)[32]) {
 
     return ret == 0;
 }
-#endif
 
 static bool nv_attach_gpus(const int fd, uint32_t gpu) {
     const int ret = ioctl(fd, _IOC(_IOC_READ|_IOC_WRITE, NV_IOCTL_MAGIC, NV_ESC_ATTACH_GPUS_TO_FD, sizeof(gpu)), &gpu);
@@ -380,17 +380,40 @@ static bool query_ram_location(NVDriverContext *context) {
     return unified;
 }
 
+static bool find_minor_number(const int nvctlFd, const uint32_t gpuId, uint32_t *minorNumber) {
+    nv_ioctl_card_info_t cards[32] = {0};
+    if (!nv_card_info(nvctlFd, &cards)) {
+        return false;
+    }
+
+    for (int i = 0; i < 32; i++) {
+        if (cards[i].valid && cards[i].gpu_id == gpuId) {
+            *minorNumber = cards[i].minor_number;
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static bool find_device_instance(const int nvctlFd, const NvHandle hClient, const uint32_t gpuId, NvU32 *deviceInstance) {
+    NV0000_CTRL_GPU_GET_ID_INFO_V2_PARAMS params = {
+        .gpuId = gpuId
+    };
+    if (!nv_rm_control(nvctlFd, hClient, hClient, NV0000_CTRL_CMD_GPU_GET_ID_INFO_V2, 0, sizeof(params), &params)) {
+        return false;
+    }
+
+    *deviceInstance = params.deviceInstance;
+    return true;
+}
+
 bool init_nvdriver(NVDriverContext *context, const int drmFd) {
     LOG("Initing nvdriver...")
     int nv0Fd = -1;
 
     int nvctlFd = open("/dev/nvidiactl", O_RDWR|O_CLOEXEC);
     if (nvctlFd == -1) {
-        goto err;
-    }
-
-    nv0Fd = open("/dev/nvidia0", O_RDWR|O_CLOEXEC);
-    if (nv0Fd == -1) {
         goto err;
     }
 
@@ -412,6 +435,18 @@ bool init_nvdriver(NVDriverContext *context, const int drmFd) {
 
     LOG("Got dev info: %x %x %x %x", context->gpu_id, context->sector_layout, context->page_kind_generation, context->generic_page_kind)
 
+    uint32_t minorNumber = 0;
+    if (!find_minor_number(nvctlFd, context->gpu_id, &minorNumber)) {
+        LOG("Unable to find the minor number of GPU %x, falling back to 0", context->gpu_id)
+    }
+
+    char nvDevicePath[32];
+    snprintf(nvDevicePath, sizeof(nvDevicePath), "/dev/nvidia%u", minorNumber);
+    nv0Fd = open(nvDevicePath, O_RDWR|O_CLOEXEC);
+    if (nv0Fd == -1) {
+        goto err;
+    }
+
     //allocate the root object
     bool ret = nv_alloc_object(nvctlFd, context->driverMajorVersion, NULL_OBJECT, NULL_OBJECT, &context->clientObject, NV01_ROOT_CLIENT, 0, (void*)0);
     if (!ret) {
@@ -426,8 +461,15 @@ bool init_nvdriver(NVDriverContext *context, const int drmFd) {
         goto err;
     }
 
+    NvU32 deviceInstance = 0;
+    if (!find_device_instance(nvctlFd, context->clientObject, context->gpu_id, &deviceInstance)) {
+        LOG("Unable to find the device instance of GPU %x, falling back to 0", context->gpu_id)
+    }
+    LOG("Using %s, device instance %u", nvDevicePath, deviceInstance)
+
     //allocate the parent memory object
     NV0080_ALLOC_PARAMETERS deviceParams = {
+       .deviceId = deviceInstance,
        .hClientShare = context->clientObject
     };
 

@@ -119,6 +119,17 @@ if ffmpeg_prog.found()
             'LD_LIBRARY_PATH': meson.project_build_root(),
         },
     )
+
+    test(
+        'render_node_selection',
+        find_program('tests/test_render_node_selection.sh'),
+        timeout : 120,
+        env : {
+            'LIBVA_DRIVER_NAME': 'nvidia',
+            'LIBVA_DRIVERS_PATH': meson.project_build_root(),
+            'LD_LIBRARY_PATH': meson.project_build_root(),
+        },
+    )
 endif
 
 meson.add_devenv(environment({
