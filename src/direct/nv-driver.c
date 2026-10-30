@@ -534,7 +534,7 @@ bool alloc_memory(const NVDriverContext *context, const uint32_t size, int *fd) 
                                 DRF_DEF(OS32, _ATTR, _PAGE_SIZE, _BIG) |
                                 DRF_DEF(OS32, _ATTR, _DEPTH, _UNKNOWN) |
                                 DRF_DEF(OS32, _ATTR, _FORMAT, _BLOCK_LINEAR) |
-                                DRF_DEF(OS32, _ATTR, _PHYSICALITY, _CONTIGUOUS);
+                                DRF_DEF(OS32, _ATTR, _PHYSICALITY, _NONCONTIGUOUS);
     } else {
         // Discrete GPU with local video memory
         memoryClass = NV01_MEMORY_LOCAL_USER;
