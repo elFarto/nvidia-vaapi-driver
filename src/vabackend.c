@@ -1094,6 +1094,47 @@ static BackingImage *retainBackingImageByFd(NVDriver *drv, int fd, NVFormat form
     return ret;
 }
 
+static void closeOwnExportDescriptor(VADRMPRIMESurfaceDescriptor *desc) {
+    for (uint32_t i = 0; i < desc->num_objects && i < ARRAY_SIZE(desc->objects); i++) {
+        if (desc->objects[i].fd >= 0) {
+            backendCloseFd(desc->objects[i].fd, "own_export_reimport_descriptor");
+            desc->objects[i].fd = -1;
+        }
+    }
+    desc->num_objects = 0;
+}
+
+static VAStatus describeOwnExportedBuffer(NVDriver *drv, int fd, VADRMPRIMESurfaceDescriptor *desc) {
+    struct stat fdStat;
+    if (fd < 0 || fstat(fd, &fdStat) != 0 || drv->backend->fillExportDescriptor == NULL) {
+        return VA_STATUS_ERROR_UNSUPPORTED_MEMORY_TYPE;
+    }
+
+    VAStatus status = VA_STATUS_ERROR_UNSUPPORTED_MEMORY_TYPE;
+    pthread_mutex_lock(&drv->imagesMutex);
+    ARRAY_FOR_EACH(BackingImage*, img, &drv->images)
+        if (img == NULL || img->isExternalBuffer || img->borrowedCudaResources ||
+            !backingImageFdMatchesStat(img, &fdStat, 0)) {
+            continue;
+        }
+        // The legacy descriptor omits modifiers and may contain only plane 0.
+        // Reuse the exporter for both single-object and separate-plane layouts.
+        // Holding imagesMutex keeps the image alive until its FDs are duplicated.
+        NVSurface surface = {
+            .backingImage = img, .width = img->width, .height = img->height,
+            .colorStandard = img->colorStandard, .colorRangeFull = img->colorRangeFull,
+        };
+        status = drv->backend->fillExportDescriptor(drv, &surface, desc)
+            ? VA_STATUS_SUCCESS : VA_STATUS_ERROR_ALLOCATION_FAILED;
+        break;
+    END_FOR_EACH
+    pthread_mutex_unlock(&drv->imagesMutex);
+    if (status != VA_STATUS_SUCCESS) {
+        closeOwnExportDescriptor(desc);
+    }
+    return status;
+}
+
 static NVFormat nvFormatFromSurface(const NVSurface *surface) {
     if (surface == NULL) {
         return NV_FORMAT_NONE;
@@ -2821,7 +2862,7 @@ static bool ensureCodedDataBuffer(NVBuffer *codedBuffer, size_t required) {
 
 static bool clearP010EncodeInputPadding(
     NVContext *nvCtx,
-    NVSurface *surface,
+    uint32_t copyHeightPixels,
     uint32_t copyWidthBytes,
     uint32_t chromaCopyHeight,
     size_t lumaPlaneBytes,
@@ -2858,7 +2899,7 @@ static bool clearP010EncodeInputPadding(
     CUdeviceptr lumaBase = nvCtx->encodeInputBuffer;
     CUdeviceptr chromaBase = nvCtx->encodeInputBuffer + lumaPlaneBytes;
 
-    for (uint32_t row = 0; row < surface->height && tailBytes > 0; row++) {
+    for (uint32_t row = 0; row < copyHeightPixels && tailBytes > 0; row++) {
         CUdeviceptr dst = lumaBase + (CUdeviceptr)(row * pitch + copyWidthBytes);
         if (cu->cuMemcpyHtoDAsync != NULL) {
             CHECK_CUDA_RESULT_RETURN(
@@ -2871,7 +2912,7 @@ static bool clearP010EncodeInputPadding(
         }
     }
 
-    for (uint32_t row = surface->height; row < lumaPlaneHeight; row++) {
+    for (uint32_t row = copyHeightPixels; row < lumaPlaneHeight; row++) {
         CUdeviceptr dst = lumaBase + (CUdeviceptr)(row * pitch);
         if (cu->cuMemcpyHtoDAsync != NULL) {
             CHECK_CUDA_RESULT_RETURN(cu->cuMemcpyHtoDAsync(dst, lumaRow, pitch, 0), false);
@@ -2905,6 +2946,47 @@ static bool clearP010EncodeInputPadding(
     free(lumaRow);
     free(chromaRow);
     return true;
+}
+
+static VAStatus applyH264EncodeCropping(NVContext *nvCtx, const VAEncSequenceParameterBufferH264 *seq) {
+    if (!seq->frame_cropping_flag) {
+        if (nvCtx->encodeSessionInitialized && nvCtx->encodeCropWidth != 0) {
+            return (uint32_t)seq->picture_width_in_mbs * 16 == nvCtx->width &&
+                   (uint32_t)seq->picture_height_in_mbs * 16 == nvCtx->height
+                ? VA_STATUS_SUCCESS : VA_STATUS_ERROR_RESOLUTION_NOT_SUPPORTED;
+        }
+        nvCtx->encodeCropWidth = nvCtx->encodeCropHeight = 0;
+        return VA_STATUS_SUCCESS;
+    }
+
+    // NVENC emits SPS cropping from the session's visible dimensions. Only
+    // progressive, top-left input is supported by our staging-copy path.
+    if (!seq->seq_fields.bits.frame_mbs_only_flag ||
+        seq->frame_crop_left_offset != 0 || seq->frame_crop_top_offset != 0) {
+        return VA_STATUS_ERROR_INVALID_PARAMETER;
+    }
+    const uint32_t chroma = seq->seq_fields.bits.chroma_format_idc;
+    const uint32_t cropUnitX = chroma == 0 || chroma == 3 ? 1 : 2;
+    const uint32_t cropUnitY = chroma == 1 ? 2 : 1;
+    const uint32_t codedWidth = (uint32_t)seq->picture_width_in_mbs * 16;
+    const uint32_t codedHeight = (uint32_t)seq->picture_height_in_mbs * 16;
+    const uint64_t cropX = (uint64_t)seq->frame_crop_right_offset * cropUnitX;
+    const uint64_t cropY = (uint64_t)seq->frame_crop_bottom_offset * cropUnitY;
+    if (cropX >= codedWidth || cropY >= codedHeight) {
+        return VA_STATUS_ERROR_INVALID_PARAMETER;
+    }
+    const uint32_t visibleWidth = codedWidth - (uint32_t)cropX;
+    const uint32_t visibleHeight = codedHeight - (uint32_t)cropY;
+    if (nvCtx->encodeSessionInitialized) {
+        return visibleWidth == nvCtx->width && visibleHeight == nvCtx->height
+            ? VA_STATUS_SUCCESS : VA_STATUS_ERROR_RESOLUTION_NOT_SUPPORTED;
+    }
+    if (visibleWidth > nvCtx->width || visibleHeight > nvCtx->height) {
+        return VA_STATUS_ERROR_INVALID_PARAMETER;
+    }
+    nvCtx->encodeCropWidth = visibleWidth;
+    nvCtx->encodeCropHeight = visibleHeight;
+    return VA_STATUS_SUCCESS;
 }
 
 static bool copySurfaceToEncodeInputBuffer(NVContext *nvCtx, NVSurface *surface) {
@@ -2963,8 +3045,8 @@ static bool copySurfaceToEncodeInputBuffer(NVContext *nvCtx, NVSurface *surface)
 
     const uint32_t srcOffsetX = 0;
     const uint32_t srcOffsetY = 0;
-    const uint32_t copyWidthPixels = surface->width;
-    const uint32_t copyHeightPixels = surface->height;
+    const uint32_t copyWidthPixels = nvCtx->encodeCropWidth != 0 ? nvCtx->width : surface->width;
+    const uint32_t copyHeightPixels = nvCtx->encodeCropHeight != 0 ? nvCtx->height : surface->height;
 
     if (surface->format != requiredSurfaceFormat) {
         LOG(
@@ -3083,7 +3165,7 @@ static bool copySurfaceToEncodeInputBuffer(NVContext *nvCtx, NVSurface *surface)
     } else if (clearPaddingP010) {
         if (!clearP010EncodeInputPadding(
                 nvCtx,
-                surface,
+                copyHeightPixels,
                 copyWidthBytes,
                 chromaCopyHeight,
                 lumaPlaneBytes,
@@ -6814,6 +6896,24 @@ static VAStatus nvCreateSurfaces2(
                           !importExternalPrime2;
     const bool allocateMode = !importExternalPrime2 && !importExternalPrime;
 
+    VADRMPRIMESurfaceDescriptor ownExportDesc __attribute__((cleanup(closeOwnExportDescriptor))) = {0};
+    if (importExternalPrime) {
+        const VASurfaceAttribExternalBuffers *legacy = externalBufferPointer;
+        VAStatus ownStatus = VA_STATUS_ERROR_UNSUPPORTED_MEMORY_TYPE;
+        if (legacy->buffers != NULL && legacy->num_buffers == 1 &&
+            legacy->buffers[0] <= INT_MAX) {
+            ownStatus = describeOwnExportedBuffer(drv, (int)legacy->buffers[0], &ownExportDesc);
+        }
+        if (ownStatus == VA_STATUS_SUCCESS) {
+            LOG("Reimporting own DRM_PRIME buffer with its original plane FDs and modifiers");
+            importExternalPrime = false;
+            importExternalPrime2 = true;
+            externalBufferPointer = &ownExportDesc;
+        } else if (ownStatus != VA_STATUS_ERROR_UNSUPPORTED_MEMORY_TYPE) {
+            return ownStatus;
+        }
+    }
+
     if (importExternalPrime2) {
         externalSurfaceDesc = (const VADRMPRIMESurfaceDescriptor *) externalBufferPointer;
         if (num_surfaces != 1) {
@@ -8774,6 +8874,11 @@ static VAStatus nvRenderPicture(
                 if (isH264EncodeProfile(nvCtx->profile) &&
                     buf->size >= sizeof(VAEncSequenceParameterBufferH264)) {
                     VAEncSequenceParameterBufferH264 *seq = (VAEncSequenceParameterBufferH264 *) buf->ptr;
+                    VAStatus cropStatus = applyH264EncodeCropping(nvCtx, seq);
+                    if (cropStatus != VA_STATUS_SUCCESS) {
+                        pthread_mutex_unlock(&drv->objectCreationMutex);
+                        return cropStatus;
+                    }
                     nvCtx->encodeIntraPeriod = seq->intra_period;
                     nvCtx->encodeIntraIDRPeriod = seq->intra_idr_period;
                     nvCtx->encodeIPPeriod = seq->ip_period;
@@ -9246,10 +9351,25 @@ static VAStatus nvEncodeEndPicture(VADriverContextP ctx, NVContext *nvCtx) {
         nvCtx->height = surface->height;
     }
 
+    if (!nvCtx->encodeSessionInitialized && nvCtx->encodeCropWidth != 0) {
+        if (nvCtx->encodeCropWidth > surface->width || nvCtx->encodeCropHeight > surface->height) {
+            CHECK_CUDA_RESULT_RETURN(cu->cuCtxPopCurrent(NULL), VA_STATUS_ERROR_OPERATION_FAILED);
+            return VA_STATUS_ERROR_INVALID_PARAMETER;
+        }
+        nvCtx->width = nvCtx->encodeCropWidth;
+        nvCtx->height = nvCtx->encodeCropHeight;
+    }
+
     if (!initEncodeSession(nvCtx)) {
         LOG("initEncodeSession failed");
         CHECK_CUDA_RESULT_RETURN(cu->cuCtxPopCurrent(NULL), VA_STATUS_ERROR_OPERATION_FAILED);
         return VA_STATUS_ERROR_OPERATION_FAILED;
+    }
+    // Direct registrations describe the full surface, including its chroma
+    // offset. Crop through staging until those paths support a visible window.
+    if (surface->width != nvCtx->width || surface->height != nvCtx->height) {
+        allowDirectCudaPtrRetry = false;
+        allowDirectCudaArrayRetry = false;
     }
 prepare_input:
     memset(&mapInput, 0, sizeof(mapInput));
@@ -9380,8 +9500,8 @@ prepare_input:
 
     NV_ENC_PIC_PARAMS picParams = {0};
     picParams.version = nvencStructVersionForApi(NV_ENC_PIC_PARAMS_VER, negotiatedApiVersion);
-    picParams.inputWidth = surface->width;
-    picParams.inputHeight = surface->height;
+    picParams.inputWidth = nvCtx->width;
+    picParams.inputHeight = nvCtx->height;
     picParams.inputPitch = inputPitchForFrame;
     picParams.inputBuffer = mapInput.mappedResource;
     picParams.outputBitstream = nvCtx->encodeBitstream;

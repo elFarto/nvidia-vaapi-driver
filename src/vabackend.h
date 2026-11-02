@@ -383,6 +383,8 @@ typedef struct _NVContext
     uint32_t            encodeIntraPeriod;
     uint32_t            encodeIntraIDRPeriod;
     uint32_t            encodeIPPeriod;
+    uint32_t            encodeCropWidth;
+    uint32_t            encodeCropHeight;
     uint32_t            encodeRateControl;
     uint32_t            encodePackedHeaderMask;
     uint32_t            encodeTargetPercentage;

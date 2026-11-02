@@ -131,15 +131,31 @@ sh_prog = find_program('sh')
 nvidia_drv_video_path = join_paths(meson.project_build_root(), 'nvidia_drv_video.so')
 
 if host_machine.system() == 'linux'
+    private_test_args = ['-ffunction-sections', '-fdata-sections']
+    private_test_link_args = ['-Wl,--gc-sections']
+    if cc.get_id() == 'clang' and get_option('b_sanitize').contains('address')
+        # ASan metadata must not retain the untested driver's global vtables.
+        private_test_args += ['-fsanitize-address-globals-dead-stripping']
+        private_test_link_args += cc.get_supported_link_arguments(['-Wl,-z,start-stop-gc'])
+    endif
     direct_import_test = executable(
         'test-direct-import',
         'tests/test-direct-import.c',
         dependencies: deps,
         include_directories: nvidia_incdir,
-        c_args: ['-ffunction-sections', '-fdata-sections'],
-        link_args: ['-Wl,--gc-sections'],
+        c_args: private_test_args,
+        link_args: private_test_link_args,
     )
     test('direct-import-ownership', direct_import_test)
+    vaapi_compat_test = executable(
+        'test-vaapi-compat',
+        'tests/test-vaapi-compat.c',
+        dependencies: deps,
+        include_directories: nvidia_incdir,
+        c_args: private_test_args,
+        link_args: private_test_link_args,
+    )
+    test('vaapi-compat-validation', vaapi_compat_test)
 endif
 
 test(
@@ -161,6 +177,49 @@ test(
 )
 
 if get_option('runtime_tests')
+    surface_reimport_test = executable(
+        'test-surface-reimport',
+        'tests/test-surface-reimport.c',
+        dependencies: [dependency('libva'), dependency('libva-drm')],
+        c_args: ['-D_GNU_SOURCE'],
+    )
+    test(
+        'surface-reimport', surface_reimport_test,
+        env: environment({
+            'LIBVA_DRIVER_NAME': 'nvidia',
+            'LIBVA_DRIVERS_PATH': meson.project_build_root(),
+            'NVD_BACKEND': 'direct',
+            'NVD_DRM_PRIME_ASSUME_LINEAR': '0',
+        }),
+        suite: ['runtime'], timeout: 120, is_parallel: false,
+    )
+    test(
+        'surface-reimport-single-buffer', surface_reimport_test,
+        env: environment({
+            'LIBVA_DRIVER_NAME': 'nvidia',
+            'LIBVA_DRIVERS_PATH': meson.project_build_root(),
+            'NVD_BACKEND': 'direct',
+            'NVD_DRM_PRIME_ASSUME_LINEAR': '0',
+            'NVD_SINGLE_BUFFER': '1',
+        }),
+        suite: ['runtime'], timeout: 120, is_parallel: false,
+    )
+    encode_crop_test = executable(
+        'test-encode-crop',
+        'tests/test-encode-crop.c',
+        dependencies: [dependency('libva'), dependency('libva-drm')],
+        c_args: ['-D_GNU_SOURCE'],
+    )
+    test(
+        'encode-crop', sh_prog,
+        args: [files('tests/encode-crop.sh'), encode_crop_test],
+        env: environment({
+            'LIBVA_DRIVER_NAME': 'nvidia',
+            'LIBVA_DRIVERS_PATH': meson.project_build_root(),
+            'NVD_BACKEND': 'direct',
+        }),
+        suite: ['runtime'], timeout: 120, is_parallel: false,
+    )
     encode_reconfigure_test = executable(
         'test-encode-reconfigure',
         'tests/test-encode-reconfigure.c',

@@ -156,7 +156,7 @@ Environment variables used to control the behavior of this library.
 | `NVD_PREFER_DIRECT_DMABUF_CUDA_IMPORT` | Allow trying direct raw dma-buf CUDA import even when startup capability probe does not report support. |
 | `NVD_DISABLE_DIRECT_DMABUF_CUDA_IMPORT` | Disable direct raw dma-buf CUDA import path and use fallback import paths. |
 | `NVD_USE_PRIMARY_CUDA_CONTEXT` | Prefer CUDA primary context (`cuDevicePrimaryCtxRetain`) instead of creating a private context. If unset, the driver still auto-retries with primary context when `cuCtxCreate` fails. |
-| `NVD_DRM_PRIME_ASSUME_LINEAR` | Opt-in compatibility mode for plain `DRM_PRIME` external imports that do not carry explicit modifiers. When set to `1`, the driver admits plain `DRM_PRIME` input and reconstructs it as `DRM_FORMAT_MOD_LINEAR`. Default disabled. |
+| `NVD_DRM_PRIME_ASSUME_LINEAR` | Opt-in compatibility mode for unknown `DRM_PRIME` external imports that do not carry explicit modifiers. When set to `1`, the driver assumes `DRM_FORMAT_MOD_LINEAR`. Default disabled. Reimports of this instance's own known backing buffers recover their original plane descriptors without this override. |
 | `NVD_DECODE_SURFACE_COUNT` | Override the default decode surface count used when clients create a decode context without render targets. Valid range is `1` to `32`; default is `32`. |
 | `NVD_ENABLE_CLIENT_PACKED_HEADERS` | Explicitly enable H.264/HEVC client sequence, picture and raw-data headers (the default). Client slice headers are not supported because NVENC generates them. |
 | `NVD_DISABLE_CLIENT_PACKED_HEADERS` | Disable client packed headers and advertise no packed-header support. Clients requiring sequence headers for container extradata, including FFmpeg Matroska output, may reject this mode. The enable override takes precedence. |
@@ -413,6 +413,20 @@ meson test -C build encode-reconfigure-h264 encode-reconfigure-hevc --print-erro
 CBR/VBR/QP bounds and frame-rate updates are applied through NVENC's
 reconfigure API. Dynamic resolution, GOP, chroma-format and bit-depth changes
 are not implemented by this path.
+
+H.264 sequence cropping is applied before opening the encode session, including
+clients that supply an aligned context/surface size without packed headers.
+Only progressive right/bottom cropping is supported. Invalid crops and crop
+changes that alter an initialized session's visible size are rejected; recreate
+the context for a resolution change. Cropped inputs use the staging-copy path even when
+experimental direct encode is enabled.
+
+`surface-reimport` verifies legacy reimports of the driver's own exported buffers,
+including plane contents, context recreation, FD ownership and unknown-buffer
+rejection. `encode-crop` verifies visible H.264 dimensions with `ffprobe` and
+software decoding at 1080p, 900p, 360p and a width/height crop. Both are runtime
+tests. `vaapi-compat-validation` exercises crop validation, descriptor cleanup
+and NV12/P010 staging-copy bounds without a GPU in the default test suite.
 
 `meson test` default mode captures test output. Use `-v` to stream runtime progress.
 
