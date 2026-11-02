@@ -10644,14 +10644,12 @@ static VAStatus nvGetImage(
     const NVFormatInfo *fmtInfo = &formatsInfo[imageObj->format];
     uint32_t offset = 0;
 
-    // The context may already have been destroyed; the resolved image still
-    // belongs to the surface and can be read without the context object.
-    if (surfaceObj->contextId == VA_INVALID_ID) {
-        return VA_STATUS_ERROR_INVALID_CONTEXT;
+    // Uploaded and imported images need no decode context. The surface owns
+    // the resolved image even after its producing context has been destroyed.
+    VAStatus syncStatus = nvSyncSurface(ctx, surface);
+    if (syncStatus != VA_STATUS_SUCCESS) {
+        return syncStatus;
     }
-
-    //wait for the surface to be decoded
-    nvSyncSurface(ctx, surface);
 
     //A failed resolve may leave a surface without an image. Report the decode
     //failure instead of dereferencing a null backing image in the copy below.
@@ -11704,6 +11702,8 @@ static VAStatus nvTerminate( VADriverContextP ctx )
     }
     drv->cudaContext = NULL;
 
+    free(drv->objects.buf);
+    free(drv->images.buf);
     free(drv);
 
     if (lastInstance) {

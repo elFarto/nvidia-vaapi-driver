@@ -194,13 +194,13 @@ if get_option('runtime_tests')
         suite: ['runtime'], timeout: 120, is_parallel: false,
     )
     test(
-        'surface-reimport-single-buffer', surface_reimport_test,
+        'surface-reimport-detached', surface_reimport_test,
+        args: ['--destroy-original'],
         env: environment({
             'LIBVA_DRIVER_NAME': 'nvidia',
             'LIBVA_DRIVERS_PATH': meson.project_build_root(),
             'NVD_BACKEND': 'direct',
             'NVD_DRM_PRIME_ASSUME_LINEAR': '0',
-            'NVD_SINGLE_BUFFER': '1',
         }),
         suite: ['runtime'], timeout: 120, is_parallel: false,
     )

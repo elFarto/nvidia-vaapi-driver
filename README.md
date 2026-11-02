@@ -271,21 +271,10 @@ For H.264-only encode testing, use the hotpatch project's
 `LIBVA_DRIVERS_PATH` environment to confirm the decode and encode entrypoints
 advertised by this driver on the target machine.
 
-The upstream Chromium-compatible single-buffer export path is also included.
-For Chrome / Chromium based browsers, set `LIBVA_DRIVER_NAME=nvidia` and start
-the browser with flags similar to:
-
-```sh
-LIBVA_DRIVER_NAME=nvidia google-chrome \
-  --enable-features=AcceleratedVideoDecodeLinuxGL,VaapiOnNvidiaGPUs \
-  --ignore-gpu-blocklist \
-  --use-gl=angle --use-angle=gl
-```
-
-On Wayland, also try `--ozone-platform=wayland` or
-`--ozone-platform-hint=auto`. Multi-plane YUV surfaces are exported as a
-single buffer with one DRM modifier, as required by Chromium's
-`vaapi_wrapper`.
+The direct backend currently allocates native NV12 surfaces as separate plane
+buffers. Legacy reimports of the driver's own exports recover the missing plane
+and modifier metadata; this does not provide a general single-buffer export
+path. Browser flags alone are not a substitute for the hotpatch integration.
 
 ## MPV
 
@@ -422,11 +411,13 @@ the context for a resolution change. Cropped inputs use the staging-copy path ev
 experimental direct encode is enabled.
 
 `surface-reimport` verifies legacy reimports of the driver's own exported buffers,
-including plane contents, context recreation, FD ownership and unknown-buffer
-rejection. `encode-crop` verifies visible H.264 dimensions with `ffprobe` and
-software decoding at 1080p, 900p, 360p and a width/height crop. Both are runtime
-tests. `vaapi-compat-validation` exercises crop validation, descriptor cleanup
-and NV12/P010 staging-copy bounds without a GPU in the default test suite.
+including plane contents, context-free readback, context recreation, FD ownership
+and unknown-buffer rejection. `surface-reimport-detached` repeats this after
+destroying the original surface. `encode-crop` verifies visible H.264 dimensions
+with `ffprobe` and software decoding at 1080p, 900p, 360p and a width/height crop.
+These are runtime tests. `vaapi-compat-validation` exercises crop validation,
+descriptor cleanup and NV12/P010 staging-copy bounds without a GPU in the default
+test suite.
 
 `meson test` default mode captures test output. Use `-v` to stream runtime progress.
 

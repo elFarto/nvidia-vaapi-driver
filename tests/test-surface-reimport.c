@@ -40,8 +40,11 @@ static VAStatus importSurface(VADisplay display, const VADRMPRIMESurfaceDescript
 }
 
 static void checkPixels(VADisplay display, VAImage *image, VASurfaceID surface) {
-    VA_CHECK(vaGetImage(display, surface, 0, 0, WIDTH, HEIGHT, image->image_id));
     uint8_t *pixels;
+    VA_CHECK(vaMapBuffer(display, image->buf, (void **)&pixels));
+    memset(pixels, 0, image->data_size);
+    VA_CHECK(vaUnmapBuffer(display, image->buf));
+    VA_CHECK(vaGetImage(display, surface, 0, 0, WIDTH, HEIGHT, image->image_id));
     VA_CHECK(vaMapBuffer(display, image->buf, (void **)&pixels));
     for (unsigned y = 0; y < HEIGHT; y++) {
         for (unsigned x = 0; x < WIDTH; x++) {
@@ -56,7 +59,9 @@ static void checkPixels(VADisplay display, VAImage *image, VASurfaceID surface) 
     VA_CHECK(vaUnmapBuffer(display, image->buf));
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    REQUIRE(argc == 1 || (argc == 2 && strcmp(argv[1], "--destroy-original") == 0));
+    bool destroyOriginal = argc == 2;
     int fd;
     VADisplay display = openDisplay(&fd);
     VAConfigID config;
@@ -68,6 +73,10 @@ int main(void) {
     VAImageFormat format = {.fourcc = VA_FOURCC_NV12};
     VAImage image;
     VA_CHECK(vaCreateImage(display, &format, WIDTH, HEIGHT, &image));
+    VASurfaceID empty;
+    VA_CHECK(vaCreateSurfaces(display, VA_RT_FORMAT_YUV420, WIDTH, HEIGHT, &empty, 1, NULL, 0));
+    REQUIRE(vaGetImage(display, empty, 0, 0, WIDTH, HEIGHT, image.image_id) == VA_STATUS_ERROR_DECODING_ERROR);
+    VA_CHECK(vaDestroySurfaces(display, &empty, 1));
     uint8_t *pixels;
     VA_CHECK(vaMapBuffer(display, image.buf, (void **)&pixels));
     for (unsigned y = 0; y < HEIGHT; y++) {
@@ -80,12 +89,13 @@ int main(void) {
     }
     VA_CHECK(vaUnmapBuffer(display, image.buf));
     VA_CHECK(vaPutImage(display, original, image.image_id, 0, 0, WIDTH, HEIGHT, 0, 0, WIDTH, HEIGHT));
+    checkPixels(display, &image, original);
     VADRMPRIMESurfaceDescriptor desc = {0};
     VA_CHECK(vaExportSurfaceHandle(display, original, VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2,
         VA_EXPORT_SURFACE_READ_ONLY | VA_EXPORT_SURFACE_SEPARATE_LAYERS, &desc));
     REQUIRE(desc.num_objects > 0 && desc.num_layers == 2);
-    if (getenv("NVD_SINGLE_BUFFER") != NULL) REQUIRE(desc.num_objects == 1);
     VA_CHECK(vaDestroyContext(display, context));
+    checkPixels(display, &image, original);
 
     // A foreign FD and, for multi-object exports, a chroma-only FD are not enough
     // to reconstruct a surface's missing modifier and plane metadata.
@@ -103,19 +113,25 @@ int main(void) {
     for (unsigned iteration = 0; iteration < 21; iteration++) {
         VA_CHECK(importSurface(display, &desc, desc.objects[0].fd, &imported));
         for (unsigned i = 0; i < desc.num_objects; i++) REQUIRE(fcntl(desc.objects[i].fd, F_GETFD) >= 0);
+        if (destroyOriginal && iteration == 0) {
+            VA_CHECK(vaDestroySurfaces(display, &original, 1));
+            original = VA_INVALID_ID;
+        }
+        checkPixels(display, &image, imported);
         VA_CHECK(vaCreateContext(display, config, WIDTH, HEIGHT, VA_PROGRESSIVE, &imported, 1, &context));
         checkPixels(display, &image, imported);
         VA_CHECK(vaDestroyContext(display, context));
+        checkPixels(display, &image, imported);
         VA_CHECK(vaDestroySurfaces(display, &imported, 1));
         if (iteration == 0) stableCount = fdCount();
         else REQUIRE(fdCount() == stableCount);
     }
     for (unsigned i = 0; i < desc.num_objects; i++) REQUIRE(close(desc.objects[i].fd) == 0);
     VA_CHECK(vaDestroyImage(display, image.image_id));
-    VA_CHECK(vaDestroySurfaces(display, &original, 1));
+    if (original != VA_INVALID_ID) VA_CHECK(vaDestroySurfaces(display, &original, 1));
     VA_CHECK(vaDestroyConfig(display, config));
     VA_CHECK(vaTerminate(display));
     close(fd);
-    puts("legacy own-buffer reimport: planes, context recreation, FD ownership and rejection verified");
+    puts("legacy own-buffer reimport: planes, context-free readback, context recreation, FD ownership and rejection verified");
     return 0;
 }
