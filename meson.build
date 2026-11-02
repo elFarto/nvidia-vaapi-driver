@@ -17,7 +17,7 @@ deps = [
     cc.find_library('m'),
     cc.find_library('dl', required : false),
     dependency('egl'),
-    dependency('ffnvcodec', version: '>= 11.1.5.1'),
+    dependency('ffnvcodec', version: '>= 13.0.19.0'),
     dependency('libdrm', version: '>=2.4.60').partial_dependency(compile_args: true),
     dependency('threads'),
 ]
@@ -75,7 +75,7 @@ endif
 nvidia_incdir = include_directories('nvidia-include')
 nvidia_install_dir = libva_deps.get_variable(pkgconfig: 'driverdir')
 
-shared_library(
+nvidia_drv_video = shared_library(
     'nvidia_drv_video',
     name_prefix: '',
     sources: sources,
@@ -126,3 +126,145 @@ meson.add_devenv(environment({
     'LIBVA_DRIVER_NAME': 'nvidia',
     'LIBVA_DRIVERS_PATH': meson.project_build_root(),
 }))
+
+sh_prog = find_program('sh')
+nvidia_drv_video_path = join_paths(meson.project_build_root(), 'nvidia_drv_video.so')
+
+if host_machine.system() == 'linux'
+    private_test_args = ['-ffunction-sections', '-fdata-sections']
+    private_test_link_args = ['-Wl,--gc-sections']
+    if cc.get_id() == 'clang' and get_option('b_sanitize').contains('address')
+        # ASan metadata must not retain the untested driver's global vtables.
+        private_test_args += ['-fsanitize-address-globals-dead-stripping']
+        private_test_link_args += cc.get_supported_link_arguments(['-Wl,-z,start-stop-gc'])
+    endif
+    direct_import_test = executable(
+        'test-direct-import',
+        'tests/test-direct-import.c',
+        dependencies: deps,
+        include_directories: nvidia_incdir,
+        c_args: private_test_args,
+        link_args: private_test_link_args,
+    )
+    test('direct-import-ownership', direct_import_test)
+    vaapi_compat_test = executable(
+        'test-vaapi-compat',
+        'tests/test-vaapi-compat.c',
+        dependencies: deps,
+        include_directories: nvidia_incdir,
+        c_args: private_test_args,
+        link_args: private_test_link_args,
+    )
+    test('vaapi-compat-validation', vaapi_compat_test)
+endif
+
+test(
+    'driver-artifact-smoke',
+    sh_prog,
+    args: [
+        files('tests/driver-artifact-smoke.sh'),
+        nvidia_drv_video_path,
+    ],
+)
+
+test(
+    'driver-exported-symbol-smoke',
+    sh_prog,
+    args: [
+        files('tests/driver-exported-symbol-smoke.sh'),
+        nvidia_drv_video_path,
+    ],
+)
+
+if get_option('runtime_tests')
+    surface_reimport_test = executable(
+        'test-surface-reimport',
+        'tests/test-surface-reimport.c',
+        dependencies: [dependency('libva'), dependency('libva-drm')],
+        c_args: ['-D_GNU_SOURCE'],
+    )
+    test(
+        'surface-reimport', surface_reimport_test,
+        env: environment({
+            'LIBVA_DRIVER_NAME': 'nvidia',
+            'LIBVA_DRIVERS_PATH': meson.project_build_root(),
+            'NVD_BACKEND': 'direct',
+            'NVD_DRM_PRIME_ASSUME_LINEAR': '0',
+        }),
+        suite: ['runtime'], timeout: 120, is_parallel: false,
+    )
+    test(
+        'surface-reimport-detached', surface_reimport_test,
+        args: ['--destroy-original'],
+        env: environment({
+            'LIBVA_DRIVER_NAME': 'nvidia',
+            'LIBVA_DRIVERS_PATH': meson.project_build_root(),
+            'NVD_BACKEND': 'direct',
+            'NVD_DRM_PRIME_ASSUME_LINEAR': '0',
+        }),
+        suite: ['runtime'], timeout: 120, is_parallel: false,
+    )
+    encode_crop_test = executable(
+        'test-encode-crop',
+        'tests/test-encode-crop.c',
+        dependencies: [dependency('libva'), dependency('libva-drm')],
+        c_args: ['-D_GNU_SOURCE'],
+    )
+    test(
+        'encode-crop', sh_prog,
+        args: [files('tests/encode-crop.sh'), encode_crop_test],
+        env: environment({
+            'LIBVA_DRIVER_NAME': 'nvidia',
+            'LIBVA_DRIVERS_PATH': meson.project_build_root(),
+            'NVD_BACKEND': 'direct',
+        }),
+        suite: ['runtime'], timeout: 120, is_parallel: false,
+    )
+    encode_reconfigure_test = executable(
+        'test-encode-reconfigure',
+        'tests/test-encode-reconfigure.c',
+        dependencies: [dependency('libva'), dependency('libva-drm')],
+        c_args: ['-D_GNU_SOURCE'],
+    )
+    foreach codec : ['h264', 'hevc']
+        test(
+            'encode-reconfigure-' + codec,
+            encode_reconfigure_test,
+            args: [codec],
+            env: environment({
+                'LIBVA_DRIVER_NAME': 'nvidia',
+                'LIBVA_DRIVERS_PATH': meson.project_build_root(),
+                'NVD_BACKEND': 'direct',
+            }),
+            suite: ['runtime'],
+            timeout: 120,
+            is_parallel: false,
+        )
+    endforeach
+    test(
+        'packed-headers-disabled',
+        encode_reconfigure_test,
+        args: ['h264', '--packed-headers-disabled'],
+        env: environment({
+            'LIBVA_DRIVER_NAME': 'nvidia',
+            'LIBVA_DRIVERS_PATH': meson.project_build_root(),
+            'NVD_BACKEND': 'direct',
+            'NVD_DISABLE_CLIENT_PACKED_HEADERS': '1',
+            'NVD_ENABLE_CLIENT_PACKED_HEADERS': '0',
+        }),
+        suite: ['runtime'],
+        timeout: 30,
+        is_parallel: false,
+    )
+    test(
+        'driver-runtime-vaapi-smoke',
+        sh_prog,
+        args: [files('tests/driver-runtime-vaapi-smoke.sh')],
+        env: environment({
+            'LIBVA_DRIVER_NAME': 'nvidia',
+            'LIBVA_DRIVERS_PATH': meson.project_build_root(),
+        }),
+        suite: ['runtime'],
+        timeout: 300,
+    )
+endif
