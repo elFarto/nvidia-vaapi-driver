@@ -97,35 +97,30 @@ static void parseExtraInfo(NVContext *ctx, void *buf, uint32_t size, CUVIDPICPAR
     }
 
     //parse all the extra information that VA-API doesn't support, but NVDEC requires
-    GstVp9FrameHdr hdr;
-    GstVp9ParserResult res = gst_vp9_parser_parse_frame_header(parser, &hdr, buf, size);
+    GstVp9FrameHeader hdr;
+    GstVp9ParserResult res = gst_vp9_parser_parse_uncompressed_frame_header(parser, &hdr, buf, size);
 
     if (res == GST_VP9_PARSER_OK) {
-        for (int i = 0; i < 8; i++) {
-            picParams->CodecSpecific.vp9.segmentFeatureEnable[i][0] = hdr.segmentation.data[i].alternate_quantizer_enabled;
-            picParams->CodecSpecific.vp9.segmentFeatureEnable[i][1] = hdr.segmentation.data[i].alternate_loop_filter_enabled;
-            picParams->CodecSpecific.vp9.segmentFeatureEnable[i][2] = hdr.segmentation.data[i].reference_frame_enabled;
-            picParams->CodecSpecific.vp9.segmentFeatureEnable[i][3] = hdr.segmentation.data[i].reference_skip;
-
-            picParams->CodecSpecific.vp9.segmentFeatureData[i][0] = hdr.segmentation.data[i].alternate_quantizer;
-            picParams->CodecSpecific.vp9.segmentFeatureData[i][1] = hdr.segmentation.data[i].alternate_loop_filter;
-            picParams->CodecSpecific.vp9.segmentFeatureData[i][2] = hdr.segmentation.data[i].reference_frame;
-            picParams->CodecSpecific.vp9.segmentFeatureData[i][3] = 0;
+        for (int i = 0; i < GST_VP9_MAX_SEGMENTS; i++) {
+	    for (int j = 0; j < GST_VP9_SEG_LVL_MAX; j++) {
+                picParams->CodecSpecific.vp9.segmentFeatureEnable[i][j] = hdr.segmentation_params.feature_enabled[i][j];
+                picParams->CodecSpecific.vp9.segmentFeatureData[i][0] = hdr.segmentation_params.feature_data[i][j];
+            }
         }
 
-        picParams->CodecSpecific.vp9.segmentFeatureMode = hdr.segmentation.abs_delta;
+        picParams->CodecSpecific.vp9.segmentFeatureMode = hdr.segmentation_params.segmentation_abs_or_delta_update;
 
-        picParams->CodecSpecific.vp9.modeRefLfEnabled = hdr.loopfilter.mode_ref_delta_enabled;
-        for (int i = 0; i < 2; i++)
-            picParams->CodecSpecific.vp9.mbModeLfDelta[i] = hdr.loopfilter.mode_deltas[i];
+        picParams->CodecSpecific.vp9.modeRefLfEnabled = hdr.loop_filter_params.loop_filter_delta_enabled;
+        for (int i = 0; i < GST_VP9_MAX_MODE_LF_DELTAS; i++)
+            picParams->CodecSpecific.vp9.mbModeLfDelta[i] = hdr.loop_filter_params.loop_filter_mode_deltas[i];
 
-        for (int i = 0; i < 4; i++)
-            picParams->CodecSpecific.vp9.mbRefLfDelta[i] = hdr.loopfilter.ref_deltas[i];
+        for (int i = 0; i < GST_VP9_MAX_REF_LF_DELTAS; i++)
+            picParams->CodecSpecific.vp9.mbRefLfDelta[i] = hdr.loop_filter_params.loop_filter_ref_deltas[i];
 
-        picParams->CodecSpecific.vp9.qpYAc = hdr.quant_indices.y_ac_qi;
-        picParams->CodecSpecific.vp9.qpYDc = hdr.quant_indices.y_dc_delta;
-        picParams->CodecSpecific.vp9.qpChDc = hdr.quant_indices.uv_dc_delta;
-        picParams->CodecSpecific.vp9.qpChAc = hdr.quant_indices.uv_ac_delta;
+        picParams->CodecSpecific.vp9.qpYAc = hdr.quantization_params.base_q_idx;
+        picParams->CodecSpecific.vp9.qpYDc = hdr.quantization_params.delta_q_y_dc;
+        picParams->CodecSpecific.vp9.qpChDc = hdr.quantization_params.delta_q_uv_dc;
+        picParams->CodecSpecific.vp9.qpChAc = hdr.quantization_params.delta_q_uv_ac;
 
         picParams->CodecSpecific.vp9.colorSpace = parser->color_space;
         VAProcColorStandardType colorStandard = vp9ColorStandard((GstVp9ColorSpace) parser->color_space);
