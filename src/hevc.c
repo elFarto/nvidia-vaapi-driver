@@ -200,7 +200,7 @@ static void copyHEVCPicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *p
 //    ppc->chroma_qp_offset_list_len_minus1 = buf->pic_fields.bits.tiles_enabled_flag;
 
     ppc->NumBitsForShortTermRPSInSlice = buf->st_rps_bits;
-    ppc->NumDeltaPocsOfRefRpsIdx = 0; // computed after reference picture loop
+    ppc->NumDeltaPocsOfRefRpsIdx = 0; //only used for a slice header RPS with inter RPS prediction, set from the slice header
     ppc->NumPocTotalCurr = 0; // computed after reference picture loop
     ppc->NumPocStCurrBefore = 0; //these three are set properly below
     ppc->NumPocStCurrAfter = 0;
@@ -237,13 +237,6 @@ static void copyHEVCPicParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS *p
 
     ppc->NumPocTotalCurr = ppc->NumPocStCurrBefore + ppc->NumPocStCurrAfter + ppc->NumPocLtCurr;
 
-    int numDeltaPocs = 0;
-    for (int i = 1; i < 16; i++) {
-        if (ppc->RefPicIdx[i] != -1 && !ppc->IsLongTerm[i])
-            numDeltaPocs++;
-    }
-    ppc->NumDeltaPocsOfRefRpsIdx = numDeltaPocs;
-
     //This is required to make sure that the RefPicSetStCurrBefore and RefPicSetStCurrAfter arrays are in the correct order
     //VA-API doesn't pass this is, only marking each picture if it's in the arrays.
     //I'm not sure this is correct
@@ -259,6 +252,101 @@ static void copyHEVCSliceParam(NVContext *ctx, NVBuffer* buffer, CUVIDPICPARAMS 
     picParams->nNumSlices += buffer->elements;
 }
 
+typedef struct { const uint8_t *p; uint32_t size, pos, zeros, bytePos; uint8_t cur; int bitsLeft; } HEVCBitReader;
+
+static int hevcReadBit(HEVCBitReader *br)
+{
+    if (br->bitsLeft == 0) {
+        if (br->bytePos >= br->size)
+            return -1;
+        uint8_t b = br->p[br->bytePos++];
+        if (br->zeros >= 2 && b == 3) { //skip emulation prevention byte
+            br->zeros = 0;
+            if (br->bytePos >= br->size)
+                return -1;
+            b = br->p[br->bytePos++];
+        }
+        br->zeros = b == 0 ? br->zeros + 1 : 0;
+        br->cur = b;
+        br->bitsLeft = 8;
+    }
+    br->pos++;
+    return (br->cur >> --br->bitsLeft) & 1;
+}
+
+static int hevcReadBits(HEVCBitReader *br, int n)
+{
+    int v = 0;
+    while (n--) {
+        int b = hevcReadBit(br);
+        if (b < 0)
+            return -1;
+        v = (v << 1) | b;
+    }
+    return v;
+}
+
+static int hevcReadUE(HEVCBitReader *br)
+{
+    int lz = 0, b;
+    while ((b = hevcReadBit(br)) == 0 && lz <= 16)
+        lz++;
+    if (b != 1) //EOF, or longer than any value read here (abs_delta_rps_minus1 < 2^15)
+        return -1;
+    int rest = hevcReadBits(br, lz);
+    return rest < 0 ? -1 : (1 << lz) - 1 + rest;
+}
+
+//VA-API doesn't pass NumDeltaPocs[RefRpsIdx], which NVDEC needs to parse a slice header RPS that uses
+//inter RPS prediction. Recover it from the slice header: the used_by_curr_pic/use_delta flags that follow
+//the fixed part fill exactly st_rps_bits, and there are NumDeltaPocs[RefRpsIdx] + 1 of them.
+//Returns -1 when the slice has no such RPS (or can't be parsed).
+static int hevcSliceRefRpsNumDeltaPocs(const CUVIDHEVCPICPARAMS *ppc, const uint8_t *nal, uint32_t size)
+{
+    if (size < 3 || ppc->num_short_term_ref_pic_sets == 0 || ppc->NumBitsForShortTermRPSInSlice == 0)
+        return -1;
+    int nalType = (nal[0] >> 1) & 0x3f;
+    if (nalType == 19 || nalType == 20) //IDR has no RPS
+        return -1;
+
+    HEVCBitReader br = { .p = nal + 2, .size = size - 2 };
+    if (hevcReadBit(&br) != 1) //first_slice_segment_in_pic_flag
+        return -1;
+    if (nalType >= 16 && nalType <= 23)
+        hevcReadBit(&br); //no_output_of_prior_pics_flag
+    hevcReadUE(&br); //slice_pic_parameter_set_id
+    hevcReadBits(&br, ppc->num_extra_slice_header_bits);
+    hevcReadUE(&br); //slice_type
+    if (ppc->output_flag_present_flag)
+        hevcReadBit(&br);
+    if (ppc->separate_colour_plane_flag)
+        hevcReadBits(&br, 2);
+    hevcReadBits(&br, ppc->log2_max_pic_order_cnt_lsb_minus4 + 4); //slice_pic_order_cnt_lsb
+    if (hevcReadBit(&br) != 0) //short_term_ref_pic_set_sps_flag
+        return -1;
+
+    uint32_t start = br.pos;
+    if (hevcReadBit(&br) != 1) //inter_ref_pic_set_prediction_flag
+        return -1;
+    hevcReadUE(&br); //delta_idx_minus1
+    hevcReadBit(&br); //delta_rps_sign
+    if (hevcReadUE(&br) < 0) //abs_delta_rps_minus1
+        return -1;
+
+    int entries = 0;
+    while (br.pos - start < (uint32_t) ppc->NumBitsForShortTermRPSInSlice && entries < 33) {
+        int used = hevcReadBit(&br);
+        if (used < 0)
+            return -1;
+        if (!used && hevcReadBit(&br) < 0) //use_delta_flag
+            return -1;
+        entries++;
+    }
+    if (br.pos - start != (uint32_t) ppc->NumBitsForShortTermRPSInSlice || entries == 0)
+        return -1;
+    return entries - 1;
+}
+
 static void copyHEVCSliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *picParams)
 {
     for (unsigned int i = 0; i < ctx->lastSliceParamsCount; i++)
@@ -266,6 +354,10 @@ static void copyHEVCSliceData(NVContext *ctx, NVBuffer* buf, CUVIDPICPARAMS *pic
         static const uint8_t header[] = { 0, 0, 1 }; //1 as a 24-bit Big Endian
 
         VASliceParameterBufferHEVC *sliceParams = &((VASliceParameterBufferHEVC*) ctx->lastSliceParams)[i];
+        int refRpsNumDeltaPocs = hevcSliceRefRpsNumDeltaPocs(&picParams->CodecSpecific.hevc,
+                PTROFF(buf->ptr, sliceParams->slice_data_offset), sliceParams->slice_data_size);
+        if (refRpsNumDeltaPocs >= 0)
+            picParams->CodecSpecific.hevc.NumDeltaPocsOfRefRpsIdx = refRpsNumDeltaPocs;
         uint32_t offset = (uint32_t) ctx->bitstreamBuffer.size;
         appendBuffer(&ctx->sliceOffsets, &offset, sizeof(offset));
         appendBuffer(&ctx->bitstreamBuffer, header, sizeof(header));
