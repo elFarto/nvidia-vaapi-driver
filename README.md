@@ -8,7 +8,7 @@ This is an VA-API implementation that uses NVDEC as a backend. This implementati
 - [Table of contents](#table-of-contents)
 - [Codec Support](#codec-support)
 - [Installation](#installation)
-  - [Quick install from this fork](#quick-install-from-this-fork)
+  - [Quick install](#quick-install)
   - [Packaging status](#packaging-status)
   - [Building](#building)
   - [Removal](#removal)
@@ -161,7 +161,7 @@ If you're using the Snap version of Firefox, it will be unable to access the hos
 
 ## Chrome
 
-This fork includes the Chromium-compatible single-buffer export path. For Chrome / Chromium based browsers, set `LIBVA_DRIVER_NAME=nvidia` and start the browser with flags similar to:
+This driver includes the Chromium-compatible single-buffer export path. For Chrome / Chromium based browsers, set `LIBVA_DRIVER_NAME=nvidia` and start the browser with flags similar to:
 
 ```sh
 LIBVA_DRIVER_NAME=nvidia google-chrome \
